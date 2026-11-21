@@ -485,6 +485,24 @@ def test_vehicle_basics_gate_and_collapsed_saved_overview(app_page):
     assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
     page.evaluate("window.scrollTo(0, 0)")
     page.screenshot(path=f"results/ci/ev-overview-saved-{width}.png", full_page=True)
+    catalogue = page.request.get(url + "/v1/setup", headers=headers).json()["catalogue"]["data"]
+    with page.expect_response(
+        lambda response: (
+            response.request.method == "POST" and response.url.endswith("/v1/ha/source-choices/ev")
+        )
+    ) as pending:
+        add_ev_appliance(page, "vehicle")
+    accepted = page.request.post(
+        url + "/v1/ha/source-choices",
+        headers=headers,
+        data={"scope": "ev", "id": pending.value.json()["id"], "page": catalogue},
+    )
+    assert accepted.ok and accepted.json()["accepted"]
+    expect(groups.first).to_have_attribute("open", "")
+    expect(groups.nth(1)).to_be_hidden()
+    expect(save).to_be_disabled()
+    page.get_by_role("button", name="Cancel", exact=True).click()
+    expect(overview.locator("summary").first).to_contain_text("60 kWh")
     for section in ("recognition", "profile"):
         summary = overview.locator(f'details[data-ev-section="{section}"] > summary')
         summary.focus()
