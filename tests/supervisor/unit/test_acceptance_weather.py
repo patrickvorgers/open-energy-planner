@@ -38,7 +38,26 @@ def test_acceptance_bootstrap_requires_marker_and_calls_original_entrypoint(monk
     monkeypatch.setitem(sys.modules, "production_ha_app", SimpleNamespace(main=original_main))
     monkeypatch.setenv("OEP_SUPERVISOR_SMOKE", "1")
     acceptance_app.main()
-    assert calls == [(acceptance_app.temperature_factory, None, None)]
+    assert calls == [
+        (acceptance_app.temperature_factory, acceptance_app.live_weather_factory, None)
+    ]
+
+
+def test_acceptance_live_weather_covers_solar_and_demand_without_network(monkeypatch):
+    """The injected live fixture supplies measured units and enough future irradiance for planning."""
+    monkeypatch.setitem(sys.modules, "acceptance_sources", sources)
+    now = datetime(2026, 10, 28, 15, 45, tzinfo=UTC)
+
+    async def read():
+        """Read the acceptance live port with the same factory options as app composition."""
+        async with acceptance_app.live_weather_factory(store=None, history_start=None) as source:
+            return await source.read(None, now)
+
+    rows = asyncio.run(read())
+    assert rows[0].start <= now
+    assert rows[-1].start + timedelta(hours=1) >= now + timedelta(hours=48)
+    assert any(row.ghi > 0 for row in rows if row.start >= now)
+    assert all(row.received_at == now for row in rows)
 
 
 def test_acceptance_bootstrap_serves_after_default_weather_lifecycle(tmp_path, monkeypatch):

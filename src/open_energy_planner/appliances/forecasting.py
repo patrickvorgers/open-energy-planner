@@ -258,17 +258,18 @@ class ConsumerForecasts:
                 else None
             )
         if forecasts and now is not None and (result := document["result"]) is not None:
-            result["devices"] = [
-                {
-                    **device,
-                    **{
-                        key: self._live_document(device[key], now)
-                        for key in ("forecast", "baseline_forecast")
-                        if key in device
-                    },
-                }
-                for device in result.get("devices", ())
-            ]
+            if "devices" in result:
+                result["devices"] = [
+                    {
+                        **device,
+                        **{
+                            key: self._live_document(device[key], now)
+                            for key in ("forecast", "baseline_forecast")
+                            if key in device
+                        },
+                    }
+                    for device in result["devices"]
+                ]
             for key in ("residual", "residual_baseline"):
                 if result.get(key):
                     result[key] = self._live_document(result[key], now)
