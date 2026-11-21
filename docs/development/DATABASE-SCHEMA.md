@@ -491,8 +491,8 @@ unchanged admission refreshes the runtime snapshot from the committed evidence.
 Weather `temperature-day-<query-hash>-<YYYY-MM-DD>.json` stores completed
 Celsius observations as ordered `[UTC hour, celsius, known_at]` rows. The hash
 binds the provider endpoint and normalized site query. The unique day key
-allows recent observations to be replaced in place. Unchanged values retain
-their original knowledge time even after restart. Missing or incomplete archived
+allows corrected observations to be replaced in place. Matching values and
+accepted hours omitted by a refresh keep their original knowledge time. Missing or incomplete archived
 days are requested in contiguous spans within each provider year. Live IFS manifests
 continue to hold the weather reference for issued predictions.
 
@@ -1473,11 +1473,17 @@ Individual-consumer ownership now lives in `appliances/forecasting.py`. Cycle,
 EV and thermal services live in `appliances/cycles`, `appliances/ev` and
 `appliances/thermal`. The shared selected-device settings presentation does not add another table,
 document or index. EV inputs display kW while persisted power fields remain
-whole watts. Display conversion does not change the JSON contract. Existing demand/planning
-namespaces, pointer/archive names and payloads are unchanged. Module paths are
-not serialized. See [shared appliance structure](APPLIANCE-ARCHITECTURE.md).
+whole watts. See [shared appliance structure](APPLIANCE-ARCHITECTURE.md).
 
-`consumer-forecast-<forecast-version>.json` stores the complete composite household forecast and its `components`: source identities, per-device forecast intervals (UTC start, duration in hours, kWh), residual forecast, settings version and fitted profile/Ridge parameters. Forecasts and parameters retain their original issue/training identities. No executable estimator pickle is stored. The composite has no excluded devices because residual plus device demand is already recombined. A missing component cannot be archived as zero. Selection/evaluation references stay in the existing planning documents. History streams are transient training inputs. The archived forecasts/parameters are the evidence used for planning. All these rows join existing all-table database transfer and backup procedures automatically and must be covered by the four-backend document contracts.
+`consumer-forecast-<forecast-version>.json` stores the complete issued household
+forecast and its `components`. These include source identities, settings version,
+the residual forecast and per-device intervals with UTC start, duration in hours
+and kWh. The composite already recombines the residual and device demand, so its
+excluded-device list is empty. Missing components retain their availability state.
+Planning evidence is the original issued forecast. Replaceable model fits live in
+`active-training-<learner-hash>.json`. Selection and evaluation references remain
+in the planning documents. These rows are included in all-table database transfer,
+backup and four-backend document contracts.
 
 Ready component records expose `model_selection` with the daily policy, selected
 model ID, readiness, completed/required days, improvement thresholds, matched-day

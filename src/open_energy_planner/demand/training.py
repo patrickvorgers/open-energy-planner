@@ -250,7 +250,7 @@ def daily_models(
             )
             failed = True
     if failed:
-        return previous or models
+        return {**previous, **models}
     if documents is not None:
         body = {
             "schema": MODEL_DOCUMENT_SCHEMA,

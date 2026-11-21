@@ -61,19 +61,22 @@ class TemperatureDays:
         return tuple(rows)
 
     def save(self, first, last, rows, previous):
-        """Upsert only changed days and keep the first receipt of unchanged hourly values."""
-        by_day = {first + offset * DAY: [] for offset in range((last - first).days + 1)}
-        prior = {row.start: row for day in previous.values() for row in day}
-        for row in rows:
-            day = row.start.date()
-            if day in by_day:
-                original = prior.get(row.start)
-                by_day[day].append(
-                    original if original and original.celsius == row.celsius else row
-                )
-        changed = {
-            day: tuple(hours) for day, hours in by_day.items() if tuple(hours) != previous.get(day)
+        """Replace corrected values while retaining accepted hours omitted by the provider."""
+        by_day = {
+            day: {row.start: row for row in previous.get(day, ())}
+            for day in (first + offset * DAY for offset in range((last - first).days + 1))
         }
+        for row in rows:
+            hours = by_day.get(row.start.date())
+            if hours is not None:
+                original = hours.get(row.start)
+                if original is None or original.celsius != row.celsius:
+                    hours[row.start] = row
+        changed = {}
+        for day, hours in by_day.items():
+            accepted = tuple(hours[start] for start in sorted(hours))
+            if accepted != previous.get(day):
+                changed[day] = accepted
         if changed:
             with self.documents.transaction():
                 for day, hours in changed.items():

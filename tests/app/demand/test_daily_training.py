@@ -231,6 +231,31 @@ def test_transient_failure_does_not_publish_or_replace_the_previous_pointer(
     assert pointer(demand_store.documents) != before
 
 
+def test_native_training_failure_keeps_new_scalar_fit_during_retry(demand_store, configuration):
+    """A baseline-only row permits a new Ridge fit when the optional weather trainer fails."""
+    short_history = samples_before(NOW, hours=7 * 24)
+    documents = demand_store.documents
+    first = daily_models(documents, configuration, short_history, NOW, weather_sensitive=True)
+    assert set(first) == {"baseline"}
+    before = pointer(documents)
+    later = NOW + timedelta(days=1)
+    samples = samples_before(later)
+    with patch.object(
+        WeatherDemandModel, "fit", side_effect=RuntimeError("Native learner unavailable")
+    ):
+        usable = daily_models(
+            documents,
+            configuration,
+            samples,
+            later,
+            temperatures=temperatures_for(samples, later),
+            weather_sensitive=True,
+        )
+    assert set(usable) == {"baseline", "ridge"}
+    assert usable["ridge"].trained_until == later
+    assert pointer(documents) == before
+
+
 @pytest.mark.parametrize("learner", [RidgeDemandModel, WeatherDemandModel])
 def test_transient_training_diagnostics_deduplicate_and_recover_without_private_payload(
     demand_store, configuration, caplog, learner

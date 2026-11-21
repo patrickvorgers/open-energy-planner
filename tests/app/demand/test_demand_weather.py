@@ -75,6 +75,7 @@ class AnnualSession:
         self.calls = []
         self.failure_start = None
         self.recent_offset = 0
+        self.recent_missing = None
 
     def get(self, url, **kwargs):
         """Serve every requested historical hour with a location-specific Celsius value."""
@@ -92,15 +93,19 @@ class AnnualSession:
         ]
         assert len(times) <= 9000
         temperature = params["latitude"] - 47
+        values = [temperature] * len(times)
         if url.endswith("/forecast"):
-            temperature += self.recent_offset
+            values = [
+                None if stamp == self.recent_missing else temperature + self.recent_offset
+                for stamp in times
+            ]
         return Response(
             json.dumps(
                 {
                     "hourly_units": {"temperature_2m": "°C"},
                     "hourly": {
                         "time": times,
-                        "temperature_2m": [temperature] * len(times),
+                        "temperature_2m": values,
                     },
                 }
             ).encode()
@@ -269,7 +274,7 @@ def test_temperature_archive_failure_keeps_last_complete_history_and_bounds_part
 
 
 def test_cached_training_temperatures_survive_restart_and_refresh_in_place(weather_documents):
-    """A restarted provider reuses archived days and replaces corrected recent observations."""
+    """Restart, a missing hour and a later correction preserve one cache row per date."""
 
     async def scenario():
         """Reload real persisted observations through a separate provider and document reader."""
@@ -283,6 +288,9 @@ def test_cached_training_temperatures_survive_restart_and_refresh_in_place(weath
         source = OpenMeteoTemperatureSource(second, reopened)
         assert await source.read(location, now) == original
         assert [url.rsplit("/", 1)[-1] for url, _ in second.calls] == ["forecast"]
+        second.recent_missing = int(original[-1].start.timestamp())
+        assert await source.read(location, now + timedelta(minutes=15)) == original
+        second.recent_missing = None
         second.recent_offset = 2
         refreshed = await source.read(location, now + timedelta(minutes=30))
         assert refreshed[0] == original[0]
