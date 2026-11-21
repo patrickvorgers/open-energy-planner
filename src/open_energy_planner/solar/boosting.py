@@ -3,7 +3,7 @@
 import hashlib
 import json
 from collections import Counter, defaultdict
-from dataclasses import asdict, dataclass, replace
+from dataclasses import asdict, dataclass, field, replace
 from datetime import datetime, timedelta
 from enum import StrEnum
 from functools import lru_cache
@@ -582,6 +582,7 @@ class TrainingResult:
     summary: TrainingSummary
     archive_reference: str | None = None
     challenger: SolarBoostedModel | None = None
+    attempt_status: TrainingStatus | None = field(default=None, compare=False)
 
 
 @lru_cache(maxsize=16)

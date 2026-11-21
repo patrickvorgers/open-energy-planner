@@ -43,7 +43,7 @@ from .ha_forecasts import HA_REFRESH_MAX_AGE
 from .model_policy import DEFAULT_GROUND_ALBEDO, DEFAULT_TEMPERATURE_COEFFICIENT_MAGNITUDE
 from .source_selection import MIN_ACCURACY_DAYS, SOURCE_POLICY, choose_sources, ha_energies
 from .storage.history import HistoryContinuityError, SolarHistoryImport
-from .training import DailySolarTraining
+from .training import RETRYABLE_TRAINING, DailySolarTraining
 from .wire import configuration_document, document, forecast_document
 
 HISTORY_RETRY_MINUTES = 15
@@ -638,6 +638,13 @@ class SolarRuntime:
             or key[2:] != self.last_key[2:]
             or (weather_expired and forecast.weather_version != "none")
             or (forecast.valid_until is not None and now >= forecast.valid_until)
+            or (
+                now.astimezone(UTC).date() != forecast.freshness_at.astimezone(UTC).date()
+                and any(
+                    (result.attempt_status or result.summary.status) in RETRYABLE_TRAINING
+                    for result in self.learning.values()
+                )
+            )
         ):
             return False
         grid = horizon(now)

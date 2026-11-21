@@ -13,7 +13,7 @@ from open_energy_planner.solar.storage import SolarStore
 from open_energy_planner.solar.training import DailySolarTraining
 from open_energy_planner.solar.wire import document
 from tests.app.solar.boosting_support import runtime_case
-from tests.app.solar.support import SITE, plant
+from tests.app.solar.support import SITE, plant, weather
 from tests.database.support.archive import list_documents, make_store
 
 NOW = datetime(2026, 8, 20, 12, tzinfo=UTC)
@@ -127,6 +127,42 @@ def test_utc_validation_rollover_retries_only_incomplete_local_day_attempt(tmp_p
         assert cached == original
 
 
+@pytest.mark.parametrize(
+    "status", [TrainingStatus.INSUFFICIENT_VALIDATION, TrainingStatus.BASELINE_PREFERRED]
+)
+def test_forecast_reuse_keeps_daily_validation_retry(tmp_path, monkeypatch, status):
+    """Keep reusing an issued forecast across UTC midnight after a completed local-day attempt."""
+    store = make_store(tmp_path, SolarStore)
+    store.save(plant())
+    runtime = SolarRuntime(store)
+    before = datetime(2026, 8, 20, 23, 45, tzinfo=UTC)
+    after = before + timedelta(minutes=15)
+    runtime.set_weather(SITE, weather(before, days=5))
+    runtime.histories["sensor.pv0"] = EnergyHistory(
+        "sensor.pv0",
+        (EnergyHour(NOW - timedelta(hours=48), 0, 0), EnergyHour(NOW - timedelta(hours=47), 1, 1)),
+    )
+    attempts = []
+
+    def fit(_source, _inverter, _location, _history, _hourly, _weather, now, **_options):
+        """Record only fits admitted by the real runtime and training store."""
+        attempts.append(now)
+        return TrainingResult(None, TrainingSummary(status, 1, 0, 0, {}, ()))
+
+    monkeypatch.setattr("open_energy_planner.solar.runtime.fit_boosted_model", fit)
+    assert runtime.install(runtime.build(runtime.job(before)), before)
+    forecast_version = runtime.forecast.version
+    job = runtime.job(after)
+    if status == TrainingStatus.INSUFFICIENT_VALIDATION:
+        assert job is not None
+        assert runtime.install(runtime.build(job), after)
+        assert attempts == [before, after]
+    else:
+        assert job is None
+        assert runtime.forecast.version == forecast_version
+        assert attempts == [before]
+
+
 def test_native_model_survives_runtime_restart_and_new_weather(tmp_path, monkeypatch):
     """A restored runtime predicts a fresh issue using checked stored weights without another fit."""
     runtime, now = runtime_case(tmp_path)
@@ -180,14 +216,15 @@ def test_inadequate_new_attempt_preserves_usable_model_after_restart(tmp_path):
     insufficient = TrainingResult(
         None, TrainingSummary(TrainingStatus.INSUFFICIENT_HISTORY, 1, 0, 0, {}, ())
     )
-    assert (
-        learner.save(
-            token, insufficient, {"model": None, "summary": document(insufficient.summary)}
-        )
-        == original
+    fallback = learner.save(
+        token, insufficient, {"model": None, "summary": document(insufficient.summary)}
     )
+    assert fallback == original
+    assert fallback.attempt_status == TrainingStatus.INSUFFICIENT_HISTORY
     restored = DailySolarTraining(SolarStore(runtime.store.documents))
-    assert restored.prepare(*arguments, now + timedelta(days=1, minutes=15))[0] == original
+    cached, _token = restored.prepare(*arguments, now + timedelta(days=1, minutes=15))
+    assert cached == original
+    assert cached.attempt_status == TrainingStatus.INSUFFICIENT_HISTORY
 
 
 @pytest.mark.parametrize(
