@@ -23,7 +23,7 @@ flowchart LR
         HA --> BRIDGE
     end
 
-    subgraph CORE["Local app · Forecasting and planning"]
+    subgraph CORE["Local app forecasting and planning"]
         direction TB
         INPUTS["Admit measurements, prices<br/>and installation settings"]
         MODELS["Forecasts and device models<br/>Solar, demand, appliances, EV and thermal"]
@@ -33,7 +33,7 @@ flowchart LR
         INPUTS --> MODELS --> SNAPSHOT --> SOLVER --> CHECKS
     end
 
-    subgraph REPORTING["Local app · Storage and interface"]
+    subgraph REPORTING["Local app storage and interface"]
         direction TB
         ARCHIVE[("Shared database<br/>Configuration, history and plan archives")]
         INSIGHTS["Evaluate savings and forecast quality"]
@@ -41,7 +41,7 @@ flowchart LR
         ARCHIVE --> INSIGHTS --> UI
     end
 
-    subgraph EXECUTION["Home Assistant · Execution"]
+    subgraph EXECUTION["Home Assistant execution"]
         direction TB
         COMMANDS["OEP integration<br/>Current virtual commands"]
         EQUIPMENT["User automations and equipment<br/>Physical control and local safeguards"]
