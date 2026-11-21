@@ -2,6 +2,61 @@
 
 OEP consists of a local calculation app and a thin Home Assistant integration. Start here to choose the responsible layer before changing code. Use the [technical design](../../design/TECHNICAL-DESIGN.md) for complete contracts and the [user explanation](../users/how-oep-works.md) for product concepts.
 
+## Application at a glance
+
+The local app connects input sources to validated plans, historical evaluation
+and the web interface. The arrows show data flow. The Home Assistant integration
+appears twice to show its roles as an input bridge and as the publisher of
+current virtual commands. Equipment measurements and execution feedback return
+through Home Assistant on subsequent synchronization.
+
+```mermaid
+flowchart LR
+    accTitle: Open Energy Planner application flow
+    accDescr: Home Assistant and external providers supply inputs. The local app builds forecasts, solves a planning problem and validates the result. The published plan feeds both the app's archive and the virtual commands that user automations can use.
+
+    subgraph SOURCES["Input sources"]
+        direction TB
+        HA["Home Assistant<br/>Energy, entities, Recorder and feedback"]
+        BRIDGE["OEP integration<br/>Source and history bridge"]
+        PROVIDERS["External providers<br/>Weather and electricity prices"]
+        HA --> BRIDGE
+    end
+
+    subgraph CORE["Local app · Forecasting and planning"]
+        direction TB
+        INPUTS["Admit measurements, prices<br/>and installation settings"]
+        MODELS["Forecasts and device models<br/>Solar, demand, appliances, EV and thermal"]
+        SNAPSHOT["Freeze a planning problem"]
+        SOLVER["Calculate a candidate<br/>in the isolated HiGHS worker"]
+        CHECKS["Validate balances, limits and costs<br/>Check source versions and publish"]
+        INPUTS --> MODELS --> SNAPSHOT --> SOLVER --> CHECKS
+    end
+
+    subgraph REPORTING["Local app · Storage and interface"]
+        direction TB
+        ARCHIVE[("Shared database<br/>Configuration, history and plan archives")]
+        INSIGHTS["Evaluate savings and forecast quality"]
+        UI["Authenticated API and web UI<br/>Configuration, plans, insights and activity"]
+        ARCHIVE --> INSIGHTS --> UI
+    end
+
+    subgraph EXECUTION["Home Assistant · Execution"]
+        direction TB
+        COMMANDS["OEP integration<br/>Current virtual commands"]
+        EQUIPMENT["User automations and equipment<br/>Physical control and local safeguards"]
+        COMMANDS --> EQUIPMENT
+    end
+
+    SOURCES --> CORE
+    CORE -->|Validated plan| REPORTING
+    CORE -->|Complete plan| EXECUTION
+
+    style CORE fill:#eef5fc,stroke:#1c5a90,color:#172c41
+    style REPORTING fill:#eef5fc,stroke:#1c5a90,color:#172c41
+    style EXECUTION fill:#ecf8f3,stroke:#237558,color:#173a30
+```
+
 ## Follow data through the system
 
 | Stage | Owner | Boundary to preserve |
