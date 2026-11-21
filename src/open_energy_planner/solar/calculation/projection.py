@@ -1,5 +1,6 @@
 """Project independent measured-production models onto the shared planning grid."""
 
+from bisect import bisect_right
 from collections import defaultdict
 from dataclasses import replace
 from datetime import timedelta
@@ -42,12 +43,34 @@ def limit_ac_production(configuration, energies):
     )
 
 
-def integrate_intervals(rows, now, source_ids):
-    """Require complete quarter coverage and conserve DC/AC kWh on the planning grid."""
+def live_forecast_grid(now, weather):
+    """Keep native quarters over the contiguous available weather horizon.
+
+    An incomplete required horizon still fails model validation. Extra provider
+    hours cover subsequent planning windows without another issue.
+    """
+    required = horizon(now)
+    start = required[0][0]
+    required_end = required[-1][0] + timedelta(hours=required[-1][1])
+    available = {row.start for row in weather if row.received_at <= now}
+    end = start.replace(minute=0)
+    while end in available:
+        end += timedelta(hours=1)
+    end = max(end, required_end)
+    step = timedelta(minutes=FINE_INTERVAL_MINUTES)
+    return tuple((start + index * step, QUARTER_HOURS) for index in range((end - start) // step))
+
+
+def integrate_intervals(rows, grid, source_ids):
+    """Conserve DC/AC kWh and require complete source coverage for each target interval."""
     energies = []
     for source_id in source_ids:
-        source_rows = [row for row in rows if row.source_id == source_id]
-        for start, duration in horizon(now):
+        source_rows = sorted(
+            (row for row in rows if row.source_id == source_id), key=lambda row: row.start
+        )
+        starts = tuple(row.start for row in source_rows)
+        ends = tuple(row.start + timedelta(hours=row.duration_h) for row in source_rows)
+        for start, duration in grid:
             end = start + timedelta(hours=duration)
             overlaps = [
                 (
@@ -61,7 +84,7 @@ def integrate_intervals(rows, now, source_ids):
                         / SECONDS_PER_HOUR,
                     ),
                 )
-                for row in source_rows
+                for row in source_rows[bisect_right(ends, start) : bisect_right(starts, end)]
             ]
             if (
                 abs(fsum(overlap for _row, overlap in overlaps) - duration)
@@ -80,7 +103,32 @@ def integrate_intervals(rows, now, source_ids):
     return tuple(energies)
 
 
-def learned_forecast(configuration, location, weather, now, models, *, planning_origin=None):
+def forecast_window(rows, now):
+    """Project a stored issue onto the visible planning window without extending any source."""
+    sources = defaultdict(list)
+    for row in rows:
+        sources[row.source_id].append(row)
+    grid = horizon(now)
+    return tuple(
+        row
+        for source_id, values in sources.items()
+        for row in integrate_intervals(
+            values,
+            tuple(
+                (start, duration)
+                for start, duration in grid
+                if values[0].start <= start
+                and start + timedelta(hours=duration)
+                <= values[-1].start + timedelta(hours=values[-1].duration_h)
+            ),
+            (source_id,),
+        )
+    )
+
+
+def learned_forecast(
+    configuration, location, weather, now, models, *, planning_origin=None, grid=None
+):
     """Predict boundary production without PVWatts, then apply declared converter limits.
 
     AC predictions imply standalone-equivalent DC through declared efficiency.
@@ -93,7 +141,7 @@ def learned_forecast(configuration, location, weather, now, models, *, planning_
     if not models:
         return None
     origin = planning_origin if planning_origin is not None else now
-    grid = horizon(origin)
+    grid = horizon(origin) if grid is None else grid
     first, end = grid[0][0], grid[-1][0] + timedelta(hours=grid[-1][1])
     usable = tuple(row for row in weather if row.received_at <= now)
     future = tuple(
@@ -150,7 +198,7 @@ def learned_forecast(configuration, location, weather, now, models, *, planning_
         location,
         now,
         version([row.__dict__ for row in usable]),
-        integrate_intervals(rows, origin, tuple(models)),
+        integrate_intervals(rows, grid, tuple(models)),
         model="solar-xgboost-production-v2",
         quality="shadow",
         calibration_versions=tuple(model.version for model in models.values()),

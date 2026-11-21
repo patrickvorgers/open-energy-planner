@@ -713,10 +713,10 @@ def test_captured_weather_service_is_archived_with_old_forecast_rows_despite_a_l
     runtime.set_weather(SITE, original_weather, service=original_service)
     monkeypatch.setattr(runtime, "_learned_candidates", lambda *_arguments, **_options: {})
 
-    def candidate(configuration, location, weather, issued_at, _models):
+    def candidate(configuration, location, weather, issued_at, _models, *, grid):
         """Supply a distinct deterministic candidate only to exercise its independent archive projection."""
         return replace(
-            PVWattsPredictor().forecast(configuration, location, weather, issued_at),
+            PVWattsPredictor().forecast(configuration, location, weather, issued_at, grid=grid),
             model="solar-xgboost-production-v2",
             quality="shadow",
         )
@@ -789,7 +789,7 @@ def test_live_49_hour_guard_covers_the_final_partial_planning_hour(tmp_path, mon
     forecast = runtime.build(queued)[4]
     assert forecast.energies[0].start == now
     last = forecast.energies[-1]
-    assert last.start + timedelta(hours=last.duration_h) == now + timedelta(hours=48)
+    assert last.start + timedelta(hours=last.duration_h) == received + timedelta(hours=49)
     assert runtime.job(received + timedelta(hours=1)) is None
     assert runtime.issue == "solar_weather_expired"
 

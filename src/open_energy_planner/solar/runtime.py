@@ -5,10 +5,16 @@ from dataclasses import asdict, replace
 from datetime import UTC, datetime, timedelta
 from importlib.metadata import version as distribution_version
 from threading import Lock
+from zoneinfo import ZoneInfo
 
 from open_energy_planner.forecast_quality.policy import FORECAST_MODELS
 from open_energy_planner.runtime.diagnostics.logging import BackgroundLog, failure_trace
-from open_energy_planner.solar.calculation.model import ForecastSource, SolarForecast, version
+from open_energy_planner.solar.calculation.model import (
+    ForecastSource,
+    SolarForecast,
+    horizon,
+    version,
+)
 from open_energy_planner.solar.forecast_weather import (
     FORECAST_RUN_RESPONSE_HOURS,
     MAX_LIVE_RUN_AGE_HOURS,
@@ -17,7 +23,12 @@ from open_energy_planner.solar.forecast_weather import (
 
 from ..planning_policy import FINE_INTERVAL_MINUTES, PLANNING_HORIZON_HOURS
 from .boosting import TrainingResult, TrainingStatus, TrainingSummary, fit_boosted_model
-from .calculation.projection import learned_forecast, limit_ac_production
+from .calculation.projection import (
+    forecast_window,
+    learned_forecast,
+    limit_ac_production,
+    live_forecast_grid,
+)
 from .curtailment import (
     FEEDBACK_EPOCH,
     FEEDBACK_REFRESH_MINUTES,
@@ -32,7 +43,7 @@ from .ha_forecasts import HA_REFRESH_MAX_AGE
 from .model_policy import DEFAULT_GROUND_ALBEDO, DEFAULT_TEMPERATURE_COEFFICIENT_MAGNITUDE
 from .source_selection import MIN_ACCURACY_DAYS, SOURCE_POLICY, choose_sources, ha_energies
 from .storage.history import HistoryContinuityError, SolarHistoryImport
-from .training import DailySolarTraining
+from .training import RETRYABLE_TRAINING, DailySolarTraining
 from .wire import configuration_document, document, forecast_document
 
 HISTORY_RETRY_MINUTES = 15
@@ -55,6 +66,7 @@ class SolarRuntime:
         self.configuration, self.issue = store.current, store.issue
         self.restore_training_revisions()
         self.location, self.weather = None, ()
+        self.weather_received_at = None
         self.run_evidence_revision = None
         self.forecast_runs, self.weather_service = (), {}
         self.forecast_runs_revision, self.last_fit_at = 0, None
@@ -379,9 +391,25 @@ class SolarRuntime:
             self.forecast_runs = ()
             self.run_evidence_revision = None
             self.forecast_runs_revision += 1
-        self.location, self.weather = location, tuple(weather)
-        self.weather_service = dict(service) if service is not None else {}
+        incoming = tuple(weather)
+        provenance = dict(service) if service is not None else {}
+        received = incoming[-1].received_at if incoming else None
+        if (
+            location == self.location
+            and len(incoming) == len(self.weather)
+            and {key: value for key, value in provenance.items() if key != "received_at"}
+            == {key: value for key, value in self.weather_service.items() if key != "received_at"}
+            and all(
+                original == replace(current, received_at=original.received_at)
+                for original, current in zip(self.weather, incoming)
+            )
+        ):
+            if received is not None:
+                self.weather_received_at = max(received, self.weather_received_at or received)
+            return
         self.weather_revision += 1
+        self.location, self.weather, self.weather_service = location, incoming, provenance
+        self.weather_received_at = received
 
     def set_forecast_runs(self, location, runs, *, authoritative=True):
         """Admit partial loaded runs, or reconcile an authoritative snapshot including explicit withdrawals."""
@@ -513,6 +541,7 @@ class SolarRuntime:
                     microsecond=0,
                 ),
                 self.location,
+                now.astimezone(ZoneInfo(self.location.timezone)).date() if self.location else None,
                 self.weather_revision,
                 self.history_revision,
                 self.ha_revision,
@@ -555,11 +584,19 @@ class SolarRuntime:
             except (TypeError, ValueError, KeyError):
                 expired = True
         else:
-            expired = bool(self.weather and now - self.weather[-1].received_at > timedelta(hours=2))
+            expired = (
+                self.weather_received_at is not None
+                and now - self.weather_received_at > timedelta(hours=2)
+            )
         if expired and not ha_only:
             self.issue = "solar_weather_expired"
             return None
         key = self.key(now)
+        if key != self.last_key and self._reuse_forecast(key, now, expired):
+            self.last_key = key
+            self.forecast = replace(self.forecast, checked_at=now)
+            self.issue = None
+            return None
         if (
             self.last_key
             and key[:-1] == self.last_key[:-1]
@@ -590,6 +627,33 @@ class SolarRuntime:
             dict(self.evidence_revisions),
             self.run_evidence_revision,
         )
+
+    def _reuse_forecast(self, key, now, weather_expired):
+        """Reuse one immutable issue when only the planning quarter advanced."""
+        forecast = self.forecast
+        if (
+            self.last_key is None
+            or forecast is None
+            or key[:1] != self.last_key[:1]
+            or key[2:] != self.last_key[2:]
+            or (weather_expired and forecast.weather_version != "none")
+            or (forecast.valid_until is not None and now >= forecast.valid_until)
+            or (
+                now.astimezone(UTC).date() != forecast.freshness_at.astimezone(UTC).date()
+                and any(
+                    (result.attempt_status or result.summary.status) in RETRYABLE_TRAINING
+                    for result in self.learning.values()
+                )
+            )
+        ):
+            return False
+        grid = horizon(now)
+        end = grid[-1][0] + timedelta(hours=grid[-1][1])
+        # A short HA provider horizon cannot satisfy a full planning-window reuse.
+        ends = {
+            row.source_id: row.start + timedelta(hours=row.duration_h) for row in forecast.energies
+        }
+        return all(ends.get(source.source_id, now) >= end for source in self.configuration.sources)
 
     def build(self, job):
         """Compute and archive exact physical output plus shadow corrections outside the event loop."""
@@ -672,7 +736,8 @@ class SolarRuntime:
             )
             return key, forecast, (), None, None, statuses, {}, {}
         predictor = PVWattsPredictor()
-        forecast = predictor.forecast(configuration, location, weather, now)
+        grid = live_forecast_grid(now, weather)
+        forecast = predictor.forecast(configuration, location, weather, now, grid=grid)
         weather_provenance = {
             "weather_service": weather_service,
             "forecast_weather_source": {
@@ -717,7 +782,9 @@ class SolarRuntime:
             if result.model is not None
         }
         try:
-            candidate = learned_forecast(configuration, location, weather, now, models_by_source)
+            candidate = learned_forecast(
+                configuration, location, weather, now, models_by_source, grid=grid
+            )
         except (ImportError, ValueError, RuntimeError, OSError) as error:
             self.learning_log.exception(
                 "Independent solar prediction is unavailable. PVWatts remains available. Retrying with the next usable solar forecast update.",
@@ -733,6 +800,7 @@ class SolarRuntime:
                 source_id: replace(
                     result,
                     model=None,
+                    attempt_status=TrainingStatus.FAILED,
                     summary=replace(
                         result.summary,
                         status=TrainingStatus.FAILED,
@@ -1071,8 +1139,14 @@ class SolarRuntime:
 
     def document(self, now, *, series=False):
         """Expose active prediction, per-source candidates and actionable status without recomputation."""
-        forecast = forecast_document(self.forecast, series=series)
-        candidate = forecast_document(self.candidate, series=series)
+        forecast = forecast_document(self.forecast, series=False)
+        candidate = forecast_document(self.candidate, series=False)
+        if series:
+            for issue, view in ((self.forecast, forecast), (self.candidate, candidate)):
+                if issue is not None:
+                    view["energies"] = [
+                        document(row) for row in forecast_window(issue.energies, now)
+                    ]
         statuses = {}
         if self.configuration:
             fitted = {candidate_item.source_id for candidate_item in self.calibrations}

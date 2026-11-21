@@ -17,7 +17,7 @@ def forecast_usable(
 ) -> bool:
     """Admit configured PV only with matching configuration/site and a current forecast.
 
-    The issuance boundary is inclusive and the thirty-minute expiry is exclusive.
+    The validation boundary is inclusive and the thirty-minute expiry is exclusive.
     An explicit installation without PV needs no solar forecast.
     The installation compiler separately checks interval energy coverage.
     """
@@ -25,9 +25,10 @@ def forecast_usable(
         forecast is not None
         and forecast.configuration_version == configuration.version
         and forecast.location == location
-        and forecast.issued_at
+        and forecast.issued_at <= now
+        and forecast.freshness_at
         <= now
-        < forecast.issued_at + timedelta(minutes=FORECAST_MAX_AGE_MINUTES)
+        < forecast.freshness_at + timedelta(minutes=FORECAST_MAX_AGE_MINUTES)
         and (forecast.valid_until is None or now < forecast.valid_until)
     )
 

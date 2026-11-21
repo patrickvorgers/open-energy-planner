@@ -260,10 +260,10 @@ class DailySolarTraining:
     def usable(self, pointer, latest):
         """Preserve a previously admitted same-binding model when today's data is insufficient."""
         reference = pointer.get("usable")
-        return (
-            self.read(reference, pointer["binding"])
-            if latest.model is None and reference
-            else latest
+        if latest.model is not None or not reference:
+            return latest
+        return replace(
+            self.read(reference, pointer["binding"]), attempt_status=latest.summary.status
         )
 
     def save(self, token, result, record):
@@ -302,7 +302,10 @@ class DailySolarTraining:
         """Read an earlier usable same-binding model after a transient training failure."""
         pointer = token.get("previous")
         return (
-            self.read(pointer["usable"], pointer["binding"])
+            replace(
+                self.read(pointer["usable"], pointer["binding"]),
+                attempt_status=TrainingStatus.FAILED,
+            )
             if pointer and pointer.get("usable")
             else None
         )

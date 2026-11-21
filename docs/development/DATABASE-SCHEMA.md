@@ -456,6 +456,8 @@ extra evidence. Cross-family cycles are retained conservatively.
 | `name` | String(128), PK | Flat document key, such as `current.json`, a version or an evaluation pointer. |
 | `payload` | Text | Finite JSON object, array, scalar or null, decoded and validated by its typed owner. |
 
+Solar `forecast-<version>.json` retains the issued values and provenance for a source/model forecast. Live weather-derived issues retain native projected quarters through the available contiguous coverage. Successive plan snapshots can reference the same issue and retain their own planning intervals. Revalidation of unchanged inputs updates only in-memory freshness. The archive document and its content identity continue to use the original issue time. Older retained intervals are read through the same duration-aware representation. No table, index, or conversion is required.
+
 Solar `training-current-<binding>.json` selects a durable daily training attempt
 and last usable same-binding report. Its fields are `binding`, HA-local `day`,
 completed historical `inputs` digest, UTC `validation_end`, `report` and nullable

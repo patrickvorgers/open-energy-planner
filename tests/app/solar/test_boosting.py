@@ -334,8 +334,10 @@ def test_runtime_archives_tree_and_cleaning_without_premature_activation(tmp_pat
     assert public["audit_reference"] == result.archive_reference
     assert "model_json" not in public and "excluded_periods" not in public
     before_weights = list(runtime.store.documents.iter_prefix("ml-weights-"))
+    candidate_version = runtime.candidate.version
     later = now + timedelta(minutes=15)
-    assert runtime.install(runtime.build(runtime.job(later)), later)
+    assert runtime.job(later) is None
+    assert runtime.candidate.version == candidate_version
     assert list(runtime.store.documents.iter_prefix("ml-weights-")) == before_weights
 
 
@@ -896,6 +898,7 @@ def test_optional_inference_failure_preserves_the_physical_forecast(tmp_path, mo
     assert runtime.forecast.model == "pvwatts-v2"
     assert runtime.candidate is None
     assert runtime.document(now)["learning"]["pv0"]["status"] == "training_failed"
+    assert runtime.learning["pv0"].attempt_status is runtime_module.TrainingStatus.FAILED
     assert "private-inference-source-and-token" not in caplog.text
     assert "RuntimeError" in caplog.text
 

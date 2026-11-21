@@ -12,6 +12,7 @@ from open_energy_planner.home_assistant.observations import InputsUnavailable
 from open_energy_planner.installation.location import SiteLocation
 from open_energy_planner.installation.validation import validate
 from open_energy_planner.optimization.adapters.highs import HighsSolver
+from open_energy_planner.solar.basis import forecast_usable
 from open_energy_planner.solar.calculation.model import (
     SolarConfiguration,
     SolarEnergy,
@@ -280,6 +281,46 @@ def test_runtime_archives_original_forecast_rejects_stale_workers_and_handles_co
     assert make_store(tmp_path, SolarStore).issue == "solar_configuration_unreadable"
 
 
+def test_live_solar_reuses_a_full_issue_until_weather_changes(tmp_path):
+    """The moving planning window retains its original issue and can still admit fresh estimates."""
+    store = make_store(tmp_path, SolarStore)
+    configuration = plant()
+    store.save(configuration)
+    runtime = SolarRuntime(store)
+    original_weather = weather()
+    runtime.set_weather(SITE, original_weather)
+    assert runtime.install(runtime.build(runtime.job(START)), START)
+    original = runtime.forecast
+    archive_name = f"forecast-{original.version}.json"
+    archived = store.documents.read(archive_name)
+    assert archived["forecast"]["weather_version"] == original.weather_version
+    assert store.documents.exists(f"weather-{original.weather_version}.json")
+
+    for minutes in (15, 30, 45, 60):
+        now = START + timedelta(minutes=minutes)
+        runtime.set_weather(SITE, weather(now))
+        assert runtime.job(now) is None
+        assert runtime.forecast.version == original.version
+        assert runtime.forecast.issued_at == START
+        assert forecast_usable(configuration, runtime.forecast, SITE, now)
+        grid = horizon(now)
+        assert runtime.forecast.energies[-1].start + timedelta(minutes=15) >= (
+            grid[-1][0] + timedelta(hours=grid[-1][1])
+        )
+
+    assert store.documents.read(archive_name) == archived
+    assert [name for name in list_documents(tmp_path, "solar") if name.startswith("forecast-")] == [
+        archive_name
+    ]
+    now += timedelta(minutes=15)
+    runtime.set_weather(SITE, weather(now, ghi=500))
+    assert runtime.install(runtime.build(runtime.job(now)), now)
+    assert runtime.forecast.version != original.version
+    assert runtime.forecast.weather_version != original.weather_version
+    assert store.documents.exists(f"weather-{runtime.forecast.weather_version}.json")
+    assert store.documents.read(archive_name) == archived
+
+
 def test_failed_history_source_does_not_block_other_inverters(tmp_path):
     """Record a Recorder failure for source one and advance to source two without inventing zero historical yield."""
     store = make_store(tmp_path, SolarStore)
@@ -408,6 +449,7 @@ def test_sixteen_source_basis_indexes_forecast_rows_once_and_preserves_total_ene
         forecast=SimpleNamespace(
             configuration_version=definition.version,
             issued_at=START,
+            freshness_at=START,
             valid_until=None,
             location=forecast.location,
             energies=Rows(),

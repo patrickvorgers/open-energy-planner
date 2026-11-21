@@ -164,9 +164,13 @@ def test_shared_hybrid_pv_models_retain_one_common_ac_limit(tmp_path, with_weath
     assert max(
         total for (_, duration), total in totals.items() if duration == 0.25
     ) == pytest.approx(0.125)
-    assert max(total for (_, duration), total in totals.items() if duration == 1) == pytest.approx(
-        0.5
-    )
+    hours = {start.replace(minute=0) for start, _duration in totals}
+    assert max(
+        sum(
+            total for (start, _duration), total in totals.items() if start.replace(minute=0) == hour
+        )
+        for hour in hours
+    ) == pytest.approx(0.5)
     assert next(row for row in energies if row.source_id == "pv0").dc_kwh == pytest.approx(
         0.1 / 0.96
     )
@@ -196,7 +200,7 @@ def test_mixed_selection_caps_only_the_final_combination(
             for row in baseline.energies
         ),
     )
-    monkeypatch.setattr(PVWattsPredictor, "forecast", lambda *_arguments: baseline)
+    monkeypatch.setattr(PVWattsPredictor, "forecast", lambda *_arguments, **_options: baseline)
     store = make_store(tmp_path, SolarStore)
     store.save(configuration)
     runtime = SolarRuntime(store)

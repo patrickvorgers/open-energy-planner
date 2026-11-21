@@ -178,11 +178,19 @@ class PVWattsPredictor:
         return dc_power_kw, ac_power_kw
 
     def forecast(
-        self, configuration, location, weather, now, *, calibrations=(), hourly_factors=None
+        self,
+        configuration,
+        location,
+        weather,
+        now,
+        *,
+        calibrations=(),
+        hourly_factors=None,
+        grid=None,
     ):
         """Integrate physical quarter estimates onto the complete mixed grid without inventing finer weather."""
         usable = tuple(weather_item for weather_item in weather if weather_item.received_at <= now)
-        grid = horizon(now)
+        grid = horizon(now) if grid is None else grid
         first, end = grid[0][0], grid[-1][0] + timedelta(hours=grid[-1][1])
         prediction_weather = tuple(
             weather_item
@@ -197,7 +205,7 @@ class PVWattsPredictor:
             hourly_factors=hourly_factors,
         )
         energies = integrate_intervals(
-            hours, now, tuple(source.source_id for source in configuration.sources)
+            hours, grid, tuple(source.source_id for source in configuration.sources)
         )
         return SolarForecast(
             configuration.version,

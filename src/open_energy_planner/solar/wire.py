@@ -134,11 +134,13 @@ def forecast_document(value, *, series=True):
     if value is None:
         return None
     if series:
-        return {**document(value), "version": value.version}
+        body = document(value)
+        del body["checked_at"]
+        return {**body, "version": value.version}
     metadata = {
         field.name: getattr(value, field.name)
         for field in fields(value)
-        if field.name != "energies"
+        if field.name not in {"energies", "checked_at"}
     }
     metadata["location"] = document(value.location)
     return {**json.loads(json.dumps(metadata, default=str)), "version": value.version}
