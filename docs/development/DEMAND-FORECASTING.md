@@ -39,7 +39,25 @@ samples. Household lookups share the same baseline/Ridge policy.
 | Historical baseline | `weekday-hour-v2`: local weekday/hour means, then same-hour/global residual means |
 | ML candidate | `ridge-v2`: standardized linear regression with L2 regularization, fixed alpha 10, unpenalized intercept |
 | Numerical runtime | Existing pinned NumPy. Augmented least squares using `numpy.linalg.lstsq`, no new dependency or user compilation |
-| Weather | Replaceable aiohttp/Open-Meteo temperature adapter using the existing HA location |
+| Weather | Shared live ECMWF IFS run for the HA location, plus an independent historical temperature input |
+
+## Live weather and forecast reuse
+
+The independent weather service supplies the same retained Open-Meteo ECMWF
+IFS run to solar and demand, including installations without PV. Demand reads
+its hourly temperatures and records the shared weather reference when a model
+uses them. The service supplies completed historical temperature hours for
+training with their original knowledge times. Solar and demand own their
+models and their predictions.
+
+For a complete live run, demand stores predictions at native quarter resolution
+through its contiguous usable coverage. Planning and the current demand API
+project that original issue onto the rolling planning grid. An unchanged input
+set can revalidate the installed issue in memory without changing its issue time
+or writing another forecast archive. A changed input, a new local training day,
+expired weather or insufficient window coverage triggers the existing worker.
+Device forecasts have the same live admission check. Appliance planning clips
+them to its coverage while preserving their native interval boundaries.
 | Planning | Existing HiGHS/highspy and independent plan validation. Forecasts do not control physical devices |
 | Verification | pytest, actual HA Recorder/API tests and app browser tests, Ruff and the existing complete Linux/Playwright CI |
 
@@ -373,6 +391,12 @@ separation. The public composed forecast carries household scope and no extra
 exclusions because its components have already been added back.
 
 The `/v1/consumers` API stores app-owned selection/weather flags with optimistic concurrency in the shared SQLAlchemy demand document namespace. Energy membership and upstream links remain read-only. Models, component forecasts and original parameters are archived. Source history is fetched through the integration rather than a direct Recorder database connection. Removed sources remain in historical settings, disappear from offered choices and prevent stale composition. Forecast-only HA devices publish current-interval mean forecast W, full-horizon forecast kWh and forecast status. These are estimates, not measured energy or commands.
+
+Live consumer responses project original native steps onto the rolling planning
+grid. Each forecast keeps its original `issued_at` and exposes `valid_until`,
+which uses the latest app check and the original weather run's deadline when
+applicable. Home Assistant uses that deadline for sensor availability. A site
+change revokes old-site demand evidence before the new observations can plan.
 
 Ready device forecasts remain available when another selected consumer has too
 little history. The remaining-household baseline subtracts only ready components,

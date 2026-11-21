@@ -458,6 +458,8 @@ extra evidence. Cross-family cycles are retained conservatively.
 
 Solar `forecast-<version>.json` retains the issued values and provenance for a source/model forecast. Live weather-derived issues retain native projected quarters through the available contiguous coverage. Successive plan snapshots can reference the same issue and retain their own planning intervals. Revalidation of unchanged inputs updates only in-memory freshness. The archive document and its content identity continue to use the original issue time. Older retained intervals are read through the same duration-aware representation. No table, index, or conversion is required.
 
+The `weather` namespace owns the shared live IFS manifest and provider caches, including for demand-only installations. This includes `weather-*`, `weather-cache-*` and `forecast-weather-*` documents with their daily blocks. The next refresh populates this namespace on an existing installation. Older irradiance references stored in solar may show as unavailable in Forecast Quality. Stored energy forecast values remain readable. Demand projections that use temperature retain its weather reference. Demand and component forecast issues may contain more native quarters than one planning window. Their immutable issue time and identity are unchanged by live revalidation. Historical readers continue to consume duration-aware forecast steps.
+
 Solar `training-current-<binding>.json` selects a durable daily training attempt
 and last usable same-binding report. Its fields are `binding`, HA-local `day`,
 completed historical `inputs` digest, UTC `validation_end`, `report` and nullable
@@ -535,7 +537,8 @@ before the worker exits and the database engine is disposed.
 | `savings-bonus-counters` | `CounterStore` via `HistoricalBonuses`: automatically derived historical bonus seeds and optional origin evidence. Confirmed planning books remain in `bonus-counters`. | Immutable `<version>.json` books and `<seed-digest>.origin.json` provenance. `current.json` selects a book of at most 64 seeds. |
 | `installation` | `InstallationStore`: Energy-bound virtual devices, limits, relations and settings. `BatteryCalibration`: measured periodic full-charge progress. | Immutable `<version>.json`. `current.json` selects settings. Mutable bounded `battery-calibration.json` stores schema 1 and per-device progress. |
 | `demand` | `DemandStore`: selected consumption sources/settings. Forecast values and fitted model parameters. | `configuration-<version>.json`, `forecast-<version>.json`. `current.json` selects configuration. |
-| `solar` | `SolarStore`: per-source configuration, forecasts/models, weather/history blocks and receipt times. | Content-addressed kind/version documents. Unchanged daily `block-<hash>.json` reused by manifests. `current.json` selects configuration. |
+| `weather` | Shared live forecast runs and observed weather. | Weather manifests, immutable provider receipts and hourly value blocks. |
+| `solar` | `SolarStore`: per-source configuration, forecasts, models and solar meter history. | Content-addressed kind/version documents. Unchanged daily `block-<hash>.json` reused by manifests. `current.json` selects configuration. |
 | `prices` | `PriceStore`: normalized source series with original receipt/issue/expiry times, published/forecast flags and resolution. `DailyPrices`: calendar quarter prices and extreme selections. | Immutable `<version>.json`. `current.json` is the list of current series references. `daily-<identity>.json` retains daily spot-price evidence. No raw provider payloads or API secrets. |
 | `planning` | `StrategyStore` in `optimization/storage/__init__.py`: requested optimization strategy. `SelectionStore`: immutable forecast-decision captures/evaluations and current model preference evidence. `CalculationHistory` in `optimization/performance.py`: original calculation summaries and bounded progress observations. | `current.json` remains the strategy scalar. `model-selection.json` indexes families. `model-capture-<hash>.json` and `model-evaluation-<hash>.json` preserve content-addressed decision evidence. `calculations-YYYY-MM-DD.json` indexes summaries by UTC start date. `calculation-<id>.json` retains each full observation. |
 | `savings` | `SavingsRuntime` and `PlanValuations`: capture and recovery cursors, evaluation metadata, repricing queue, retained valuation results and pointers. | `capture.json`, `recovery.json`, `physical-reference.json`, `head.json`, `working.json`, `evaluation-<revision>.json`, `repricing.json`, `valuation-<identity>.json`, `planvalue-<hash>.json`, `valueissue-<hash>.json`. Current pointers/queue can change. Retained evaluations/valuations preserve original evidence. |
@@ -699,13 +702,13 @@ changes retain healthy feedback for unchanged sensors. New, failed or time-inval
 sensors are restored in the existing cancellation-safe configuration writer,
 before the caller releases its application lock.
 
-Solar daily-series writers compare the expected manifest and every referenced
+The shared daily-series writer compares the expected manifest and every referenced
 block in one active-database transaction. Reads use batches of at most 128 block
 identities. Reusing an existing manifest does not bypass immutable-content or
 missing-block checks. Valid matching blocks from an earlier incomplete write may
 complete an absent manifest. New blocks and the new manifest commit or roll back
-together. Document names, payloads and cross-backend transfer contracts remain
-unchanged.
+together. Document names and payloads keep their existing format. Backend transfer includes
+the weather namespace.
 
 Original forecast runs under `forecast-weather-*` supply historical forecast
 training and assessment. Retained `weather-cache-*` reanalysis is diagnostic
@@ -734,7 +737,7 @@ from `captured_forecasts`. Historical admission has `required_days` zero;
 initialization, actual receipt, nullable provider publication and policy without
 inventing missing provider metadata.
 
-`SolarStore.transaction()` acquires the shared store instance's reentrant write
+`SeriesArchive.transaction()` acquires the shared store instance's reentrant write
 lock before opening the SQL document transaction. Weather-cache, history-import,
 configuration, model and assessment writes use that ordering. Nested immutable
 archive writes reuse the lock and transaction. This serializes those workers in
@@ -1936,7 +1939,7 @@ same-issue alternatives to the original selected forecast. Original configuratio
 issue time and per-source predictor maps remain authoritative. These documents
 add no model-selection policy or solver input.
 
-The `solar` namespace owns `quality-satellite-<sha256>.json` latest pointers and
+The `weather` namespace owns `quality-satellite-<sha256>.json` latest pointers and
 immutable `quality-satellite-receipt-<sha256>.json` observations. Both payloads
 contain `location` from the archived forecast, aware UTC `start`/`end`, named
 `dataset`, actual UTC `received_at`, and `hours` entries with UTC interval `start`

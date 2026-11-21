@@ -21,6 +21,7 @@ DOCUMENT_NAMESPACES = (
     "savings-bonus-counters",
     "demand",
     "solar",
+    "weather",
     "installation",
     "prices",
     "savings",

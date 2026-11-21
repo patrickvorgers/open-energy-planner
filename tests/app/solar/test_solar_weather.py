@@ -5,7 +5,7 @@ import json
 
 import pytest
 
-from open_energy_planner.solar.weather import FIELDS, OpenMeteoSolarSource
+from open_energy_planner.weather.provider import FIELDS, OpenMeteoWeatherSource
 from tests.app.demand.test_demand_weather import Response
 from tests.app.solar.support import SITE, START
 
@@ -50,7 +50,7 @@ def test_solar_weather_end_labels_become_start_intervals_with_explicit_receipt()
     async def scenario():
         """Exercise the production adapter against HTTP fixtures, never external weather services."""
         session = Session(missing=True)
-        source = OpenMeteoSolarSource(session)
+        source = OpenMeteoWeatherSource(session)
         values = await source.read_observed(SITE, START)
         assert len(values) == 1
         assert values[0].start == START
@@ -82,7 +82,7 @@ def test_negative_provider_radiation_is_zero_without_losing_weather_hours(
     async def scenario():
         """Read normal forecast/archive responses with one negative irradiance component."""
         session = Session(overrides={field: negative, "temperature_2m": -5})
-        values = await OpenMeteoSolarSource(session).read_observed(SITE, START)
+        values = await OpenMeteoWeatherSource(session).read_observed(SITE, START)
         assert len(values) == 2
         for weather in values:
             assert getattr(weather, attribute) == 0
@@ -116,8 +116,8 @@ def test_radiation_normalization_does_not_accept_invalid_provider_values(field, 
 
     async def scenario():
         """Keep malformed current weather distinct from valid zero radiation."""
-        with pytest.raises(ValueError, match="Invalid solar quantity"):
-            await OpenMeteoSolarSource(Session(overrides={field: invalid})).read_observed(
+        with pytest.raises(ValueError, match="Invalid weather quantity"):
+            await OpenMeteoWeatherSource(Session(overrides={field: invalid})).read_observed(
                 SITE, START
             )
 
@@ -133,7 +133,9 @@ def test_missing_radiation_is_not_normalized_to_zero(field):
     async def scenario():
         """Read responses whose every hour lacks the selected radiation component."""
         assert (
-            await OpenMeteoSolarSource(Session(overrides={field: None})).read_observed(SITE, START)
+            await OpenMeteoWeatherSource(Session(overrides={field: None})).read_observed(
+                SITE, START
+            )
             == ()
         )
 
@@ -145,8 +147,8 @@ def test_negative_provider_wind_is_not_normalized_to_zero():
 
     async def scenario():
         """Reject a malformed non-radiation field at the existing model boundary."""
-        with pytest.raises(ValueError, match="Invalid solar quantity"):
-            await OpenMeteoSolarSource(Session(overrides={"wind_speed_10m": -1})).read_observed(
+        with pytest.raises(ValueError, match="Invalid weather quantity"):
+            await OpenMeteoWeatherSource(Session(overrides={"wind_speed_10m": -1})).read_observed(
                 SITE, START
             )
 
@@ -160,7 +162,7 @@ def test_solar_weather_rejects_unsupported_units_and_oversized_bodies(options):
     async def scenario():
         """Reject malformed input before any yield calculation."""
         with pytest.raises(ValueError):
-            await OpenMeteoSolarSource(Session(**options)).read_observed(SITE, START)
+            await OpenMeteoWeatherSource(Session(**options)).read_observed(SITE, START)
 
     asyncio.run(scenario())
 
@@ -170,7 +172,7 @@ def test_optional_historical_weather_failure_does_not_discard_valid_forecast():
 
     async def scenario():
         """Keep the optional training-source outage separate from the current forecast source."""
-        result = await OpenMeteoSolarSource(Session(archive_failure=True)).read_observed(
+        result = await OpenMeteoWeatherSource(Session(archive_failure=True)).read_observed(
             SITE, START
         )
         assert len(result) == 2
@@ -191,7 +193,7 @@ def test_excessive_integer_in_optional_archive_preserves_current_weather():
 
     async def scenario():
         """Optional malformed history leaves independently valid current weather available."""
-        values = await OpenMeteoSolarSource(ExcessiveArchiveSession()).read_observed(SITE, START)
+        values = await OpenMeteoWeatherSource(ExcessiveArchiveSession()).read_observed(SITE, START)
         assert len(values) == 2
         assert all(weather.ghi == 500 for weather in values)
 
@@ -246,8 +248,8 @@ def test_malformed_archive_shapes_preserve_current_forecast_but_current_failures
     async def scenario():
         """Assert both strict provider-boundary errors and independent optional-source availability."""
         with pytest.raises(ValueError):
-            await OpenMeteoSolarSource(MalformedSession(False)).read_observed(SITE, START)
-        result = await OpenMeteoSolarSource(MalformedSession(True)).read_observed(SITE, START)
+            await OpenMeteoWeatherSource(MalformedSession(False)).read_observed(SITE, START)
+        result = await OpenMeteoWeatherSource(MalformedSession(True)).read_observed(SITE, START)
         assert len(result) == 2
         assert result[0].start == START
 

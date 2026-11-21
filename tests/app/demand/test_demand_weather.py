@@ -6,8 +6,8 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from open_energy_planner.demand.weather import OpenMeteoTemperatureSource
 from open_energy_planner.installation.location import SiteLocation
+from open_energy_planner.weather.history import OpenMeteoTemperatureSource
 from tests.app.demand.test_demand import START
 
 
@@ -49,7 +49,7 @@ class Session:
             {
                 "hourly_units": {"temperature_2m": self.unit},
                 "hourly": {
-                    "time": [START.timestamp(), START.timestamp() + 3600],
+                    "time": [START.timestamp() - 3600, START.timestamp()],
                     "temperature_2m": [5, None],
                 },
             }
@@ -109,9 +109,19 @@ def test_weather_adapter_uses_ha_location_units_receipt_time_and_daily_archive_c
         assert len(session.calls) == 4
         assert session.calls[0][1]["params"]["latitude"] == 52
         assert session.calls[0][1]["params"]["longitude"] == 6
-        assert session.calls[2][1]["params"]["forecast_days"] == 3
+        assert session.calls[2][1]["params"]["end_date"] == START.date().isoformat()
 
     asyncio.run(scenario())
+
+
+def test_historical_temperature_includes_completed_hours_on_the_present_day():
+    """A completed midday load sample has weather while the ongoing hour stays excluded."""
+    now = START.replace(hour=12, minute=15)
+    session = AnnualSession()
+    source = OpenMeteoTemperatureSource(session)
+    rows = asyncio.run(source.read(SiteLocation(52, 6, "Europe/Amsterdam"), now))
+    today = [row.start.hour for row in rows if row.start.date() == now.date()]
+    assert today == list(range(12))
 
 
 @pytest.mark.parametrize("options", [{"unit": "°F"}, {"oversized": True}])
@@ -162,17 +172,16 @@ def test_temperature_cache_remains_bounded_as_the_daily_lookback_rolls():
         source = OpenMeteoTemperatureSource(session)
         location = SiteLocation(52, 6, "Europe/Amsterdam")
         now = datetime(2026, 6, 1, tzinfo=UTC)
-        forecast = {now + timedelta(hours=index) for index in range(48)}
         for offset in range(5):
             current = now + timedelta(days=offset)
             hours = await source.read(location, current)
             first = current - timedelta(days=367)
-            end = current - timedelta(days=7)
+            end = current
             expected = {
                 first + timedelta(hours=index)
                 for index in range(int((end - first).total_seconds() / 3600))
             }
-            assert {hour.start for hour in hours} == expected | forecast
+            assert {hour.start for hour in hours} == expected
             assert all(hour.celsius == 5 and hour.known_at <= current for hour in hours)
             assert len(source.archive) == 2
 

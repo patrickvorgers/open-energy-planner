@@ -189,12 +189,11 @@ class InstallationBasisSource:
             if rows
             else ()
         )
-        deadline = min(
-            load.issued_at + timedelta(minutes=FORECAST_MAX_AGE_MINUTES),
-            pv.freshness_at + timedelta(minutes=FORECAST_MAX_AGE_MINUTES)
-            if rows
-            else load.issued_at + timedelta(minutes=FORECAST_MAX_AGE_MINUTES),
-        )
+        deadline = load.freshness_at + timedelta(minutes=FORECAST_MAX_AGE_MINUTES)
+        if rows:
+            deadline = min(deadline, pv.freshness_at + timedelta(minutes=FORECAST_MAX_AGE_MINUTES))
+        if load.weather_valid_until is not None:
+            deadline = min(deadline, load.weather_valid_until)
         return PlanningBasis(
             configuration.revision,
             version(

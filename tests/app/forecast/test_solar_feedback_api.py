@@ -65,7 +65,7 @@ def historical_retarget_case(tmp_path, retarget, *, paired):
         async with TestClient(
             TestServer(
                 create_app(
-                    tmp_path, token, source="home_assistant", solar_weather_factory=fixture_weather
+                    tmp_path, token, source="home_assistant", live_weather_factory=fixture_weather
                 )
             )
         ) as client:
@@ -231,7 +231,7 @@ def test_repeated_quality_views_reuse_active_feedback_but_replay_historical_link
         async with TestClient(
             TestServer(
                 create_app(
-                    tmp_path, token, source="home_assistant", solar_weather_factory=fixture_weather
+                    tmp_path, token, source="home_assistant", live_weather_factory=fixture_weather
                 )
             )
         ) as client:

@@ -8,8 +8,9 @@ from types import SimpleNamespace
 import pytest
 
 from open_energy_planner.appliances.forecasting import component
-from open_energy_planner.demand import weather
 from open_energy_planner.demand.calculation.model import DemandConfiguration, DemandHour, EnergyTerm
+from open_energy_planner.weather import history as weather
+from open_energy_planner.weather import provider, satellite
 from script.release import package_ha_app
 from script.release.package_ha_app import package
 from script.runtime import ha_app
@@ -22,18 +23,22 @@ def test_acceptance_bootstrap_requires_marker_and_calls_original_entrypoint(monk
     monkeypatch.delenv("OEP_SUPERVISOR_SMOKE", raising=False)
     with pytest.raises(RuntimeError, match="disposable Supervisor acceptance"):
         acceptance_app.main()
+    monkeypatch.setattr(provider, "live_weather_factory", provider.live_weather_factory)
+    monkeypatch.setattr(satellite, "satellite_factory", satellite.satellite_factory)
     original_factory = weather.weather_factory
     monkeypatch.setattr(weather, "weather_factory", original_factory)
     calls = []
 
     def original_main():
         """Observe the injected port without starting or modifying any Home Assistant instance."""
-        calls.append(weather.weather_factory)
+        calls.append(
+            (weather.weather_factory, provider.live_weather_factory, satellite.satellite_factory)
+        )
 
     monkeypatch.setitem(sys.modules, "production_ha_app", SimpleNamespace(main=original_main))
     monkeypatch.setenv("OEP_SUPERVISOR_SMOKE", "1")
     acceptance_app.main()
-    assert calls == [acceptance_app.temperature_factory]
+    assert calls == [(acceptance_app.temperature_factory, None, None)]
 
 
 def test_acceptance_bootstrap_serves_after_default_weather_lifecycle(tmp_path, monkeypatch):
@@ -69,6 +74,8 @@ def test_acceptance_bootstrap_serves_after_default_weather_lifecycle(tmp_path, m
     monkeypatch.setattr(
         entrypoint.web, "run_app", lambda application, **_options: asyncio.run(serve(application))
     )
+    monkeypatch.setattr(provider, "live_weather_factory", provider.live_weather_factory)
+    monkeypatch.setattr(satellite, "satellite_factory", satellite.satellite_factory)
     monkeypatch.setattr(weather, "weather_factory", weather.weather_factory)
     monkeypatch.setattr(sys, "argv", list(sys.argv))
     acceptance_app.main()
@@ -150,9 +157,9 @@ def test_supervisor_capture_accepts_real_fitted_archives_without_forward_promoti
     from dataclasses import replace
 
     from open_energy_planner.appliances.forecasting import parse_selection
-    from open_energy_planner.demand.calculation.model import TemperatureHour
     from open_energy_planner.demand.runtime import DemandRuntime
     from open_energy_planner.demand.storage import DemandStore
+    from open_energy_planner.weather.model import TemperatureHour
     from script.supervisor import supervisor_smoke
     from tests.app.demand.test_demand import START, channel, config
     from tests.database.support.archive import make_store

@@ -219,7 +219,7 @@ def test_real_solar_notification_source_clears_after_automatic_forecast_refresh(
     """The real HTTP source reports failed weather and clears after a background forecast succeeds, without user writes."""
     available = [False]
     monkeypatch.setattr("open_energy_planner.solar.api.SOLAR_WORKER_POLL_SECONDS", 0.01)
-    monkeypatch.setattr("open_energy_planner.solar.api.WEATHER_RETRY_MINUTES", 0)
+    monkeypatch.setattr("open_energy_planner.weather.service.WEATHER_RETRY_MINUTES", 0)
 
     class WeatherSource:
         """Supply a controlled outage followed by complete current weather without external HTTP."""
@@ -291,13 +291,13 @@ def test_weather_outage_logs_impact_retry_without_private_url_or_traceback(tmp_p
             await configure_forecasts(session, url, solar_definition=asdict(plant()))
             await asyncio.wait_for(called.wait(), 10)
 
-    with caplog.at_level(logging.DEBUG, logger="open_energy_planner.solar.api"):
+    with caplog.at_level(logging.DEBUG, logger="open_energy_planner.weather.service"):
         asyncio.run(scenario())
     failures = [record for record in caplog.records if record.levelno >= logging.WARNING]
     assert len(failures) == 1
     assert "HTTP 503" in failures[0].getMessage()
     assert "30 minutes" in failures[0].getMessage()
-    assert "valid forecasts" in failures[0].getMessage()
+    assert "original validity" in failures[0].getMessage()
     assert failures[0].exc_info is None
     assert "PRIVATE_SITE" not in caplog.text
     assert "SECRET" not in caplog.text

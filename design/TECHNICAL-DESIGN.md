@@ -356,6 +356,20 @@ Dependencies point inward to domain/contracts, with no cyclic imports or univers
 Use `typing.Protocol`, e.g. `WeatherSource`, `MarketPriceSource`, `PriceForecastSource`, `ForecastModel`, `Solver` and focused archive interfaces. An ABC is justified only for a real shared mandatory lifecycle, not field reuse. Compose devices from consumption/production/storage/control capabilities and routes/limits. A battery is not a solar/grid subclass. New types need bounded model/config/HA contributions and tests, not provider knowledge or physical drivers in existing classes. Replacing a price adapter or database changes bootstrap/storage implementation, not planner/domain meaning. A small built-in registry is sufficient.
 
 
+### Domain ownership
+
+Each backend domain owns its data contracts, validation, storage and application
+operations. It owns the OEP endpoints that expose those operations and the
+provider adapters that fetch external data for the domain. The application
+composes the domain operations. Consumers use the owning module's normalized
+data through explicit interfaces.
+
+For example, `weather` fetches and stores live forecasts, historical weather
+and satellite irradiance. It supplies that data to solar, demand, training
+and Forecast Quality. `solar` and `demand` own their models and energy
+predictions. Forecast Quality compares the original predictions and later
+observations.
+
 ### Current model composition inside the highspy adapter
 
 The production solver accepts immutable `InstallationProblem` inputs and returns
