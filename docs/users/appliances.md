@@ -340,6 +340,19 @@ After any daily request, confirm the intended device and saved/requested state. 
 ## Cycle profile reliability
 
 Learning starts with hourly history and available five-minute statistics.
+The first complete cycle detected from hourly history gives an immediate
+estimate. More cycles refine it. For an hourly estimate, the typical duration
+is the lower middle of the detected lengths. The curve uses cycles within an
+hour of that duration and preserves their weighted average energy. Longer and
+shorter cycles remain in the history.
+
+To detect a cycle, the planner looks for power above 10 W or 5 W above
+the estimated standby level, whichever is higher. Standby is estimated
+from the lowest tenth of the interval readings. The active period must
+have quiet readings before and after it. That means one complete quiet
+hour for hourly history or 30 quiet minutes for five-minute statistics.
+Shorter pauses can remain inside a cycle. Missing readings and meter
+resets interrupt detection.
 Five-minute average power supplies the provisional shape, with the cycle's
 energy total taken from the energy counter. Coarse counter updates are not
 displayed as short power peaks.

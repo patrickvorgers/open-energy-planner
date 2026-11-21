@@ -97,6 +97,30 @@ class ApplianceService:
         self._cycle_records = {}
         self._phase_limited_entities = set()
         self._report_pairs = set()
+        self._refresh_hourly_profiles()
+
+    def _refresh_hourly_profiles(self):
+        """Rebuild prior hourly-only estimates once from the original recorded cycles."""
+        from .evidence import HOURLY_PROFILE_POLICY, refine
+
+        candidate = {**self.state, "devices": self.state["devices"].copy()}
+        for entity, settings in self.state["devices"].items():
+            power_entity = settings.get("learning_source")
+            if (
+                not power_entity
+                or settings.get("profile", {}).get("evidence") != "hourly_estimate"
+                or settings.get("hourly_profile_policy") == HOURLY_PROFILE_POLICY
+            ):
+                continue
+            try:
+                records, _, _ = self.collect_cycles(entity, power_entity, (), False, hourly=True)
+                rebuilt = deepcopy(settings)
+                refine(rebuilt, list(records.values()))
+            except ValueError:
+                # An incomplete archive cannot safely replace a retained estimate.
+                continue
+            candidate["devices"][entity] = rebuilt
+        self.commit(candidate)
 
     @property
     def revision(self):
@@ -222,6 +246,7 @@ class ApplianceService:
                 settings.pop("recent_cycles", None)
                 settings.pop("profile_sources", None)
                 settings.pop("profile_basis", None)
+                settings.pop("hourly_profile_policy", None)
                 settings.pop("last_detected_end", None)
                 settings.pop("learning_weight", None)
                 settings.pop("first_detected_start", None)

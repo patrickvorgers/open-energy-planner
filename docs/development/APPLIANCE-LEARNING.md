@@ -101,14 +101,21 @@ source. Such a rescan is outside this increment.
 
 Hourly detection uses the same activity threshold but requires one complete quiet
 hour on each side and at least one active hour. Gaps, missing pairs, counter resets
-and runs exceeding twelve hours are rejected. All occupied hours stay in the
-estimated duration. Each measured hourly kWh delta is spread uniformly across
+and runs exceeding twelve hours are rejected. Each detected cycle retains the
+duration of all occupied hours in its archive. Each measured hourly kWh delta is spread uniformly across
 four estimated planning quarters. This preserves kWh, but cannot recover exact
 start/end times, short power peaks or multiple runs within a single occupied
 period. An `hourly_estimate` is never relabelled as fine measured evidence.
 
 The first usable hourly cycle supplies a provisional planning profile immediately,
-even while older history is still loading. A saved manual estimate or explicitly
+even while older history is still loading. As more cycles are accepted, the
+selected hourly profile uses the lower median detected duration. Its curve
+uses cycles within one hour of that duration, weighted by recency. Retiming
+preserves their weighted energy. If retiming would exceed the physical power
+bound, only cycles of the chosen duration contribute to the curve. All detected
+cycles remain in the archive. Existing hourly estimates rebuild once on startup
+when their original evidence is available. Accepted tasks keep their frozen
+profiles. A saved manual estimate or explicitly
 recorded measured profile takes precedence over coarse evidence. The first fine
 cycle refines the timing. Overlapping coarse/fine observations count once in the
 selected model. Fine timing supplies the shape and distinct coarse/fine runs

@@ -1,12 +1,14 @@
 """Refine durable cycle evidence without counting coarse and fine views of one run twice."""
 
 from bisect import bisect_left
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from enum import StrEnum
+from itertools import accumulate, pairwise
+from statistics import median_low
 
 from open_energy_planner.demand.calculation.model import digest
 
-from .learning import MAX_RECENT_CYCLES, hourly_profile, retained_weight
+from .learning import HOURLY_SAMPLE_SECONDS, MAX_RECENT_CYCLES, hourly_profile, retained_weight
 from .model import (
     FINE_PROFILE_SECONDS,
     MAX_CYCLE_POWER_W,
@@ -16,6 +18,8 @@ from .model import (
     learn_cycle,
     restore_profile,
 )
+
+HOURLY_PROFILE_POLICY = 1
 
 
 class ProfileBasis(StrEnum):
@@ -100,6 +104,41 @@ def distinct_ranges(records):
     return result
 
 
+def representative_hourly_profile(records):
+    """Build the hourly planning shape around the lower median occupied duration.
+
+    Whole-hour attribution can move a boundary by one bin. Average nearby
+    cycles with recency weights, then retime that curve without changing its
+    energy. If compression exceeds the power limit, use exact-duration evidence.
+    """
+    duration = median_low([measured(record).duration_seconds for record in records])
+    nearby = [
+        record
+        for record in records
+        if abs(measured(record).duration_seconds - duration) <= HOURLY_SAMPLE_SECONDS
+    ]
+    profile, _ = average(nearby)
+    if profile.duration_seconds == duration:
+        return profile
+
+    steps = duration // profile.phase_seconds
+    cumulative_power = (0, *accumulate(profile.power_w))
+    destination_edges = []
+    for step in range(steps + 1):
+        index, remainder = divmod(step * len(profile.power_w), steps)
+        edge = cumulative_power[index]
+        if remainder:
+            edge += profile.power_w[index] * remainder / steps
+        destination_edges.append(edge)
+    powers = tuple(right - left for left, right in pairwise(destination_edges))
+    if max(powers) > MAX_CYCLE_POWER_W:
+        profile, _ = average(
+            [record for record in nearby if measured(record).duration_seconds == duration]
+        )
+        return profile
+    return replace(profile, power_w=powers)
+
+
 def refine(settings, records):
     """Use all distinct cycles for energy and available fine cycles for the timing shape.
 
@@ -149,7 +188,11 @@ def refine(settings, records):
         settings.pop("learning_source", None)
     fine_profile, fine_weight = average(fine)
     hourly, hourly_weight = average(coarse)
-    combined, _ = average(distinct)
+    if fine_profile:
+        combined, _ = average(distinct)
+    else:
+        combined = representative_hourly_profile(coarse)
+        settings["hourly_profile_policy"] = HOURLY_PROFILE_POLICY
     if hourly:
         settings.update(
             hourly_profile=asdict(hourly),
@@ -183,7 +226,7 @@ def refine(settings, records):
     ):
         settings["profile"] = asdict(combined)
     settings["profile_sources"] = {
-        "hourly_cycles": len(distinct) - len(fine),
+        "hourly_cycles": combined.samples - len(fine),
         "fine_cycles": len(fine),
     }
     settings["profile_basis"] = (

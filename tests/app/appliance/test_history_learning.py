@@ -14,7 +14,11 @@ from open_energy_planner.appliances.cycles.learning import (
     hourly_profile,
     retained_weight,
 )
-from open_energy_planner.appliances.cycles.model import CycleProfile, average_profiles
+from open_energy_planner.appliances.cycles.model import (
+    CycleProfile,
+    average_profiles,
+    restore_profile,
+)
 from open_energy_planner.appliances.cycles.service import ApplianceService
 from tests.app.appliance.support import ENTITY, NOW, POWER, begin, hourly_rows, readings, upload
 
@@ -245,6 +249,56 @@ def test_legacy_automatic_evidence_reconstructs_weights_before_next_run(service)
     assert row["profile"]["samples"] == 3
     assert 2.9 < row["learning_weight"] < 3
     assert sum(row["profile"]["power_w"]) / 12000 == pytest.approx(0.5)
+
+
+def test_hourly_planning_uses_typical_duration_and_keeps_all_detected_runs(service):
+    """One archived cycle is usable. A solitary long run cannot lengthen the typical plan."""
+    start = NOW - timedelta(days=10)
+    first = [0, 0, 500, 250, 0]
+    later = [0, 0, 250, 250, 250, 0, 0, *([100] * 12), 0]
+    service.learn_history(ENTITY, POWER, hourly_rows(start, first), False, NOW, sample_seconds=3600)
+    initial = service.document()["devices"][0]["profile"]
+    assert restore_profile(initial).duration_seconds == 7200
+    assert initial["samples"] == 1
+
+    service.configure(ENTITY, True)
+    original_task = service.submit(ENTITY, "first-run", NOW, NOW + timedelta(hours=4), NOW)
+    service.learn_history(
+        ENTITY, POWER, hourly_rows(start, first + later), False, NOW, sample_seconds=3600
+    )
+    row = service.document()["devices"][0]
+    # Three durations (2, 3 and 12 hours) make three hours the observed median.
+    estimate = restore_profile(row["profile"])
+    assert estimate.duration_seconds == 10800
+    assert estimate.energy_kwh == pytest.approx(0.75)
+    assert estimate.samples == 2
+    assert row["hourly_profile"]["samples"] == len(row["recent_cycles"]) == 3
+    assert row["task"]["profile"] == original_task["profile"]
+
+    legacy = deepcopy(service.state)
+    settings = legacy["devices"][ENTITY]
+    settings["profile"] = settings["hourly_profile"]
+    settings.pop("hourly_profile_policy")
+    service.commit(legacy)
+    restored = ApplianceService(service.documents, service.consumers)
+    corrected = restored.document()["devices"][0]
+    assert corrected["profile"] == row["profile"]
+    assert corrected["recent_cycles"] == row["recent_cycles"]
+    assert restore_profile(corrected["task"]["profile"]) == restore_profile(
+        original_task["profile"]
+    )
+    assert ApplianceService(service.documents, service.consumers).revision == restored.revision
+
+
+def test_even_hourly_median_retimes_curve_without_losing_energy(service):
+    """Two observed lengths give the lower middle length and preserve both cycles' energy."""
+    start = NOW - timedelta(days=10)
+    rows = hourly_rows(start, [0, 0, 500, 250, 0, 0, 250, 250, 250, 0])
+    service.learn_history(ENTITY, POWER, rows, False, NOW, sample_seconds=3600)
+    estimate = restore_profile(service.document()["devices"][0]["profile"])
+    assert estimate.duration_seconds == 7200
+    assert estimate.energy_kwh == pytest.approx(0.75)
+    assert estimate.samples == 2
 
 
 def test_usable_coverage_counts_missing_core_hours_and_not_overlap():
