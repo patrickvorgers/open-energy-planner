@@ -21,11 +21,15 @@ def test_shared_live_weather_supplies_demand_with_or_without_pv(tmp_path, monkey
     from contextlib import asynccontextmanager
 
     from open_energy_planner.demand.runtime import DemandRuntime
+    from open_energy_planner.solar.calculation.model import version
+    from open_energy_planner.solar.runtime import SolarRuntime
     from tests.app.solar.support import weather
 
     received = []
+    solar_weather = []
     fetches = []
     original = DemandRuntime.set_live_weather
+    original_solar = SolarRuntime.set_weather
     monkeypatch.setattr("open_energy_planner.solar.api.SOLAR_WORKER_POLL_SECONDS", 0.01)
 
     def observe(runtime, rows, reference, expiry):
@@ -34,16 +38,23 @@ def test_shared_live_weather_supplies_demand_with_or_without_pv(tmp_path, monkey
         if reference:
             received.append((rows, reference))
 
+    def observe_solar(runtime, location, rows, **kwargs):
+        """Observe the solar consumer accepting the same source used in its forecast worker."""
+        original_solar(runtime, location, rows, **kwargs)
+        if rows and runtime.configuration and runtime.configuration.sources:
+            solar_weather.append(runtime.weather)
+
     class Source:
         async def read(self, location, now):
             fetches.append(location)
-            return weather(now, days=5)
+            return weather(now, days=3)
 
     @asynccontextmanager
     async def source_factory():
         yield Source()
 
     monkeypatch.setattr(DemandRuntime, "set_live_weather", observe)
+    monkeypatch.setattr(SolarRuntime, "set_weather", observe_solar)
 
     async def scenario():
         async with running_forecasts(tmp_path, weather_factory=source_factory) as (session, url):
@@ -65,14 +76,13 @@ def test_shared_live_weather_supplies_demand_with_or_without_pv(tmp_path, monkey
             assert archived
             assert len(fetches) == 1
             if with_solar:
-                async with asyncio.timeout(20):
-                    while True:
-                        async with session.get(url + "/v1/solar") as response:
-                            document = await response.json()
-                            if document["forecast"]:
-                                break
-                        await asyncio.sleep(0.025)
-                assert document["forecast"]["weather_version"] == reference
+                assert len(solar_weather) == 1
+                assert reference == version([vars(row) for row in solar_weather[0]])
+                assert [(row.start, row.celsius) for row in temperatures] == [
+                    (row.start, row.celsius) for row in solar_weather[0]
+                ]
+            else:
+                assert not solar_weather
 
     asyncio.run(scenario())
 
