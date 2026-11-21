@@ -1004,7 +1004,7 @@ class ApplianceService:
                 instant(task["ready_at"]),
                 instant(task["deadline"]),
                 observed.profile if detected_additional else profile(task["profile"]),
-                observed.fixed_start if detected_additional else fixed,
+                fixed,
             )
             starts = candidates(work, problem.intervals)
             if starts:

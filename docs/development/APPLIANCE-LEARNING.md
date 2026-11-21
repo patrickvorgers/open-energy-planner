@@ -73,8 +73,9 @@ history remains a waiting state. No extra detection configuration is requested.
 
 The appliance can learn one additional profile from distinct, complete
 five-minute statistical or continuously followed Recorder cycles. Hourly and
-energy-only completion samples still inform the ordinary profile. They lack
-the measured power needed to recognize a program. A split requires at least
+energy-only completion samples inform the unsplit aggregate. Once a pair is
+learned, only the eligible fine cycles contribute to the selected default and
+additional profiles. A split requires at least
 three cycles per group across multiple days, a duration separation of at
 least 30 minutes and 25 percent, and median energy differing by at least
 20 percent. The newest cycle in each group is held out from the first fit and
@@ -90,7 +91,8 @@ five-minute means from the measured start, using at least 15 minutes and at
 most one hour. A match needs mean absolute error of at most a quarter of the
 reference power and a margin of at least 25 W and a quarter of that reference.
 Unclear evidence keeps the default. A confident match updates the fixed
-remaining-work forecast with the measured start retained. The learned model
+remaining-work forecast at the confirmed start time, or the measured start
+when no confirmed start is available. The learned model
 and accepted task are not rewritten by recognition. Explicit selections skip
 recognition and remain frozen for the task. Neither profile supplies execution
 authority or hardware feedback.

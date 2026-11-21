@@ -100,6 +100,66 @@ def test_manual_start_preserves_explicit_profile_on_accepted_readiness(service):
     )
 
 
+def test_recognized_profile_keeps_confirmed_start_in_planning(service):
+    """A statistical bucket beginning early cannot shift phases away from an authenticated start."""
+    from open_energy_planner.installation.model import InstallationProblem
+    from open_energy_planner.optimization.domain import Interval
+    from open_energy_planner.planning import InputSnapshot
+
+    learn_synthetic_programs(service)
+    service.configure_additional_profile(ENTITY, True, service.revision)
+    service.configure(ENTITY, True)
+    accepted = service.submit(ENTITY, "confirmed-start", NOW, NOW + timedelta(hours=6), NOW)
+    plan = {
+        "plan_id": "program-plan",
+        "valid_until": (NOW + timedelta(minutes=20)).isoformat(),
+        "appliance_schedule": [{"task_id": accepted["id"], "start": NOW.isoformat()}],
+    }
+    service.accept_plan(plan)
+    service.tick(NOW, True, plan)
+    attempt = service.state["tasks"][ENTITY]["attempt"]
+    actual_start = NOW + timedelta(seconds=20)
+    service.feedback(ENTITY, accepted["id"], attempt["id"], "started", actual_start, actual_start)
+
+    now = NOW + timedelta(minutes=30)
+    measured = intervals(NOW - timedelta(hours=1), [0] * 12 + [350] * 3 + [900] * 3)
+    service.learn_history(ENTITY, POWER, measured, False, now)
+    assert service.observed(ENTITY)["program"] == "additional"
+
+    steps = [
+        {"start": (now + timedelta(hours=index)).isoformat(), "duration_h": 1, "kwh": 0.3}
+        for index in range(5)
+    ]
+    device_forecast = {
+        "issued_at": now.isoformat(),
+        "steps": [{**step, "kwh": 0.1} for step in steps],
+    }
+    service.consumers.result = {
+        "devices": [
+            {
+                "entity_id": ENTITY,
+                "forecast": device_forecast,
+                "baseline_forecast": device_forecast,
+            }
+        ],
+        "residual_baseline": {"issued_at": now.isoformat(), "steps": steps},
+    }
+    problem = InstallationProblem(
+        tuple(Interval(now + timedelta(hours=index), 1, 0.2, 0, 0.4) for index in range(5)),
+        (),
+        (),
+        (),
+        3000,
+        3000,
+    )
+    snapshot = InputSnapshot(
+        "snapshot", "configuration", now, "measurement", "forecast", "prices", problem
+    )
+    [prepared] = service.prepare(snapshot, SimpleNamespace(), now).problem.appliances
+    assert prepared.fixed_start == actual_start
+    assert prepared.profile.duration_seconds == 180 * 60
+
+
 def test_hand_start_uses_only_profiles_available_at_readiness(service):
     """An unselected hand-start keeps its acknowledged default when the learner changes before start."""
     service.configure_additional_profile(ENTITY, True, service.revision)
