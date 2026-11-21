@@ -47,7 +47,7 @@ function displayName(row, vehicle) {
 function needsVehicleBasics() {
     const row = selected();
     if (!editing || !row || !draft.vehicles.includes(row) || current.vehicles.some(car => car.id === row.id)) return false;
-    const basics = find("vehicles").querySelector("section:not([hidden]) details[data-ev-section=basics]");
+    const basics = find("vehicles").querySelector(":scope > section:not([hidden]) > details[data-ev-section=basics]");
     return [...(basics?.querySelectorAll("[required]") ?? [])].some(field => !field.value || !field.validity.valid);
 }
 /** Keep the same vehicle sections and compact summaries in view and edit mode. */

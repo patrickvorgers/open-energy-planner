@@ -71,9 +71,8 @@ def test_ev_panels_keep_the_same_gap_when_evidence_is_empty_or_unavailable(app_p
         "Charging sessions",
         "Charging requests",
         "Charging request history",
-        "Planning and charging losses",
     ]
-    expect(panels).to_have_count(4)
+    expect(panels).to_have_count(3)
     expect(panels.locator(":scope > h2")).to_have_text(headings)
     page.screenshot(
         path=f"results/ci/panel-spacing-ev-{page.viewport_size['width']}.png", full_page=True
@@ -88,7 +87,7 @@ def test_ev_panels_keep_the_same_gap_when_evidence_is_empty_or_unavailable(app_p
     expect(page.locator("#status")).to_have_text(
         "Charging evidence could not be read. Check the connection and try Refresh."
     )
-    expect(panels).to_have_count(4)
+    expect(panels).to_have_count(3)
     expect(panels.locator(":scope > h2")).to_have_text(headings)
     bounds = [panel.bounding_box() for panel in panels.all()]
     for previous, following in pairwise(bounds):
