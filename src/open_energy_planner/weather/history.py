@@ -135,7 +135,9 @@ class OpenMeteoTemperatureSource:
         refreshed = await self._refresh(
             recent, RECENT_URL, params, first_recent, now.date(), now, recent_days
         )
-        return self.past + tuple(row for day in sorted(refreshed) for row in refreshed[day])
+        return self.past + tuple(
+            row for day in sorted(refreshed) for row in refreshed[day] if row.start + HOUR <= now
+        )
 
     async def _archive_days(self, params, first, last, now):
         """Load cached days and request contiguous missing or incomplete archive dates together."""

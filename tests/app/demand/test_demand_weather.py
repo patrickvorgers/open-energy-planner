@@ -274,7 +274,7 @@ def test_temperature_archive_failure_keeps_last_complete_history_and_bounds_part
 
 
 def test_cached_training_temperatures_survive_restart_and_refresh_in_place(weather_documents):
-    """Restart, a missing hour and a later correction preserve one cache row per date."""
+    """Restart, a clock correction and a provider gap preserve accepted daily observations."""
 
     async def scenario():
         """Reload real persisted observations through a separate provider and document reader."""
@@ -288,6 +288,7 @@ def test_cached_training_temperatures_survive_restart_and_refresh_in_place(weath
         source = OpenMeteoTemperatureSource(second, reopened)
         assert await source.read(location, now) == original
         assert [url.rsplit("/", 1)[-1] for url, _ in second.calls] == ["forecast"]
+        assert await source.read(location, now - timedelta(minutes=1)) == original[:-1]
         second.recent_missing = int(original[-1].start.timestamp())
         assert await source.read(location, now + timedelta(minutes=15)) == original
         second.recent_missing = None
