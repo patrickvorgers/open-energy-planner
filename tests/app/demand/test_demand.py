@@ -16,13 +16,13 @@ from open_energy_planner.demand.calculation.model import (
     DemandHour,
     EnergyTerm,
     ExcludedLoad,
-    TemperatureHour,
 )
 from open_energy_planner.demand.evaluation import compare
 from open_energy_planner.demand.reconstruction import DemandReconstructor, ReconstructionResult
 from open_energy_planner.demand.runtime import DemandRuntime
 from open_energy_planner.demand.storage import DemandStore
 from open_energy_planner.history.model import EnergyHistory, EnergyHour
+from open_energy_planner.weather.model import TemperatureHour
 from tests.database.support.archive import corrupt_document, make_store
 
 START = datetime(2026, 1, 1, tzinfo=UTC)

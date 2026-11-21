@@ -15,7 +15,7 @@ from open_energy_planner.solar.calculation.model import (
     horizon,
     version,
 )
-from open_energy_planner.solar.forecast_weather import (
+from open_energy_planner.weather.run import (
     FORECAST_RUN_RESPONSE_HOURS,
     MAX_LIVE_RUN_AGE_HOURS,
     ForecastWeatherRun,
@@ -61,6 +61,7 @@ class SolarRuntime:
     def __init__(self, store):
         """Restore settings while requiring new weather/location before publishing live forecasts."""
         self.store = store
+        self.weather_archive = store
         self.training = DailySolarTraining(store)
         self.configuration_lock = Lock()
         self.configuration, self.issue = store.current, store.issue
@@ -756,7 +757,7 @@ class SolarRuntime:
             tuple(weather_item for weather_item in weather if weather_item.received_at <= now),
         )
         histories = dict(histories)
-        self.store.archive_series(
+        self.weather_archive.archive_series(
             "weather", forecast.weather_version, [document(row) for row in weather]
         )
         for history in histories.values():

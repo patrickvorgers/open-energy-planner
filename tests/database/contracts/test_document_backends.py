@@ -1410,7 +1410,7 @@ def test_shared_solar_writers_preserve_one_immutable_content_and_release_transac
         list(workers.map(write_same_content, range(8)))
     restored = SolarStore(SqlDocuments(engine, "solar"))
     assert restored.documents.read("concurrent-proof-same.json") == payload
-    with pytest.raises(ValueError, match="Solar evidence archive mismatch"):
+    with pytest.raises(ValueError, match="Evidence archive mismatch"):
         store.archive("concurrent-proof", "same", {"synthetic": False})
     store.archive("other-source", "after-conflict", {"retained": True})
     assert restored.documents.read("other-source-after-conflict.json") == {"retained": True}
@@ -1419,9 +1419,9 @@ def test_shared_solar_writers_preserve_one_immutable_content_and_release_transac
 def test_historical_forecast_assessment_and_original_run_cache_survive_restart(archive):
     """All backends retain both original forecast receipts and derived admission without new downloads."""
     from open_energy_planner.solar.backtest import HistoricalForecastAssessment
-    from open_energy_planner.solar.storage.forecast_weather import ForecastWeatherCache
-    from open_energy_planner.solar.weather import forecast_weather_query
     from open_energy_planner.solar.wire import document
+    from open_energy_planner.weather.provider import forecast_weather_query
+    from open_energy_planner.weather.run_cache import ForecastWeatherCache
     from tests.database.support.solar import forecast_evidence
 
     engine, _root = archive
@@ -1489,7 +1489,7 @@ def test_existing_solar_series_rejects_conflicting_or_incomplete_evidence(archiv
         rows[1] = {**rows[1], "total_kwh": 99.0}
     before = solar_documents_snapshot(engine)
     restored = SolarStore(SqlDocuments(engine, "solar"))
-    with pytest.raises(ValueError, match="Solar evidence archive mismatch"):
+    with pytest.raises(ValueError, match="Evidence archive mismatch"):
         restored.archive_series("history", "synthetic-series", rows, entity="sensor.synthetic")
     assert solar_documents_snapshot(engine) == before
 

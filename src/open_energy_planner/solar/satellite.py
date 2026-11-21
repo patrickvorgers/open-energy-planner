@@ -7,12 +7,14 @@ from datetime import UTC, datetime, timedelta
 
 from aiohttp import ClientSession, ClientTimeout
 
-from .calculation.model import MAX_IRRADIANCE_W_M2, number
-from .weather import (
+from open_energy_planner.weather.model import MAX_IRRADIANCE_W_M2
+from open_energy_planner.weather.provider import (
     MAX_WEATHER_RESPONSE_BYTES,
     WEATHER_READ_CHUNK_BYTES,
     WEATHER_TIMEOUT_SECONDS,
 )
+
+from .calculation.model import number
 
 SATELLITE_MODEL = "dwd_sis_europe_africa_v4"
 SATELLITE_LABEL = "Open-Meteo: DWD / EUMETSAT MTG"

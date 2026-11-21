@@ -17,7 +17,7 @@ SATELLITE_REFRESH_MINUTES = 10
 def original_radiation(documents, forecast, start, end):
     """Resolve only hours received before issuance from the exact original weather manifest."""
     reference = forecast.get("weather_version")
-    if not reference or reference == "none":
+    if documents is None or not reference or reference == "none":
         return {}
     manifest = documents.read("weather-" + reference + ".json")
     issued = datetime.fromisoformat(forecast["issued_at"])

@@ -36,7 +36,7 @@ def test_shared_live_weather_supplies_demand_with_or_without_pv(tmp_path, monkey
         """Use the same runtime storage path while observing the admitted immutable reference."""
         original(runtime, rows, reference, expiry)
         if reference:
-            received.append((rows, reference))
+            received.append((rows, reference, expiry))
 
     def observe_solar(runtime, location, rows, **kwargs):
         """Observe the solar consumer accepting the same source used in its forecast worker."""
@@ -70,8 +70,9 @@ def test_shared_live_weather_supplies_demand_with_or_without_pv(tmp_path, monkey
             async with asyncio.timeout(20):
                 while not received:
                     await asyncio.sleep(0.025)
-            temperatures, reference = received[0]
-            archived = read_document(tmp_path, "solar", "weather-" + reference + ".json")
+            temperatures, reference, expiry = received[0]
+            assert expiry == temperatures[-1].known_at + timedelta(hours=2)
+            archived = read_document(tmp_path, "weather", "weather-" + reference + ".json")
             assert temperatures[0].celsius == 20
             assert archived
             assert len(fetches) == 1

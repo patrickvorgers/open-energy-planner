@@ -480,8 +480,8 @@ def test_restarted_open_meteo_reader_admits_partial_cohorts_without_retraining(
     """A live-only restart and four-run cache batches retain saved model generations without bulk restoration."""
     import asyncio
 
-    from open_energy_planner.solar.storage.forecast_weather import ForecastWeatherCache
-    from open_energy_planner.solar.weather import OpenMeteoSolarSource, forecast_weather_query
+    from open_energy_planner.weather.provider import OpenMeteoWeatherSource, forecast_weather_query
+    from open_energy_planner.weather.run_cache import ForecastWeatherCache
     from tests.app.solar.test_forecast_weather import LatestRunSession
 
     runtime, now = runtime_case(tmp_path)
@@ -502,7 +502,7 @@ def test_restarted_open_meteo_reader_admits_partial_cohorts_without_retraining(
             "last_run_availability_time": (initialized + timedelta(hours=1)).timestamp(),
         }
     )
-    reader = OpenMeteoSolarSource(
+    reader = OpenMeteoWeatherSource(
         session, runtime.store, history_start=lambda: now - timedelta(days=56)
     )
     assert reader.forecast_runs == ()

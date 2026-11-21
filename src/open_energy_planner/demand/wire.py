@@ -70,6 +70,7 @@ def forecast_document(forecast, *, now=None):
         return None
     body = asdict(forecast)
     del body["checked_at"]
+    del body["weather_valid_until"]
     steps = forecast.steps if now is None else forecast_window(forecast.steps, now)
     return {
         **body,

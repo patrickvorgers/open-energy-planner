@@ -29,7 +29,6 @@ from open_energy_planner.solar.calculation.model import (
     number,
     version,
 )
-from open_energy_planner.solar.forecast_weather import FORECAST_WEATHER_POLICY
 from open_energy_planner.solar.learning import (
     ac_comparison_issue,
     learning_interval,
@@ -38,6 +37,7 @@ from open_energy_planner.solar.learning import (
 )
 from open_energy_planner.solar.model_policy import MIN_ABSOLUTE_GAIN_KWH, MIN_RELATIVE_GAIN
 from open_energy_planner.solar.wire import document
+from open_energy_planner.weather.run import FORECAST_WEATHER_POLICY
 
 HOUR = timedelta(hours=1)
 DAY = timedelta(days=1)

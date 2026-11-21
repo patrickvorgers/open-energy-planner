@@ -114,6 +114,7 @@ def evidence(
     window=None,
     names=None,
     solar_feedback=None,
+    weather_documents=None,
 ):
     """Resolve frozen forecasts and HA evidence without rerunning models or inferring historic knowledge.
 
@@ -122,6 +123,7 @@ def evidence(
         archive: Independent cumulative hourly measurement archive in kWh.
         demand_documents: Original demand forecast and configuration documents.
         solar_documents: Original PV forecast and configuration documents.
+        weather_documents: Original normalized weather evidence for irradiance.
         now: Aware evaluation time, reduced by the Recorder completion delay.
         window: Optional aware UTC (start, end) datetimes replacing interval-derived
             bounds and MAX_VIEW_HOURS. Callers must bound this window. Whole UTC
@@ -396,7 +398,7 @@ def evidence(
                 row["scope"] = "solar"
                 row["weather_location"] = forecast.get("location")
                 try:
-                    radiation = original_radiation(solar_documents, forecast, start, end)
+                    radiation = original_radiation(weather_documents, forecast, start, end)
                     radiation_issue = None
                 except (FileNotFoundError, OSError, KeyError, TypeError, ValueError):
                     radiation, radiation_issue = {}, "Original irradiance forecast unavailable"

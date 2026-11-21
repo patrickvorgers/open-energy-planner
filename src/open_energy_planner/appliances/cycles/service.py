@@ -1171,13 +1171,16 @@ class ApplianceService:
                 (step.start, step.start + timedelta(hours=step.duration_h))
                 for step in problem.intervals
             )
-            values = integrals(energy, windows)
-            if getattr(self.consumers, "checked_at", None) is None:
-                return energy
-            return tuple(
-                LoadStep(step.start, step.duration_h, value)
-                for step, value in zip(problem.intervals, values, strict=True)
-            )
+            integrals(energy, windows)
+            start, end = windows[0][0], windows[-1][1]
+            clipped = []
+            for step in energy:
+                left = max(start, step.start)
+                right = min(end, step.start + timedelta(hours=step.duration_h))
+                if left < right:
+                    duration = (right - left) / timedelta(hours=1)
+                    clipped.append(LoadStep(left, duration, step.kwh * duration / step.duration_h))
+            return tuple(clipped)
 
         try:
             # Keep the active component models and their original measurement

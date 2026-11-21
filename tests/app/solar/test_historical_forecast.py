@@ -7,11 +7,12 @@ import pytest
 
 from open_energy_planner.history.model import EnergyHistory, EnergyHour
 from open_energy_planner.solar.backtest import HistoricalForecastAssessment, scheduled_runs
-from open_energy_planner.solar.calculation.model import SolarWeatherHour, version
-from open_energy_planner.solar.forecast_weather import ForecastWeatherRun
+from open_energy_planner.solar.calculation.model import version
 from open_energy_planner.solar.runtime import SolarRuntime
 from open_energy_planner.solar.storage import SolarStore
 from open_energy_planner.solar.wire import document
+from open_energy_planner.weather.model import WeatherHour
+from open_energy_planner.weather.run import ForecastWeatherRun
 from tests.app.solar.support import SITE, plant
 from tests.database.support.archive import make_store
 
@@ -28,7 +29,7 @@ def original_forecasts(now=NOW, days=100):
         for index in range(95):
             instant = initialized + timedelta(hours=index)
             lit = 8 <= instant.hour < 16
-            hours.append(SolarWeatherHour(instant, 600 * lit, 500 * lit, 100 * lit, 20, 2, now))
+            hours.append(WeatherHour(instant, 600 * lit, 500 * lit, 100 * lit, 20, 2, now))
         runs.append(
             ForecastWeatherRun(
                 initialized_at=initialized,
@@ -412,7 +413,7 @@ def test_historical_projection_requires_coverage_but_keeps_explicit_zeros(missin
             }
 
     hours = tuple(
-        SolarWeatherHour(NOW + timedelta(hours=index), 0, 0, 0, 10, 1, NOW) for index in range(49)
+        WeatherHour(NOW + timedelta(hours=index), 0, 0, 0, 10, 1, NOW) for index in range(49)
     )
     supplied = () if missing == "all" else hours[:17] + hours[18:] if missing == "one" else hours
     if missing != "none":

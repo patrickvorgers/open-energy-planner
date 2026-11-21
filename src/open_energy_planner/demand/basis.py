@@ -15,6 +15,7 @@ def forecast_usable(configuration, forecast, now):
         and forecast.freshness_at
         <= now
         < forecast.freshness_at + timedelta(minutes=FORECAST_MAX_AGE_MINUTES)
+        and (forecast.weather_valid_until is None or now < forecast.weather_valid_until)
     )
 
 

@@ -16,7 +16,6 @@ from open_energy_planner.solar.basis import forecast_usable
 from open_energy_planner.solar.calculation.model import (
     SolarConfiguration,
     SolarEnergy,
-    SolarWeatherHour,
     horizon,
     version,
 )
@@ -25,6 +24,7 @@ from open_energy_planner.solar.learning import fit
 from open_energy_planner.solar.runtime import SolarRuntime
 from open_energy_planner.solar.storage import SolarStore
 from open_energy_planner.solar.wire import document
+from open_energy_planner.weather.model import WeatherHour
 from tests.app.forecast.support.basis import forecast_basis
 from tests.app.solar.support import SITE, START, plant, weather
 from tests.database.support.archive import (
@@ -38,7 +38,7 @@ from tests.database.support.archive import (
 def test_horizontal_noon_power_matches_independent_pvwatts_temperature_arithmetic():
     """At 1000 W/m2 and 25 C ambient, 1 kWp yields 1*(1-.004*(1000/(25+6.84))) kW before 96% conversion."""
     noon = START + timedelta(hours=12)
-    row = SolarWeatherHour(noon, 1000, 0, 1000, 25, 1, START)
+    row = WeatherHour(noon, 1000, 0, 1000, 25, 1, START)
     result = PVWattsPredictor().hourly(plant(), SITE, (row,))[0]
     expected = 1 * (1 - 0.004 * (1000 / (25 + 6.84)))
     assert result.dc_kwh == pytest.approx(expected)

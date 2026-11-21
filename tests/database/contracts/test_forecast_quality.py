@@ -1479,6 +1479,7 @@ def test_original_radiation_uses_frozen_manifest_not_newer_weather(archive):
     """A changed weather block cannot replace the original values or admit evidence received after issuance."""
     from open_energy_planner.forecast_quality.radiation import original_radiation
     from open_energy_planner.solar.storage import SolarStore
+    from open_energy_planner.weather.archive import move_weather_documents
 
     store = SolarStore(SqlDocuments(archive.documents.engine, "solar"))
     rows = [
@@ -1497,7 +1498,20 @@ def test_original_radiation_uses_frozen_manifest_not_newer_weather(archive):
     assert original_radiation(store.documents, forecast, START, START + timedelta(hours=2)) == {
         START: 100
     }
-    restored = SqlDocuments(archive.documents.engine, "solar")
+    restored = SqlDocuments(archive.documents.engine, "weather")
+    before = store.documents.read("weather-original.json")
+    store.archive_series("history", "meter", rows, entity="sensor.pv")
+    restored.write("weather-original.json", {})
+    with pytest.raises(ValueError, match="conflicts with destination"):
+        move_weather_documents(store.documents, restored)
+    assert store.documents.read("weather-original.json") == before
+    assert not restored.exists("weather-new.json")
+    restored.delete("weather-original.json")
+    move_weather_documents(store.documents, restored)
+    move_weather_documents(store.documents, restored)
+    assert restored.read("weather-original.json") == before
+    assert not store.documents.exists("weather-original.json")
+    assert store.documents.exists("history-meter.json")
     assert original_radiation(restored, forecast, START, START + timedelta(hours=2)) == {START: 100}
 
 

@@ -225,7 +225,15 @@ class DemandRuntime:
             return None
         if self.reuse_forecast(key, now):
             self.last_key = key
-            self.forecast = replace(self.forecast, checked_at=now)
+            self.forecast = replace(
+                self.forecast,
+                checked_at=now,
+                weather_valid_until=(
+                    self.live_weather_until
+                    if self.forecast.weather_version == self.live_weather_ref(now)
+                    else self.forecast.weather_valid_until
+                ),
+            )
             self.consumers.checked_at = now
             return None
         if key == self.failed_key and self.retry_after and now < self.retry_after:
@@ -240,6 +248,7 @@ class DemandRuntime:
             self.consumers.inputs(),
             self.candidate_features,
             self.live_weather_ref(now),
+            self.live_weather_until,
         )
 
     def reuse_forecast(self, key, now):
@@ -346,6 +355,7 @@ class DemandRuntime:
             consumers,
             previous_features,
             weather_reference,
+            weather_until,
         ) = job
         grid = live_forecast_grid(now, temperatures) if weather_reference else None
         projection = {"grid": grid, "weather_version": weather_reference}
@@ -461,6 +471,8 @@ class DemandRuntime:
             forecast = predict(
                 configuration, samples, now, selected, temperatures=known_weather, **projection
             )
+        if weather_reference and forecast.weather_version == weather_reference:
+            forecast = replace(forecast, weather_valid_until=weather_until)
         self.store.archive(baseline_forecast, baseline)
         if not consumers[1]:
             self.store.archive(forecast, selected)

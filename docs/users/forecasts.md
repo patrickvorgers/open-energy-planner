@@ -5,7 +5,7 @@ OEP needs an expectation of household use, solar production and prices before it
 ## Household consumption
 
 Models normally train once per Home Assistant local day when new usable history
-exists. Household and solar forecasts use the same live weather run. Planning
+exists. OEP uses one shared live weather forecast for household consumption and solar production. Planning
 reuses the household forecast while its inputs and coverage remain valid. Restart
 reuses the stored model. Changed source settings require a matching new model.
 Missing or failed new training retains the last usable matching model. An

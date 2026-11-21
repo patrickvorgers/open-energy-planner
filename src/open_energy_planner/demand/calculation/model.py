@@ -21,8 +21,6 @@ from open_energy_planner.prices.model import aware
 MAX_ANNUAL_CONSUMPTION_KWH = 1000000.0
 MAX_ENTITY_ID_LENGTH = 128
 MAX_DEVICE_ID_LENGTH = 64
-MAX_TEMPERATURE_CELSIUS = 65
-MIN_TEMPERATURE_MAGNITUDE_CELSIUS = 90
 DEFAULT_READING_DURATION_HOURS = 0.25
 
 
@@ -159,28 +157,6 @@ class DemandHour:
 
 
 @dataclass(frozen=True)
-class TemperatureHour:
-    """Hourly Celsius observation or forecast with explicit knowledge time."""
-
-    start: datetime
-    celsius: float
-    known_at: datetime
-
-    def __post_init__(self):
-        """Distinguish weather realization from a forecast available at a historical decision."""
-        object.__setattr__(self, "start", aware(self.start))
-        object.__setattr__(self, "known_at", aware(self.known_at))
-        if self.start.minute or self.start.second or self.start.microsecond:
-            raise ValueError("Weather requires UTC hours")
-        if (
-            type(self.celsius) not in (int, float)
-            or not isfinite(self.celsius)
-            or not -MIN_TEMPERATURE_MAGNITUDE_CELSIUS <= self.celsius <= MAX_TEMPERATURE_CELSIUS
-        ):
-            raise ValueError("Invalid temperature")
-
-
-@dataclass(frozen=True)
 class ForecastStep:
     """Expected residual energy on one planning interval. Finer values are estimates, not measurements."""
 
@@ -214,6 +190,7 @@ class DemandForecast:
     scope: str = "residual_household"
     quality: str = "estimated"
     checked_at: datetime | None = field(default=None, compare=False)
+    weather_valid_until: datetime | None = field(default=None, compare=False)
 
     @property
     def freshness_at(self):
@@ -225,6 +202,7 @@ class DemandForecast:
         """Identify immutable predictions separately from their live validity checks."""
         body = asdict(self)
         del body["checked_at"]
+        del body["weather_valid_until"]
         return digest(body)
 
 

@@ -787,9 +787,8 @@ def test_migration_rebuilds_target_and_preserves_exact_source(route, monkeypatch
         migrate_archive(source, target)
     assert obsolete.get_plan("target-history-to-overwrite") is not None
     counts = migrate_archive(source, target, overwrite_target=True)
-    assert (
-        counts["oep_documents"] == 22
-    )  # Nine namespace pairs plus two model captures, one evaluation and their index.
+    # A settings/archive pair per namespace plus two model captures, an evaluation and their index.
+    assert counts["oep_documents"] == 2 * len(DOCUMENT_NAMESPACES) + 4
     for namespace in DOCUMENT_NAMESPACES:
         documents = SqlDocuments(target, namespace)
         assert documents.read("current.json") == "retained-version.json"
@@ -1235,10 +1234,10 @@ def test_nonlinear_solar_archive_migrates_and_replays_without_source_database(ro
     from open_energy_planner.solar.boosting import SolarBoostedModel
     from open_energy_planner.solar.calculation.model import version
     from open_energy_planner.solar.storage import SolarStore
-    from open_energy_planner.solar.storage.forecast_weather import ForecastWeatherCache
     from open_energy_planner.solar.trend import YieldTrend
-    from open_energy_planner.solar.weather import forecast_weather_query
     from open_energy_planner.solar.wire import document
+    from open_energy_planner.weather.provider import forecast_weather_query
+    from open_energy_planner.weather.run_cache import ForecastWeatherCache
     from tests.app.solar.test_boosting import fit_case
     from tests.database.support.solar import forecast_evidence
 

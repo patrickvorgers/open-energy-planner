@@ -6,8 +6,8 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from open_energy_planner.demand.weather import OpenMeteoTemperatureSource
 from open_energy_planner.installation.location import SiteLocation
+from open_energy_planner.weather.history import OpenMeteoTemperatureSource
 from tests.app.demand.test_demand import START
 
 
@@ -109,12 +109,19 @@ def test_weather_adapter_uses_ha_location_units_receipt_time_and_daily_archive_c
         assert len(session.calls) == 4
         assert session.calls[0][1]["params"]["latitude"] == 52
         assert session.calls[0][1]["params"]["longitude"] == 6
-        assert (
-            session.calls[2][1]["params"]["end_date"]
-            == (START.date() - timedelta(days=1)).isoformat()
-        )
+        assert session.calls[2][1]["params"]["end_date"] == START.date().isoformat()
 
     asyncio.run(scenario())
+
+
+def test_historical_temperature_includes_completed_hours_on_the_present_day():
+    """A completed midday load sample has weather while the ongoing hour stays excluded."""
+    now = START.replace(hour=12, minute=15)
+    session = AnnualSession()
+    source = OpenMeteoTemperatureSource(session)
+    rows = asyncio.run(source.read(SiteLocation(52, 6, "Europe/Amsterdam"), now))
+    today = [row.start.hour for row in rows if row.start.date() == now.date()]
+    assert today == list(range(12))
 
 
 @pytest.mark.parametrize("options", [{"unit": "°F"}, {"oversized": True}])

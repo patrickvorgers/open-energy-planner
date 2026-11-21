@@ -43,11 +43,12 @@ samples. Household lookups share the same baseline/Ridge policy.
 
 ## Live weather and forecast reuse
 
-Solar and household demand receive the same retained Open-Meteo ECMWF IFS run.
-The live refresh also operates for installations without PV. Demand reads the
-hourly temperature projection and records the same weather evidence reference
-when a temperature-based model uses it. The historical temperature adapter
-supplies completed hours for training and retains their original knowledge time.
+The independent weather service supplies the same retained Open-Meteo ECMWF
+IFS run to solar and demand, including installations without PV. Demand reads
+its hourly temperatures and records the shared weather reference when a model
+uses them. The service supplies completed historical temperature hours for
+training with their original knowledge times. Solar and demand own their
+models and their predictions.
 
 For a complete live run, demand stores predictions at native quarter resolution
 through its contiguous usable coverage. Planning and the current demand API
@@ -55,7 +56,8 @@ project that original issue onto the rolling planning grid. An unchanged input
 set can revalidate the installed issue in memory without changing its issue time
 or writing another forecast archive. A changed input, a new local training day,
 expired weather or insufficient window coverage triggers the existing worker.
-Device forecasts have the same live admission check and planning projection.
+Device forecasts have the same live admission check. Appliance planning clips
+them to its coverage while preserving their native interval boundaries.
 | Planning | Existing HiGHS/highspy and independent plan validation. Forecasts do not control physical devices |
 | Verification | pytest, actual HA Recorder/API tests and app browser tests, Ruff and the existing complete Linux/Playwright CI |
 

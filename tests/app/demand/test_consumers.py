@@ -13,9 +13,9 @@ from open_energy_planner.appliances.forecasting import (
     parse_selection,
 )
 from open_energy_planner.appliances.weather_model import WeatherDemandModel
-from open_energy_planner.demand.calculation.model import TemperatureHour
 from open_energy_planner.demand.runtime import DemandRuntime
 from open_energy_planner.demand.storage import DemandStore
+from open_energy_planner.weather.model import TemperatureHour
 from tests.app.demand.test_demand import START, channel, config
 from tests.database.support.archive import make_store
 

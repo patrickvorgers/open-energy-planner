@@ -7,7 +7,8 @@ from itertools import pairwise
 from aiohttp import ClientSession, ClientTimeout
 
 from open_energy_planner.core.units import BYTES_PER_KIB
-from open_energy_planner.demand.calculation.model import TemperatureHour
+
+from .model import TemperatureHour
 
 WEATHER_READ_CHUNK_BYTES = 16384
 MAX_WEATHER_HOURS = 9000
@@ -82,7 +83,7 @@ class OpenMeteoTemperatureSource:
             {
                 **params,
                 "start_date": (now.date() - timedelta(days=RECENT_WEATHER_DAYS)).isoformat(),
-                "end_date": (now.date() - timedelta(days=1)).isoformat(),
+                "end_date": now.date().isoformat(),
             },
             now,
         )
