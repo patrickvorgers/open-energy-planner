@@ -3,8 +3,9 @@
 import hashlib
 import json
 import re
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from datetime import datetime
+from functools import cached_property
 from math import isfinite
 from typing import Protocol
 from zoneinfo import ZoneInfo
@@ -212,11 +213,19 @@ class DemandForecast:
     weather_version: str = "none"
     scope: str = "residual_household"
     quality: str = "estimated"
+    checked_at: datetime | None = field(default=None, compare=False)
 
     @property
+    def freshness_at(self):
+        """Use the latest live admission check without changing the original issue."""
+        return self.checked_at if self.checked_at is not None else self.issued_at
+
+    @cached_property
     def version(self):
-        """Identify the exact prediction used by a plan, including its training and issue time."""
-        return digest(asdict(self))
+        """Identify immutable predictions separately from their live validity checks."""
+        body = asdict(self)
+        del body["checked_at"]
+        return digest(body)
 
 
 def horizon(now):

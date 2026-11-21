@@ -1175,6 +1175,32 @@ def create_app(
         live.requested_strategy = lambda: strategy.current
         live.strategy_issue = lambda: strategy.issue
     register_strategy(app, strategy, live, lock, persist_then_install)
+
+    async def receive_live_weather(rows, service, now):
+        """Admit one retained run before supplying its temperature projection to demand."""
+        from .demand.calculation.model import TemperatureHour
+        from .solar.calculation.model import version
+        from .solar.forecast_weather import MAX_LIVE_RUN_AGE_HOURS
+        from .solar.wire import document
+
+        if not rows:
+            demand.set_live_weather((), None, None)
+            return
+        evidence = [document(row) for row in rows]
+        reference = version(evidence)
+        initialized = datetime.fromisoformat(service["initialized_at"]) if service else now
+        if demand.live_weather_version != reference:
+            cancellation = await complete_write(
+                solar.store.archive_series, "weather", reference, evidence
+            )
+            if cancellation:
+                raise cancellation
+        demand.set_live_weather(
+            tuple(TemperatureHour(row.start, row.celsius, row.received_at) for row in rows),
+            reference,
+            initialized + timedelta(hours=MAX_LIVE_RUN_AGE_HOURS),
+        )
+
     register_solar(
         app,
         solar,
@@ -1184,6 +1210,8 @@ def create_app(
         snapshot,
         solar_weather_factory,
         setup_catalogue,
+        needs_live_weather=lambda: demand.configuration is not None,
+        receive_live_weather=receive_live_weather,
     )
     register_installation(
         app, installation, solar, live, lock, persist_then_install, snapshot, setup_catalogue

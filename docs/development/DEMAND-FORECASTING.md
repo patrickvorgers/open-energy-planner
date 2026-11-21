@@ -39,7 +39,23 @@ samples. Household lookups share the same baseline/Ridge policy.
 | Historical baseline | `weekday-hour-v2`: local weekday/hour means, then same-hour/global residual means |
 | ML candidate | `ridge-v2`: standardized linear regression with L2 regularization, fixed alpha 10, unpenalized intercept |
 | Numerical runtime | Existing pinned NumPy. Augmented least squares using `numpy.linalg.lstsq`, no new dependency or user compilation |
-| Weather | Replaceable aiohttp/Open-Meteo temperature adapter using the existing HA location |
+| Weather | Shared live ECMWF IFS run for the HA location, plus an independent historical temperature input |
+
+## Live weather and forecast reuse
+
+Solar and household demand receive the same retained Open-Meteo ECMWF IFS run.
+The live refresh also operates for installations without PV. Demand reads the
+hourly temperature projection and records the same weather evidence reference
+when a temperature-based model uses it. The historical temperature adapter
+supplies completed hours for training and retains their original knowledge time.
+
+For a complete live run, demand stores predictions at native quarter resolution
+through its contiguous usable coverage. Planning and the current demand API
+project that original issue onto the rolling planning grid. An unchanged input
+set can revalidate the installed issue in memory without changing its issue time
+or writing another forecast archive. A changed input, a new local training day,
+expired weather or insufficient window coverage triggers the existing worker.
+Device forecasts have the same live admission check and planning projection.
 | Planning | Existing HiGHS/highspy and independent plan validation. Forecasts do not control physical devices |
 | Verification | pytest, actual HA Recorder/API tests and app browser tests, Ruff and the existing complete Linux/Playwright CI |
 

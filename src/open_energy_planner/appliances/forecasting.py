@@ -62,6 +62,7 @@ class ConsumerForecasts:
         self.catalogue_known = False
         self.histories, self.failures = {}, {}
         self.result = None
+        self.checked_at = None
         self.issue = None
         try:
             if documents.exists(CONSUMER_SETTINGS_POINTER):
@@ -241,6 +242,8 @@ def build_components(
     *,
     documents=None,
     controlled_days=None,
+    grid=None,
+    weather_version=None,
 ):
     """Build household demand from its remainder and ready disjoint consumers exactly once.
 
@@ -288,6 +291,8 @@ def build_components(
                 now,
                 item["weather_sensitive"],
                 documents=documents,
+                grid=grid,
+                weather_version=weather_version,
                 excluded_dates=("*",)
                 if control_history_unavailable
                 else controlled_days.get(item["entity_id"], ()),
@@ -328,6 +333,8 @@ def build_components(
             True,
             documents=documents,
             boundary=configuration.version,
+            grid=grid,
+            weather_version=weather_version,
             excluded_dates=("*",)
             if control_history_unavailable
             else sorted(
@@ -387,7 +394,14 @@ def build_components(
             COMPOSITE_MODEL_ID,
             total,
             (),
-            remaining.weather_version,
+            next(
+                (
+                    part.weather_version
+                    for part in (remaining, *forecasts)
+                    if part.weather_version == weather_version
+                ),
+                remaining.weather_version,
+            ),
             quality="estimated",
         )
         return forecast, {
@@ -428,6 +442,8 @@ def component(
     include_weather=True,
     boundary=None,
     excluded_dates=(),
+    grid=None,
+    weather_version=None,
 ):
     """Select suitable models by preserved daily accuracy, retaining a measured weekday baseline.
 
@@ -474,14 +490,26 @@ def component(
     if not baseline.residual_profile:
         raise ValueError("At least seven complete days covering every hour are required")
     models = {"baseline": baseline}
-    forecasts = {"baseline": predict(configuration, samples, now, baseline)}
+    forecasts = {
+        "baseline": predict(
+            configuration, samples, now, baseline, grid=grid, weather_version=weather_version
+        )
+    }
     weather = temperatures if weather_sensitive else ()
     for kind in ("ridge", "weather"):
         if kind not in fitted:
             continue
         try:
             candidate = fitted[kind]
-            prediction = predict(configuration, samples, now, candidate, temperatures=weather)
+            prediction = predict(
+                configuration,
+                samples,
+                now,
+                candidate,
+                temperatures=weather,
+                grid=grid,
+                weather_version=weather_version,
+            )
             models[kind], forecasts[kind] = candidate, prediction
         except (ValueError, ImportError, OSError):
             pass

@@ -15,6 +15,68 @@ from tests.app.solar.support import fixture_weather, plant
 from tests.database.support.archive import read_document
 
 
+@pytest.mark.parametrize("with_solar", [False, True])
+def test_shared_live_weather_supplies_demand_with_or_without_pv(tmp_path, monkeypatch, with_solar):
+    """The production composition admits one archived weather source for both forecast domains."""
+    from contextlib import asynccontextmanager
+
+    from open_energy_planner.demand.runtime import DemandRuntime
+    from tests.app.solar.support import weather
+
+    received = []
+    fetches = []
+    original = DemandRuntime.set_live_weather
+    monkeypatch.setattr("open_energy_planner.solar.api.SOLAR_WORKER_POLL_SECONDS", 0.01)
+
+    def observe(runtime, rows, reference, expiry):
+        """Use the same runtime storage path while observing the admitted immutable reference."""
+        original(runtime, rows, reference, expiry)
+        if reference:
+            received.append((rows, reference))
+
+    class Source:
+        async def read(self, location, now):
+            fetches.append(location)
+            return weather(now, days=5)
+
+    @asynccontextmanager
+    async def source_factory():
+        yield Source()
+
+    monkeypatch.setattr(DemandRuntime, "set_live_weather", observe)
+
+    async def scenario():
+        async with running_forecasts(tmp_path, weather_factory=source_factory) as (session, url):
+            solar_definition = configuration_document(plant()) if with_solar else None
+            if solar_definition:
+                solar_definition.pop("version")
+            await configure_forecasts(session, url, solar_definition=solar_definition)
+            demand_definition = definition()
+            if with_solar:
+                demand_definition["terms"].append({"entity_id": "sensor.pv0", "sign": 1})
+            async with session.put(url + "/v1/demand", json=demand_definition) as response:
+                assert response.status == 200, await response.text()
+            async with asyncio.timeout(20):
+                while not received:
+                    await asyncio.sleep(0.025)
+            temperatures, reference = received[0]
+            archived = read_document(tmp_path, "solar", "weather-" + reference + ".json")
+            assert temperatures[0].celsius == 20
+            assert archived
+            assert len(fetches) == 1
+            if with_solar:
+                async with asyncio.timeout(20):
+                    while True:
+                        async with session.get(url + "/v1/solar") as response:
+                            document = await response.json()
+                            if document["forecast"]:
+                                break
+                        await asyncio.sleep(0.025)
+                assert document["forecast"]["weather_version"] == reference
+
+    asyncio.run(scenario())
+
+
 @pytest.mark.parametrize("large", [False, True])
 def test_solar_feedback_http_binds_sensor_configuration_and_checked_cursor(tmp_path, large):
     """A normalized response advances only its current configured sensor. Stale, foreign and unauthorized writes preserve it."""

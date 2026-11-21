@@ -60,7 +60,19 @@ async def worker(runtime, job):
     return result
 
 
-def register(app, runtime, live, lock, persist, snapshot, weather_factory, membership):
+def register(
+    app,
+    runtime,
+    live,
+    lock,
+    persist,
+    snapshot,
+    weather_factory,
+    membership,
+    *,
+    needs_live_weather=None,
+    receive_live_weather=None,
+):
     """Wire authenticated routes and one coalesced model/weather lifecycle into the existing app."""
 
     def oldest_history():
@@ -414,19 +426,24 @@ def register(app, runtime, live, lock, persist, snapshot, weather_factory, membe
                 weather_logger = BackgroundLog(_LOGGER, "Solar weather refresh")
                 events = app.get(EVENTS)
 
+                def live_weather_needed():
+                    return bool(runtime.configuration and runtime.configuration.sources) or (
+                        needs_live_weather is not None and needs_live_weather()
+                    )
+
                 async def update_weather():
-                    """Fetch only for configured PV and the latest HA location, independent of solver cadence."""
+                    """Fetch one live run for configured forecasts at the current HA location."""
                     last_location, due = None, datetime.min.replace(tzinfo=UTC)
                     last_history_start = None
                     while True:
                         now = datetime.now(UTC)
                         async with lock:
                             location = live.report.location if live.report else None
-                            configured = bool(
-                                runtime.configuration and runtime.configuration.sources
-                            )
+                            configured = live_weather_needed()
                             if location != last_location:
                                 runtime.set_weather(location, ())
+                                if receive_live_weather is not None:
+                                    await receive_live_weather((), {}, now)
                                 last_location, due = location, now
                             history_start = oldest_history()
                             if history_start != last_history_start:
@@ -450,17 +467,19 @@ def register(app, runtime, live, lock, persist, snapshot, weather_factory, membe
                                     if (
                                         live.report
                                         and live.report.location == location
-                                        and runtime.configuration
-                                        and runtime.configuration.sources
+                                        and live_weather_needed()
                                     ):
-                                        runtime.set_weather(
-                                            location,
-                                            weather,
-                                            service=source.service
-                                            if isinstance(source, OpenMeteoSolarSource)
-                                            else None,
-                                        )
-                                        if isinstance(source, OpenMeteoSolarSource):
+                                        service = getattr(source, "service", None)
+                                        runtime.set_weather(location, weather, service=service)
+                                        if receive_live_weather is not None:
+                                            await receive_live_weather(
+                                                runtime.weather, runtime.weather_service, now
+                                            )
+                                        if (
+                                            isinstance(source, OpenMeteoSolarSource)
+                                            and runtime.configuration
+                                            and runtime.configuration.sources
+                                        ):
                                             cancellation = await complete_write(
                                                 partial(
                                                     runtime.set_forecast_runs, authoritative=False

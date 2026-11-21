@@ -189,12 +189,14 @@ class InstallationBasisSource:
             if rows
             else ()
         )
-        deadline = min(
-            load.issued_at + timedelta(minutes=FORECAST_MAX_AGE_MINUTES),
-            pv.freshness_at + timedelta(minutes=FORECAST_MAX_AGE_MINUTES)
-            if rows
-            else load.issued_at + timedelta(minutes=FORECAST_MAX_AGE_MINUTES),
-        )
+        deadline = load.freshness_at + timedelta(minutes=FORECAST_MAX_AGE_MINUTES)
+        if rows:
+            deadline = min(deadline, pv.freshness_at + timedelta(minutes=FORECAST_MAX_AGE_MINUTES))
+        weather_until = getattr(demand, "live_weather_until", None)
+        if weather_until is not None and load.weather_version == demand.live_weather_version:
+            if now >= weather_until:
+                raise InputsUnavailable("demand_forecast_expired")
+            deadline = min(deadline, weather_until)
         return PlanningBasis(
             configuration.revision,
             version(

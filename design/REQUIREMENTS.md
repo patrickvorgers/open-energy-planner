@@ -187,7 +187,7 @@ Open: incompatible meaning/unit migrations. Reference detection cannot guarantee
 
 - FORE-09: Mark missing data and curtailment. Curtailed PV must not be learned blindly as available production.
 
-A rolling planning window can reference the same issued solar forecast while the input set is unchanged and the stored series still covers that window. Successful live checks may update admission freshness without rewriting the issue. Material changes to weather, source availability, settings or model evidence create a new issue. Keep the candidate set and its original timestamps available for historical comparison.
+Solar and weather-sensitive demand use one retained live weather run for the Home Assistant site. The historical training temperature input is separate. A rolling planning window can reference the same issued solar or demand forecast while the input set is unchanged and the stored series still covers that window. Successful live checks may update admission freshness without rewriting the issue. Material changes to weather, source availability, settings or model evidence create a new issue. Keep the candidate set and its original timestamps available for historical comparison.
 - FORE-10: Automate fetching, normalization and model selection. No required complex panel/ML input.
 
 ### Individual consumption devices: confirmed next increment
