@@ -1136,7 +1136,9 @@ class SolarRuntime:
         if series:
             for issue, view in ((self.forecast, forecast), (self.candidate, candidate)):
                 if issue is not None:
-                    view["energies"] = document(forecast_window(issue.energies, now))
+                    view["energies"] = [
+                        document(row) for row in forecast_window(issue.energies, now)
+                    ]
         statuses = {}
         if self.configuration:
             fitted = {candidate_item.source_id for candidate_item in self.calibrations}
