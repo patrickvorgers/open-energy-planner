@@ -9,10 +9,10 @@ from open_energy_planner.solar.calculation.model import (
     SolarConfiguration,
     SolarInverter,
     SolarSource,
-    SolarWeatherHour,
     version,
 )
-from open_energy_planner.solar.forecast_weather import ForecastWeatherRun
+from open_energy_planner.weather.model import WeatherHour
+from open_energy_planner.weather.run import ForecastWeatherRun
 
 START = datetime(2026, 6, 20, 0, tzinfo=UTC)
 
@@ -44,7 +44,7 @@ def weather(now=START, *, days=3, ghi=600):
     """Provide complete independently fixed hourly radiation and temperature, never external weather."""
     start = now.replace(hour=0, minute=0, second=0, microsecond=0)
     return tuple(
-        SolarWeatherHour(start + timedelta(hours=index_item), ghi, 500, 100, 20, 1, now)
+        WeatherHour(start + timedelta(hours=index_item), ghi, 500, 100, 20, 1, now)
         for index_item in range(days * 24)
     )
 

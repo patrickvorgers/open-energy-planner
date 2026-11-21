@@ -5,7 +5,8 @@ import hmac
 import logging
 import os
 from contextlib import suppress
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
+from functools import partial
 from uuid import uuid4
 
 from aiohttp import web
@@ -14,7 +15,7 @@ from open_energy_planner.contracts.api import ContractAPI
 from open_energy_planner.contracts.bonus_history import BonusBudgetPreview, BonusHistory
 from open_energy_planner.contracts.planning_basis import ContractBasisSource
 from open_energy_planner.contracts.storage import ContractStore
-from open_energy_planner.core.units import BYTES_PER_KIB, SECONDS_PER_MINUTE
+from open_energy_planner.core.units import BYTES_PER_KIB
 from open_energy_planner.home_assistant.observation_wire import (
     configuration_document,
     observation_status,
@@ -73,19 +74,21 @@ from .runtime.diagnostics.planning_notifications import (
     explain_planning_problem,
     planning_notifications,
 )
+from .solar import api as solar_api
 from .solar.api import register as register_solar
 from .solar.runtime import SolarRuntime
 from .solar.storage import SolarStore
 from .storage.adapters.documents import SqlDocuments
+from .storage.series import SeriesArchive
 from .storage.writes import complete_write
+from .weather.service import register as register_live_weather
+from .weather.service import register_history as register_weather_history
 
 MIN_API_TOKEN_LENGTH = 24
 DEFAULT_REQUEST_LIMIT_KIB = 256
 MAX_REQUEST_ID_LENGTH = 128
 FORECAST_WORKER_POLL_SECONDS = 5
-WEATHER_RETRY_SECONDS = 1800
 PRICE_SCHEDULE_POLL_SECONDS = 30
-WEATHER_REFRESH_SECONDS = 3600
 DATABASE_URL_UNSET = object()
 _LOGGER = logging.getLogger(__name__)
 
@@ -99,7 +102,7 @@ def create_app(
     basis_source=None,
     price_factory=None,
     weather_factory=None,
-    solar_weather_factory=None,
+    live_weather_factory=None,
     satellite_factory=None,
     demand_scorer=None,
     discovery_options=None,
@@ -145,7 +148,9 @@ def create_app(
     thermal = ThermalService(
         SqlDocuments(repository.engine, "planning"), demand.consumers, appliances, ev
     )
+    weather_store = SeriesArchive(SqlDocuments(repository.engine, "weather"))
     solar = SolarRuntime(SolarStore(SqlDocuments(repository.engine, "solar")))
+    solar.weather_archive = weather_store
     installation = InstallationStore(SqlDocuments(repository.engine, "installation"))
     strategy = StrategyStore(SqlDocuments(repository.engine, "planning"))
     installation_basis = basis_source is None
@@ -625,146 +630,30 @@ def create_app(
 
     app.cleanup_ctx.append(demand_lifecycle)
 
-    if weather_factory is not None and live is not None:
-        from functools import partial
+    def oldest_demand_history():
+        """Extend temperature coverage to the oldest loaded household or consumer endpoint."""
+        return min(
+            (
+                history.hours[0].start
+                for history in (
+                    *demand.histories.values(),
+                    *demand.consumers.histories.values(),
+                )
+                if history.hours
+            ),
+            default=None,
+        )
 
-        from .demand.weather import weather_factory as default_weather_factory
-
-        def oldest_demand_history():
-            """Extend temperature coverage to the oldest loaded household or consumer endpoint."""
-            return min(
-                (
-                    history.hours[0].start
-                    for history in (
-                        *demand.histories.values(),
-                        *demand.consumers.histories.values(),
-                    )
-                    if history.hours
-                ),
-                default=None,
-            )
-
-        if weather_factory is default_weather_factory:
-            weather_factory = partial(weather_factory, history_start=oldest_demand_history)
-
-        async def weather_lifecycle(_app):
-            """Fetch temperature independently from planning, with hourly success and 30-minute failure retries."""
-            async with weather_factory() as weather_source:
-                weather_logger = BackgroundLog(_LOGGER, "Temperature weather refresh")
-                from .activities.events import Health, Outcome
-
-                async def update_weather():
-                    """Use HA's current location. Missing weather leaves calendar models available."""
-                    last_location = None
-                    while True:
-                        delay = WEATHER_RETRY_SECONDS
-                        async with lock:
-                            location = live.report.location if live.report else None
-                            configured = demand.configuration is not None
-                            if location != last_location:
-                                demand.weather(())
-                                last_location = location
-                        if configured and location is not None:
-                            activity = await events.start(
-                                "temperature-weather",
-                                "weather",
-                                "Fetch temperature forecast",
-                                context={"label": "Household consumption"},
-                            )
-                            try:
-                                temperatures = await weather_source.read(
-                                    location, datetime.now(UTC)
-                                )
-                                installed = False
-                                async with lock:
-                                    if (
-                                        demand.configuration is not None
-                                        and live.report
-                                        and live.report.location == location
-                                    ):
-                                        demand.weather(temperatures)
-                                        installed = True
-                                        if temperatures:
-                                            weather_logger.success(
-                                                f"Received {len(temperatures)} temperature hours. Next refresh in {WEATHER_REFRESH_SECONDS / SECONDS_PER_MINUTE:g} minutes."
-                                            )
-                                        else:
-                                            weather_logger.unavailable(
-                                                "Calendar consumption forecasting remains available without temperature data.",
-                                                reason="no usable temperature hours",
-                                                retry_seconds=WEATHER_REFRESH_SECONDS,
-                                            )
-                                delay = WEATHER_REFRESH_SECONDS
-                                await events.finish(
-                                    activity,
-                                    Outcome.SKIPPED
-                                    if not installed
-                                    else Outcome.COMPLETED
-                                    if temperatures
-                                    else Outcome.FAILED,
-                                    "Temperature forecast was discarded because the location or demand configuration changed."
-                                    if not installed
-                                    else "Temperature forecast received."
-                                    if temperatures
-                                    else "No usable temperature hours returned. Calendar consumption forecasting remains available.",
-                                    usable=installed and bool(temperatures),
-                                )
-                                if installed:
-                                    events.availability(
-                                        "temperature-weather",
-                                        Health.AVAILABLE if temperatures else Health.DEGRADED,
-                                        "Temperature forecast available."
-                                        if temperatures
-                                        else "Calendar consumption forecasting remains available without temperature data.",
-                                    )
-                            except Exception as error:
-                                await events.finish(
-                                    activity,
-                                    Outcome.FAILED,
-                                    "Weather refresh failed. Calendar consumption forecasting remains available. Existing forecasts keep their original expiry.",
-                                )
-                                events.availability(
-                                    "temperature-weather",
-                                    Health.DEGRADED,
-                                    "Calendar consumption forecasting remains available without fresh temperature data.",
-                                )
-                                weather_logger.exception(
-                                    "Existing valid forecasts retain their expiry. Calendar consumption forecasting does not require fresh temperature data.",
-                                    retry_seconds=WEATHER_RETRY_SECONDS,
-                                    expected=isinstance(error, ValueError),
-                                    reason="invalid weather data"
-                                    if isinstance(error, ValueError)
-                                    else None,
-                                )
-                        else:
-                            delay = PRICE_SCHEDULE_POLL_SECONDS
-                        async with lock:
-                            active = bool(
-                                demand.configuration is not None
-                                and live.report
-                                and live.report.location
-                            )
-                        if active:
-                            events.scheduled(
-                                "temperature-weather",
-                                "weather",
-                                "Fetch temperature forecast",
-                                datetime.now(UTC) + timedelta(seconds=delay),
-                                context={"label": "Household consumption"},
-                            )
-                        else:
-                            events.withdraw("temperature-weather")
-                        await asyncio.sleep(delay)
-
-                task = asyncio.create_task(update_weather())
-                try:
-                    yield
-                finally:
-                    task.cancel()
-                    with suppress(asyncio.CancelledError):
-                        await task
-
-        app.cleanup_ctx.append(weather_lifecycle)
+    register_weather_history(
+        app,
+        live,
+        lock,
+        weather_factory,
+        oldest_demand_history,
+        lambda: demand.configuration is not None,
+        demand.weather,
+        PRICE_SCHEDULE_POLL_SECONDS,
+    )
 
     if price_factory is not None:
 
@@ -1175,15 +1064,46 @@ def create_app(
         live.requested_strategy = lambda: strategy.current
         live.strategy_issue = lambda: strategy.issue
     register_strategy(app, strategy, live, lock, persist_then_install)
-    register_solar(
+
+    def solar_configured():
+        return bool(solar.configuration and solar.configuration.sources)
+
+    def oldest_solar_history():
+        return min(
+            (item.hours[0].start for item in solar.histories.values() if item.hours), default=None
+        )
+
+    def receive_live_weather(location, rows, service, reference, until):
+        """Send one accepted run to the two independent prediction owners."""
+        from .weather.model import TemperatureHour
+
+        solar.set_weather(location, rows, service=service)
+        demand.set_live_weather(
+            tuple(TemperatureHour(row.start, row.celsius, row.received_at) for row in rows),
+            reference,
+            until,
+        )
+
+    async def receive_original_runs(location, runs):
+        cancellation = await complete_write(
+            partial(solar.set_forecast_runs, authoritative=False), location, runs
+        )
+        if cancellation:
+            raise cancellation
+
+    register_solar(app, solar, live, lock, persist_then_install, snapshot, setup_catalogue)
+    register_live_weather(
         app,
-        solar,
         live,
         lock,
-        persist_then_install,
-        snapshot,
-        solar_weather_factory,
-        setup_catalogue,
+        live_weather_factory,
+        weather_store,
+        oldest_solar_history,
+        lambda: solar_configured() or demand.configuration is not None,
+        receive_live_weather,
+        solar_configured,
+        receive_original_runs,
+        solar_api.SOLAR_WORKER_POLL_SECONDS,
     )
     register_installation(
         app, installation, solar, live, lock, persist_then_install, snapshot, setup_catalogue
@@ -1221,7 +1141,14 @@ def create_app(
     from .forecast_quality.api import register as register_forecast_quality
 
     forecast_history_request = register_forecast_quality(
-        app, repository, demand, solar, setup_catalogue, lock, satellite_factory
+        app,
+        repository,
+        demand,
+        solar,
+        setup_catalogue,
+        lock,
+        satellite_factory,
+        weather_documents=weather_store.documents,
     )
     register_lifecycle(app, RELEASE, source)
     return app

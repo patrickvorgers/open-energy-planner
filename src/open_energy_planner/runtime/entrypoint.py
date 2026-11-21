@@ -53,10 +53,10 @@ def main():
         from open_energy_planner.prices.bootstrap import price_factory
 
         prices = price_factory(args.market_area.upper())
-    from ..demand.weather import weather_factory
     from ..pairing import administration_token
-    from ..solar.satellite import satellite_factory
-    from ..solar.weather import solar_weather_factory
+    from ..weather.history import weather_factory
+    from ..weather.provider import live_weather_factory
+    from ..weather.satellite import satellite_factory
 
     web.run_app(
         create_managed_app(
@@ -66,7 +66,7 @@ def main():
             source="home_assistant" if args.live else "synthetic",
             price_factory=prices,
             weather_factory=weather_factory if args.live else None,
-            solar_weather_factory=solar_weather_factory if args.live else None,
+            live_weather_factory=live_weather_factory if args.live else None,
             satellite_factory=satellite_factory if args.live else None,
             discovery_options={"http_port": args.port, "ui_url": args.ui_url}
             if args.live

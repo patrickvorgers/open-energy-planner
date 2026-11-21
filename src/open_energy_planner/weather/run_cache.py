@@ -4,14 +4,15 @@ from dataclasses import asdict
 from datetime import datetime
 
 from open_energy_planner.core.units import HOURS_PER_DAY
-from open_energy_planner.solar.calculation.model import SolarWeatherHour, version
-from open_energy_planner.solar.forecast_weather import (
+from open_energy_planner.weather.run import (
     FORECAST_RUN_RESPONSE_HOURS,
     HOUR,
     MAX_FORECAST_RUN_HOURS,
     SINGLE_RUNS_URL,
     ForecastWeatherRun,
 )
+
+from .model import WeatherHour, version
 
 MAX_RUN_BLOCKS = MAX_FORECAST_RUN_HOURS // HOURS_PER_DAY + 1
 RECEIPT_FIELDS = {
@@ -97,7 +98,7 @@ class ForecastWeatherCache:
                 raise ValueError("Frozen solar forecast values changed")
             received = datetime.fromisoformat(receipt["received_at"])
             rows = tuple(
-                SolarWeatherHour(
+                WeatherHour(
                     **{**value, "start": datetime.fromisoformat(value["start"])},
                     received_at=received,
                 )

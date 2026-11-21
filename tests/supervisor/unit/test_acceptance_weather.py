@@ -8,8 +8,8 @@ from types import SimpleNamespace
 import pytest
 
 from open_energy_planner.appliances.forecasting import component
-from open_energy_planner.demand import weather
 from open_energy_planner.demand.calculation.model import DemandConfiguration, DemandHour, EnergyTerm
+from open_energy_planner.weather import history as weather
 from script.release import package_ha_app
 from script.release.package_ha_app import package
 from script.runtime import ha_app
@@ -150,9 +150,9 @@ def test_supervisor_capture_accepts_real_fitted_archives_without_forward_promoti
     from dataclasses import replace
 
     from open_energy_planner.appliances.forecasting import parse_selection
-    from open_energy_planner.demand.calculation.model import TemperatureHour
     from open_energy_planner.demand.runtime import DemandRuntime
     from open_energy_planner.demand.storage import DemandStore
+    from open_energy_planner.weather.model import TemperatureHour
     from script.supervisor import supervisor_smoke
     from tests.app.demand.test_demand import START, channel, config
     from tests.database.support.archive import make_store

@@ -18,7 +18,7 @@ def main():
         raise RuntimeError("Simulated weather requires the disposable Supervisor acceptance image")
     from production_ha_app import main as production_main
 
-    from open_energy_planner.demand import weather
+    from open_energy_planner.weather import history as weather
 
     weather.weather_factory = temperature_factory
     production_main()

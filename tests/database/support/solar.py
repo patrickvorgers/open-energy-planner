@@ -5,8 +5,9 @@ from datetime import UTC, datetime, timedelta
 
 from open_energy_planner.installation.location import SiteLocation
 from open_energy_planner.solar.backtest import BacktestWindow, HistoricalForecastAssessment
-from open_energy_planner.solar.calculation.model import SolarWeatherHour, version
-from open_energy_planner.solar.forecast_weather import ForecastWeatherRun
+from open_energy_planner.solar.calculation.model import version
+from open_energy_planner.weather.model import WeatherHour
+from open_energy_planner.weather.run import ForecastWeatherRun
 
 
 def forecast_evidence():
@@ -42,7 +43,7 @@ def forecast_evidence():
         received_at=now,
         location_version=version(asdict(site)),
         hours=tuple(
-            SolarWeatherHour(initialized + timedelta(hours=hour), 500, 400, 100, 20, 2, now)
+            WeatherHour(initialized + timedelta(hours=hour), 500, 400, 100, 20, 2, now)
             for hour in range(95)
         ),
     )

@@ -5,8 +5,8 @@ from datetime import UTC, datetime, timedelta
 from functools import cached_property
 
 from open_energy_planner.planning_policy import PLANNING_HORIZON_HOURS
-from open_energy_planner.prices.model import aware
-from open_energy_planner.solar.calculation.model import SolarWeatherHour, version
+
+from .model import WeatherHour, aware, version
 
 FORECAST_WEATHER_MODEL = "ecmwf_ifs"
 FORECAST_WEATHER_POLICY = "ecmwf-ifs-frozen-original-runs-v1"
@@ -31,7 +31,7 @@ class ForecastWeatherRun:
     initialized_at: datetime
     received_at: datetime
     location_version: str
-    hours: tuple[SolarWeatherHour, ...]
+    hours: tuple[WeatherHour, ...]
     model: str = FORECAST_WEATHER_MODEL
     forecast_origin: datetime | None = None
     available_at: datetime | None = None
@@ -68,7 +68,7 @@ class ForecastWeatherRun:
             raise ValueError("Invalid frozen solar forecast identity")
         hours = tuple(self.hours)
         if not 1 <= len(hours) <= MAX_FORECAST_RUN_HOURS or any(
-            not isinstance(row, SolarWeatherHour)
+            not isinstance(row, WeatherHour)
             or index > 0
             and row.start <= hours[index - 1].start
             or row.received_at != received

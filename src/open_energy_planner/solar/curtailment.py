@@ -9,7 +9,7 @@ from functools import cached_property
 
 from open_energy_planner.prices.model import aware
 from open_energy_planner.solar.calculation.model import version
-from open_energy_planner.solar.storage import SERIES_ARCHIVE_READ_BATCH_BLOCKS
+from open_energy_planner.storage.series import SERIES_ARCHIVE_READ_BATCH_BLOCKS
 
 MAX_FEEDBACK_READINGS = 10000
 MAX_FEEDBACK_RANGE_DAYS = 367

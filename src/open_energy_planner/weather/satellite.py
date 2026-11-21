@@ -7,8 +7,8 @@ from datetime import UTC, datetime, timedelta
 
 from aiohttp import ClientSession, ClientTimeout
 
-from .calculation.model import MAX_IRRADIANCE_W_M2, number
-from .weather import (
+from .model import MAX_IRRADIANCE_W_M2, validate_quantity
+from .provider import (
     MAX_WEATHER_RESPONSE_BYTES,
     WEATHER_READ_CHUNK_BYTES,
     WEATHER_TIMEOUT_SECONDS,
@@ -94,7 +94,7 @@ class OpenMeteoSatelliteSource:
             previous = stamp
             if ghi is None:
                 continue
-            number(ghi, 0, MAX_IRRADIANCE_W_M2)
+            validate_quantity(ghi, 0, MAX_IRRADIANCE_W_M2)
             if start <= instant and instant + HOUR <= min(end, now):
                 result.append(RadiationHour(instant, ghi))
         return tuple(result)

@@ -15,7 +15,8 @@ from open_energy_planner.notifications.collection import NotificationCenter
 from open_energy_planner.solar import api as solar_api
 from open_energy_planner.solar.runtime import SolarRuntime
 from open_energy_planner.solar.storage import SolarStore
-from open_energy_planner.solar.weather import OpenMeteoSolarSource
+from open_energy_planner.weather import service as weather_service
+from open_energy_planner.weather.provider import OpenMeteoWeatherSource
 from tests.app.solar.support import SITE, START, plant, weather
 from tests.app.solar.test_solar_weather import Session
 from tests.database.support.archive import make_store
@@ -49,6 +50,17 @@ def controlled_poll(monkeypatch):
             CancelledError=asyncio.CancelledError,
         ),
     )
+    monkeypatch.setattr(weather_service, "datetime", Clock)
+    monkeypatch.setattr(
+        weather_service,
+        "asyncio",
+        SimpleNamespace(
+            create_task=asyncio.create_task,
+            current_task=asyncio.current_task,
+            sleep=sleep,
+            CancelledError=asyncio.CancelledError,
+        ),
+    )
     return clock, sleeps, resume
 
 
@@ -56,7 +68,31 @@ def solar_app(runtime, *, live=None, weather_factory=None, membership=None):
     """Register the actual solar lifecycle while leaving unrelated HTTP composition inactive."""
     app = web.Application()
     app[NOTIFICATIONS] = NotificationCenter()
-    solar_api.register(app, runtime, live, asyncio.Lock(), None, None, weather_factory, membership)
+    lock = asyncio.Lock()
+    solar_api.register(app, runtime, live, lock, None, None, membership)
+
+    def configured():
+        return bool(runtime.configuration and runtime.configuration.sources)
+
+    def receive(location, rows, service, _reference, _until):
+        runtime.set_weather(location, rows, service=service)
+
+    async def receive_runs(location, runs):
+        runtime.set_forecast_runs(location, runs, authoritative=False)
+
+    weather_service.register(
+        app,
+        live,
+        lock,
+        weather_factory,
+        runtime.weather_archive,
+        lambda: None,
+        configured,
+        receive,
+        configured,
+        receive_runs,
+        solar_api.SOLAR_WORKER_POLL_SECONDS,
+    )
     return app
 
 
@@ -188,7 +224,7 @@ def test_notification_guard_retains_active_warning_until_coherent_recovery(tmp_p
         center = NotificationCenter()
         app[NOTIFICATIONS] = center
         live = SimpleNamespace(report=SimpleNamespace(location=SITE))
-        solar_api.register(app, runtime, live, lock, None, None, None, None)
+        solar_api.register(app, runtime, live, lock, None, None, None)
         initial = center.document()
         assert len(initial["notifications"]) == 1
         notice = initial["notifications"][0]
@@ -300,9 +336,9 @@ def test_empty_current_weather_never_reports_recovery_and_keeps_hourly_cadence(
         finally:
             await lifecycle.aclose()
 
-    with caplog.at_level(logging.DEBUG, logger=solar_api.__name__):
+    with caplog.at_level(logging.DEBUG, logger=weather_service.__name__):
         asyncio.run(scenario())
-    records = [record for record in caplog.records if "Solar weather refresh" in record.message]
+    records = [record for record in caplog.records if "Live weather refresh" in record.message]
     assert [record.levelno for record in records] == [logging.WARNING, logging.DEBUG, logging.INFO]
     assert "60 minutes" in records[0].message
     assert "ready" not in records[0].message and "recovered" not in records[1].message
@@ -334,7 +370,7 @@ def test_empty_historical_weather_waits_for_original_cache_invalidation(refresh_
     async def scenario():
         """Observe the real parser, cache reuse and UTC/site invalidation without provider access."""
         session = ArchiveSession()
-        source = OpenMeteoSolarSource(session)
+        source = OpenMeteoWeatherSource(session)
         assert await source.read_observed(SITE, START)
         assert not source.past
         await source.read_observed(SITE, START + timedelta(hours=1))
@@ -347,7 +383,7 @@ def test_empty_historical_weather_waits_for_original_cache_invalidation(refresh_
         await source.read_observed(next_site, next_time + timedelta(hours=1))
         assert session.archive_calls == 2
 
-    with caplog.at_level(logging.DEBUG, logger="open_energy_planner.solar.weather"):
+    with caplog.at_level(logging.DEBUG, logger="open_energy_planner.weather.provider"):
         asyncio.run(scenario())
     records = [
         record for record in caplog.records if "Historical solar weather refresh" in record.message
@@ -390,16 +426,14 @@ def test_disabled_weather_producer_withdraws_health_and_schedule(tmp_path, monke
             await asyncio.wait_for(sleeps.get(), 3)
             assert events.health["solar-weather"]["state"] == "available"
             assert "solar-weather:weather" in events.schedules
-            assert events.schedules["solar-weather:weather"]["context"] == {
-                "label": "Solar production"
-            }
+            assert events.schedules["solar-weather:weather"]["context"] == {"label": "Live weather"}
             weather_events = [
                 row["value"]
                 for row in events.changes(cursor)["events"]
                 if row["topic"] == "activity"
             ]
             assert weather_events
-            assert all(row["context"] == {"label": "Solar production"} for row in weather_events)
+            assert all(row["context"] == {"label": "Live weather"} for row in weather_events)
             runtime.configure(plant(count=0))
             resume.put_nowait(None)
             await asyncio.wait_for(sleeps.get(), 3)
