@@ -384,7 +384,7 @@ class SolarRuntime:
         self.ha_predictions = predictions
         self.ha_revision += 1
 
-    def set_weather(self, location, weather, *, service=None):
+    def set_weather(self, location, weather, *, service=None, received_at=None):
         """Install typed source evidence. Changing the site revokes old-site weather and outputs."""
         if self.location != location:
             self.forecast, self.candidate, self.baseline, self.last_key = None, None, None, None
@@ -394,7 +394,7 @@ class SolarRuntime:
             self.forecast_runs_revision += 1
         incoming = tuple(weather)
         provenance = dict(service) if service is not None else {}
-        received = incoming[-1].received_at if incoming else None
+        received = received_at or (incoming[-1].received_at if incoming else None)
         if (
             location == self.location
             and len(incoming) == len(self.weather)

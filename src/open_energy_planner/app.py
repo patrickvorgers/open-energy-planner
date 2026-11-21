@@ -805,7 +805,7 @@ def create_app(
                         "request": demand.request(datetime.now(UTC))
                         or demand.consumers.request(demand.configuration, datetime.now(UTC)),
                     },
-                    "consumers": demand.consumers.document(),
+                    "consumers": demand.consumers.document(now=datetime.now(UTC)),
                     "appliances": appliances.document(
                         datetime.now(UTC), repository.state["enabled"], repository.state["plan"]
                     ),
@@ -988,6 +988,7 @@ def create_app(
                         if installation.calibration.command_revision != previous_progress:
                             live.invalidate("battery_calibration_changed")
                             live.last_submission = None
+                    demand.set_weather_location(report.location)
                     await live.receive_async(report)
                     if cancellation is not None:
                         raise cancellation
@@ -1066,18 +1067,20 @@ def create_app(
     register_strategy(app, strategy, live, lock, persist_then_install)
 
     def solar_configured():
+        """Enable solar weather and original-run work when PV has at least one source."""
         return bool(solar.configuration and solar.configuration.sources)
 
     def oldest_solar_history():
+        """Bound original-run import by the oldest loaded solar hour, if any."""
         return min(
             (item.hours[0].start for item in solar.histories.values() if item.hours), default=None
         )
 
-    def receive_live_weather(location, rows, service, reference, until):
+    def receive_live_weather(location, rows, service, reference, until, received_at):
         """Send one accepted run to the two independent prediction owners."""
         from .weather.model import TemperatureHour
 
-        solar.set_weather(location, rows, service=service)
+        solar.set_weather(location, rows, service=service, received_at=received_at)
         demand.set_live_weather(
             tuple(TemperatureHour(row.start, row.celsius, row.received_at) for row in rows),
             reference,
@@ -1085,6 +1088,7 @@ def create_app(
         )
 
     async def receive_original_runs(location, runs):
+        """Commit a partial cohort without withdrawing missing runs, even during cancellation."""
         cancellation = await complete_write(
             partial(solar.set_forecast_runs, authoritative=False), location, runs
         )

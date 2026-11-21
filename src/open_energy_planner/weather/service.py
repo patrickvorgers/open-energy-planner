@@ -44,7 +44,14 @@ class LiveWeather:
         rows, service = tuple(rows), dict(service or {})
         if not rows:
             self.clear()
-            return (), {}, None, None
+            return (), {}, None, None, None
+        received_at = rows[-1].received_at
+        until = (
+            datetime.fromisoformat(service["initialized_at"])
+            + timedelta(hours=MAX_LIVE_RUN_AGE_HOURS)
+            if service
+            else received_at + timedelta(hours=WEATHER_RECEIPT_AGE_HOURS)
+        )
         unchanged = (
             len(rows) == len(self.rows)
             and {key: value for key, value in service.items() if key != "received_at"}
@@ -54,6 +61,7 @@ class LiveWeather:
                 for previous, new in zip(self.rows, rows, strict=True)
             )
         )
+        reference = self.reference
         if not unchanged:
             evidence = json.loads(json.dumps([asdict(row) for row in rows], default=str))
             reference = version(evidence)
@@ -62,14 +70,11 @@ class LiveWeather:
             )
             if cancellation:
                 raise cancellation
+        if datetime.now(UTC) >= until:
+            raise ValueError("Live weather expired before publication")
+        if not unchanged:
             self.rows, self.service, self.reference = rows, service, reference
-        if service:
-            until = datetime.fromisoformat(service["initialized_at"]) + timedelta(
-                hours=MAX_LIVE_RUN_AGE_HOURS
-            )
-        else:
-            until = rows[-1].received_at + timedelta(hours=WEATHER_RECEIPT_AGE_HOURS)
-        return self.rows, self.service, self.reference, until
+        return self.rows, self.service, self.reference, until, received_at
 
 
 def register(
@@ -86,7 +91,7 @@ def register(
     poll_seconds,
 ):
     """Own provider refreshes while domain consumers receive normalized evidence under the app lock."""
-    if weather_factory is live_weather_factory:
+    if weather_factory is not None and weather_factory is live_weather_factory:
         weather_factory = partial(weather_factory, store=store, history_start=oldest_history)
     archive = LiveWeather(store)
     if weather_factory is not None and live is not None:
@@ -108,7 +113,7 @@ def register(
                             configured = needs_live_weather()
                             if location != last_location:
                                 archive.clear()
-                                receive_live_weather(location, (), {}, None, None)
+                                receive_live_weather(location, (), {}, None, None, None)
                                 last_location, due = location, now
                             history_start = oldest_history()
                             if history_start != last_history_start:
@@ -134,11 +139,17 @@ def register(
                                         and live.report.location == location
                                         and needs_live_weather()
                                     ):
-                                        rows, service, reference, until = await archive.accept(
+                                        (
+                                            rows,
+                                            service,
+                                            reference,
+                                            until,
+                                            received_at,
+                                        ) = await archive.accept(
                                             weather, getattr(source, "service", None)
                                         )
                                         receive_live_weather(
-                                            location, rows, service, reference, until
+                                            location, rows, service, reference, until, received_at
                                         )
                                         if (
                                             isinstance(source, OpenMeteoWeatherSource)

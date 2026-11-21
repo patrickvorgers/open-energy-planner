@@ -74,8 +74,8 @@ def solar_app(runtime, *, live=None, weather_factory=None, membership=None):
     def configured():
         return bool(runtime.configuration and runtime.configuration.sources)
 
-    def receive(location, rows, service, _reference, _until):
-        runtime.set_weather(location, rows, service=service)
+    def receive(location, rows, service, _reference, _until, received_at):
+        runtime.set_weather(location, rows, service=service, received_at=received_at)
 
     async def receive_runs(location, runs):
         runtime.set_forecast_runs(location, runs, authoritative=False)
@@ -94,6 +94,39 @@ def solar_app(runtime, *, live=None, weather_factory=None, membership=None):
         solar_api.SOLAR_WORKER_POLL_SECONDS,
     )
     return app
+
+
+def test_live_weather_keeps_original_rows_and_tracks_new_receipts(monkeypatch):
+    """A repeated value run keeps its original reference and refreshes receipt-based validity."""
+
+    async def scenario():
+        """Use the same accepted rows at two receipts, then expire a changed run during its write."""
+        clock, _sleeps, _resume = controlled_poll(monkeypatch)
+        writes = []
+
+        async def write(_writer, _kind, reference, _evidence):
+            """Move the clock past the changed run's deadline before the commit returns."""
+            writes.append(reference)
+            if len(writes) == 2:
+                clock[0] += timedelta(hours=2)
+
+        monkeypatch.setattr(weather_service, "complete_write", write)
+        archive = weather_service.LiveWeather(SimpleNamespace(archive_series=None))
+        original, _, reference, _, _ = await archive.accept(weather(START), None)
+        clock[0] = START + timedelta(hours=1)
+        same, _, same_reference, deadline, receipt = await archive.accept(weather(clock[0]), None)
+        assert same == original
+        assert same_reference == reference
+        assert receipt == START + timedelta(hours=1)
+        assert deadline == START + timedelta(hours=3)
+        assert writes == [reference]
+        with pytest.raises(ValueError, match="expired before publication"):
+            await archive.accept(weather(clock[0], ghi=650), None)
+        assert len(writes) == 2
+        assert archive.reference == reference
+        assert archive.rows == original
+
+    asyncio.run(scenario())
 
 
 @pytest.mark.parametrize("surface", ["activity", "notifications"])

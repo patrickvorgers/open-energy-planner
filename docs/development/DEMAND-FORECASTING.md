@@ -392,6 +392,12 @@ exclusions because its components have already been added back.
 
 The `/v1/consumers` API stores app-owned selection/weather flags with optimistic concurrency in the shared SQLAlchemy demand document namespace. Energy membership and upstream links remain read-only. Models, component forecasts and original parameters are archived. Source history is fetched through the integration rather than a direct Recorder database connection. Removed sources remain in historical settings, disappear from offered choices and prevent stale composition. Forecast-only HA devices publish current-interval mean forecast W, full-horizon forecast kWh and forecast status. These are estimates, not measured energy or commands.
 
+Live consumer responses project original native steps onto the rolling planning
+grid. Each forecast keeps its original `issued_at` and exposes `valid_until`,
+which uses the latest app check and the original weather run's deadline when
+applicable. Home Assistant uses that deadline for sensor availability. A site
+change revokes old-site demand evidence before the new observations can plan.
+
 Ready device forecasts remain available when another selected consumer has too
 little history. The remaining-household baseline subtracts only ready components,
 so unavailable devices stay inside measured household consumption. This permits

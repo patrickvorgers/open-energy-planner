@@ -60,6 +60,7 @@ class DemandRuntime:
             entity: digest(asdict(history)) for entity, history in self.histories.items()
         }
         self.consumers = ConsumerForecasts(store.documents)
+        self.weather_location = None
 
     def configure(self, configuration):
         """Invalidate incompatible observations/models after a persisted measurement-definition change."""
@@ -135,6 +136,7 @@ class DemandRuntime:
             self.live_weather_ref(now),
             self.learned_preferred,
             self.consumers.key(),
+            self.weather_location,
         )
 
     def request(self, now):
@@ -204,6 +206,15 @@ class DemandRuntime:
         )
         self.weather_version = digest([(row.start, row.celsius) for row in self.temperatures])
 
+    def set_weather_location(self, location):
+        """Revoke old-site predictions before planning accepts observations from a new site."""
+        if self.weather_location is not None and self.weather_location != location:
+            self.weather(())
+            self.set_live_weather((), None, None)
+            self.forecast = self.candidate = self.baseline = self.last_key = None
+            self.consumers.result = None
+        self.weather_location = location
+
     def set_live_weather(self, temperatures, version, valid_until):
         """Use the exact shared weather reference and its provider validity deadline."""
         self.live_temperatures = temperatures
@@ -234,7 +245,7 @@ class DemandRuntime:
                     else self.forecast.weather_valid_until
                 ),
             )
-            self.consumers.checked_at = now
+            self.consumers.mark_checked(now, self.live_weather_ref(now), self.live_weather_until)
             return None
         if key == self.failed_key and self.retry_after and now < self.retry_after:
             return None
@@ -543,7 +554,7 @@ class DemandRuntime:
             self.learned_preferred = False
         self.candidate_features = features
         self.consumers.result = consumer_result
-        self.consumers.checked_at = now
+        self.consumers.mark_checked(now, self.live_weather_ref(now), self.live_weather_until)
         quality_changed = self.history_quality != history_quality
         self.history_quality = history_quality
         if history_quality["usable_hours"] > 0:

@@ -270,7 +270,7 @@ def register(
                     or (demand.consumers.result or {}).get("residual_selection"),
                     "issue": demand.issue,
                 },
-                "consumers": demand.consumers.document(),
+                "consumers": demand.consumers.document(now=datetime.now(UTC)),
                 "solar": {
                     **solar.document(datetime.now(UTC), series=False),
                     "source_names": {

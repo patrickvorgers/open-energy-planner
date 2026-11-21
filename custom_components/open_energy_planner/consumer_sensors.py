@@ -95,7 +95,9 @@ def validate(value):
             or not isinstance(forecast.get("steps"), list)
         ):
             raise ValueError("Invalid consumer forecast")
-        timestamp(forecast["issued_at"])
+        issued_at = timestamp(forecast["issued_at"])
+        if "valid_until" in forecast and timestamp(forecast["valid_until"]) < issued_at:
+            raise ValueError("Consumer forecast deadline precedes issue")
         if len(forecast["steps"]) > MAX_STEPS:
             raise ValueError("Too many forecast steps")
         for step in forecast["steps"]:
@@ -164,12 +166,15 @@ class ConsumerSensor(PlannerEntity, SensorEntity):
         if self.key == "status":
             return True
         forecast = self.forecast()
-        return bool(
-            forecast
-            and timestamp(forecast["issued_at"])
-            <= dt_util.utcnow()
-            < timestamp(forecast["issued_at"]) + timedelta(minutes=FORECAST_LIFETIME_MINUTES)
+        if forecast is None:
+            return False
+        issued_at = timestamp(forecast["issued_at"])
+        valid_until = (
+            timestamp(forecast["valid_until"])
+            if "valid_until" in forecast
+            else issued_at + timedelta(minutes=FORECAST_LIFETIME_MINUTES)
         )
+        return issued_at <= dt_util.utcnow() < valid_until
 
     @property
     def native_value(self):

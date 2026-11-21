@@ -1343,7 +1343,7 @@ def test_consumer_daily_model_selection_states_are_valid_ha_estimates(status):
 
 
 @pytest.mark.parametrize("duration_hours", [0.25, 0.5, 0.75, 1])
-def test_consumer_forecast_projection_is_estimated_and_expires(duration_hours):
+def test_consumer_forecast_projection_is_estimated_and_expires(duration_hours, monkeypatch):
     """HA exposes interval mean W and horizon kWh as estimates. Old forecasts are unavailable, not zero."""
     from types import SimpleNamespace
 
@@ -1394,6 +1394,18 @@ def test_consumer_forecast_projection_is_estimated_and_expires(duration_hours):
         now - timedelta(hours=1)
     ).isoformat()
     assert not power.available
+    forecast = document["result"]["devices"][0]["forecast"]
+    deadline = now + timedelta(minutes=5)
+    forecast["valid_until"] = deadline.isoformat()
+    validate(document)
+    assert power.available
+    monkeypatch.setattr(dt_util, "utcnow", lambda: deadline)
+    assert not power.available
+    forecast["valid_until"] = (now - timedelta(hours=2)).isoformat()
+    with pytest.raises(ValueError, match="deadline precedes issue"):
+        validate(document)
+    forecast.pop("valid_until")
+
     document["result"]["devices"][0]["forecast"]["steps"][0]["kwh"] = float("nan")
     with pytest.raises(ValueError, match="quantity"):
         validate(document)
