@@ -15,7 +15,7 @@ const consumerChoices = new Map(), pending = new Map();
 let energySources;
 let selectedId = null, editing = false, evidenceEpoch = 0, evidenceRefreshing = false;
 bindSettingsActions();
-const saveState = new SaveBar({form: "appliance-settings", bar: "appliance-save-bar", save: "save-settings", discard: "discard-settings", status: "save-state", read: () => [...consumerChoices].map(([id, inputs]) => [id, inputs.enabled.checked, inputs.weather.checked, inputs.permission.checked, inputs.duration.value, inputs.energy.value])});
+const saveState = new SaveBar({form: "appliance-settings", bar: "appliance-save-bar", save: "save-settings", discard: "discard-settings", status: "save-state", read: () => [...consumerChoices].map(([id, inputs]) => [id, inputs.enabled.checked, inputs.weather.checked, inputs.permission.checked, inputs.additional.checked, inputs.duration.value, inputs.energy.value])});
 /** Build labels as text so source names cannot inject markup. */
 function node(tag, text) { const item = document.createElement(tag); if (text !== undefined) item.textContent = text; return item; }
 /** Keep all OEP-owned source choices in Settings while preserving EV/thermal-owned selections and unresolved cycles. */
@@ -43,7 +43,16 @@ function settings(consumers, specializedMeters, devices) {
         permissionLabel.className = "settings-switch"; permissionText.append(node("small", "Allow a complete cycle to be scheduled before its deadline.")); permissionLabel.append(permission, permissionText); card.append(permissionLabel);
         weather.setAttribute("aria-label", "Consumption depends on outdoor temperature"); permission.setAttribute("aria-label", "Allow shifting complete cycles");
         permission.onchange = () => { if (permission.checked === Boolean(appliance?.shiftable)) pending.delete(device.entity_id); else pending.set(device.entity_id, permission.checked); saveState.update(""); };
+        const additional = node("input");
+        additional.type = "checkbox"; additional.name = device.entity_id + "_additional_profile";
+        additional.checked = Boolean(appliance?.learn_additional_profile); additional.disabled = !enabled.checked;
+        const additionalLabel = node("label"), additionalText = node("span", "Learn one additional cycle profile");
+        additionalLabel.className = "settings-switch";
+        additional.setAttribute("aria-label", "Learn one additional cycle profile");
+        additionalText.append(node("small", "Use a second profile when repeated cycles have a distinct power pattern."));
+        additionalLabel.append(additional, additionalText); card.append(additionalLabel);
         enabled.onchange = () => {
+            additional.disabled = !enabled.checked;
             weather.disabled = !enabled.checked;
             permission.disabled = enabled.disabled || !enabled.checked;
             if (!enabled.checked && permission.checked) { permission.checked = false; permission.onchange(); }
@@ -59,7 +68,7 @@ function settings(consumers, specializedMeters, devices) {
             input.oninput = () => saveState.update("");
         }
         if (device.upstream) card.append(node("small", `Included in ${device.upstream}`));
-        find("settings-devices").append(card); consumerChoices.set(device.entity_id, {enabled, weather, permission, duration, energy, card, device, appliance, evidence: appliance, openCycle: enabled.disabled});
+        find("settings-devices").append(card); consumerChoices.set(device.entity_id, {enabled, weather, permission, additional, duration, energy, card, device, appliance, evidence: appliance, openCycle: enabled.disabled});
     }
 }
 /** Load confirmed settings under the edit lock. Call only on connection, successful save or explicit refresh/discard. */
@@ -99,6 +108,13 @@ find("appliance-settings").onsubmit = async (event) => {
             consumerVersion = result.version; savedConsumers = JSON.stringify(selected);
         }
         for (const [entity_id, shiftable] of pending) { const response = await api("v1/appliances/device", {entity_id, shiftable, expected_version: applianceVersion}); applianceVersion = response.appliances.revision; pending.delete(entity_id); }
+        for (const [entity_id, inputs] of consumerChoices) {
+            const learnAdditional = inputs.additional.checked;
+            if (!inputs.enabled.checked || learnAdditional === Boolean(inputs.appliance?.learn_additional_profile)) continue;
+            const response = await api("v1/appliances/profile_options", {entity_id, learn_additional_profile: learnAdditional, expected_version: applianceVersion});
+            applianceVersion = response.appliances.revision;
+            inputs.appliance = {...inputs.appliance, learn_additional_profile: learnAdditional};
+        }
         for (const [entity_id, inputs] of manualChanges) {
             const manual = {duration_minutes: Number(inputs.duration.value), energy_kwh: Number(inputs.energy.value)};
             const response = await api("v1/appliances/manual_profile", {entity_id, ...manual, expected_version: applianceVersion});
@@ -143,6 +159,12 @@ function showEvidence() {
         for (const [label, value] of [["Average cycle", `${money(metrics.energyKwh)} kWh`], ["Cycle time", `${metrics.minutes} minutes`], ["Cycles in profile", String(profile.evidence === "manual" ? 0 : profile.samples)]]) { const fact = node("div"); fact.append(node("dt", label), node("dd", value)); facts.append(fact); }
         evidence.append(facts, node("small", "Planning profile: Not a measured run today."));
     } else evidence.textContent = "No profile available yet. Use the appliance normally or enter duration and energy to start planning.";
+    if (appliance?.learn_additional_profile) {
+        if (appliance.additional_profile) {
+            const {minutes, energyKwh} = profileMetrics(appliance.additional_profile);
+            evidence.append(node("p", `Additional profile: ${minutes} minutes, ${money(energyKwh)} kWh.`));
+        } else evidence.append(node("p", "Additional profile: Collecting repeated cycles with a distinguishable power pattern."));
+    }
     evidence.append(node("p", selected?.device.power_entity ? (appliance?.learning_status === "ready" ? "Automatic learning: Ready" : appliance?.learning_status === "provisional" ? "Automatic learning: Provisional hourly profile: Collecting fine cycles" : "Automatic learning: Waiting for sufficient power history and one complete cycle") : "Automatic learning: Power sensor missing in Home Assistant Energy"));
     syncEditor();
 }

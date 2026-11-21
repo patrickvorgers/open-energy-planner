@@ -368,6 +368,23 @@ It cannot replace an existing good profile. Accepted profiles remain stored
 after a restart. Once a followed profile is available, later provisional
 statistics cannot distort its measured shape or energy.
 
+## Learn one additional cycle profile
+
+In **Appliances settings**, enable **Learn one additional cycle profile** for
+an appliance that runs different programs regularly. The setting starts off.
+The second profile appears only after two repeated patterns differ in duration
+and energy and their early power can distinguish held-out completed cycles.
+Until then the appliance uses its existing profile. Hourly estimates give
+a starting profile. Recognition requires finer power measurements.
+
+If both profiles are available, choose one when submitting readiness or leave
+**Detect after start** selected. Before the start, planning uses the default
+profile when no profile is chosen. Choose a profile explicitly when its duration
+matters for the deadline. After the start, the planner compares fresh power
+measurements with the two saved curves. When the power clearly distinguishes
+them, it updates the expected remaining energy and duration. A chosen profile
+stays selected. Recognition never starts, stops or confirms physical execution.
+
 ## Hand-started cycles
 
 When recent measurements show that you started a cycle yourself, its learned

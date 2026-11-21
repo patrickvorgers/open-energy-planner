@@ -143,6 +143,20 @@ def register(app, service, repository, live, lock, ev, thermal):
                         (body["entity_id"], body["shiftable"]),
                         {"expected_version": body.get("expected_version")},
                     )
+                elif operation == "profile_options" and set(body) == {
+                    "entity_id",
+                    "learn_additional_profile",
+                    "expected_version",
+                }:
+                    function, arguments, keywords = (
+                        service.configure_additional_profile,
+                        (
+                            body["entity_id"],
+                            body["learn_additional_profile"],
+                            body["expected_version"],
+                        ),
+                        {},
+                    )
                 elif operation == "manual_profile" and set(body) == {
                     "entity_id",
                     "duration_minutes",
@@ -279,7 +293,7 @@ def register(app, service, repository, live, lock, ev, thermal):
                         ),
                         {"synthetic": body["synthetic"]},
                     )
-                elif operation == "tasks" and set(body) == {
+                elif operation == "tasks" and set(body) - {"program"} == {
                     "entity_id",
                     "request_id",
                     "ready_at",
@@ -294,7 +308,7 @@ def register(app, service, repository, live, lock, ev, thermal):
                             instant(body["deadline"]),
                             now,
                         ),
-                        {},
+                        {"program": body.get("program")},
                     )
                 elif operation == "cancel" and set(body) == {"entity_id", "task_id"}:
                     function, arguments, keywords = (

@@ -149,6 +149,7 @@ def refine(settings, records):
     is available. Existing explicitly recorded profiles remain usable.
     """
     fine = [record for record in records if record.get("quality") != "hourly_estimate"]
+
     coarse = distinct_ranges(
         [record for record in records if record.get("quality") == "hourly_estimate"]
     )
@@ -238,6 +239,22 @@ def refine(settings, records):
     )
     if not observed and any(record.get("quality") == "recorder_state" for record in fine):
         settings.pop("profile_basis", None)
+    settings.pop("additional_profile", None)
+    if settings.get("learn_additional_profile"):
+        from .programs import learn_programs
+
+        programs = learn_programs(
+            [
+                (instant(record["completed_at"]), measured(record))
+                for record in fine
+                if record.get("quality") in ("recorder_state", "five_minute_statistics")
+            ]
+        )
+        if programs:
+            standard, additional = programs
+            settings["profile"] = asdict(standard)
+            settings["additional_profile"] = asdict(additional)
+            settings["profile_sources"] = {"fine_cycles": standard.samples, "hourly_cycles": 0}
     settings["recent_cycles"] = [
         {
             "id": record["id"],

@@ -48,7 +48,8 @@ The trailing quiet confirmation is not part of the profile.
 The first complete cycle admits a usable provisional profile. Additional cycles
 refine it with the existing 90-day recency half-life. Aligned source phases are
 averaged by their energy and shorter runs contribute zero after their end. Five-minute source profiles retain their measured phase duration and final partial phase and longest measured duration,
-without rounding a 35-minute run to 45 minutes. Different appliance programs are not automatically identified.
+without rounding a 35-minute run to 45 minutes. By default each appliance has
+one profile. A per-device opt-in enables the bounded program recognition below.
 Long internal pauses can resemble separate cycles. Continuous loads, anti-crease
 runs, coarse sensors and changing standby behavior may remain unsuitable for
 automatic learning. This statistical detector is not execution confirmation.
@@ -67,6 +68,30 @@ explicitly confirmed fine cycle profiles also keep precedence over hourly
 estimates. They are not silently downgraded when a backlog completes.
 Missing power bindings point the user to Home Assistant Energy. Insufficient
 history remains a waiting state. No extra detection configuration is requested.
+
+## Optional second program profile
+
+The appliance can learn one additional profile from distinct, complete
+five-minute statistical or continuously followed Recorder cycles. Hourly and
+energy-only completion samples still inform the ordinary profile. They lack
+the measured power needed to recognize a program. A split requires at least
+three cycles per group across multiple days, a duration separation of at
+least 30 minutes and 25 percent, and median energy differing by at least
+20 percent. The newest cycle in each group is held out from the first fit and
+must be recognized from its first hour of power. The more frequent group
+becomes the default. Equal counts prefer the shorter group. If the evidence
+does not distinguish two groups, the ordinary single profile remains selected.
+
+When a cycle starts without a selected program, the default and any additional
+candidate are frozen for that run. The recognizer compares contiguous
+five-minute means from the measured start, using at least 15 minutes and at
+most one hour. A match needs mean absolute error of at most a quarter of the
+reference power and a margin of at least 25 W and a quarter of that reference.
+Unclear evidence keeps the default. A confident match updates the fixed
+remaining-work forecast with the measured start retained. The learned model
+and accepted task are not rewritten by recognition. Explicit selections skip
+recognition and remain frozen for the task. Neither profile supplies execution
+authority or hardware feedback.
 
 ## Historical backlog and provisional planning
 

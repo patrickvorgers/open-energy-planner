@@ -59,6 +59,7 @@ function profile() {
         const activity = node("p"); activity.id = "cycle-in-progress"; activity.setAttribute("role", "status");
         activity.append(node("strong", run.status === "observed" ? "Cycle in progress" : "Cycle detected"), node("span", `Started: ${when(run.started_at)}`), node("small", `${money(run.energy_kwh)} kWh measured: Pending starts are blocked.`));
         if (run.status !== "observed") activity.append(node("small", "Current state unconfirmed: Recent power and energy measurements cannot confirm whether this cycle is still running or has finished."));
+        if (run.program) activity.append(node("small", run.program === "additional" ? "Additional profile in use." : "Default profile in use."));
         history.append(activity);
     }
     if (!cycles.length) history.append(node("p", learned ? "No recent completed cycles. The learned profile is retained." : "No completed cycles yet."));
