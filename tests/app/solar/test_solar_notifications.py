@@ -111,14 +111,18 @@ def test_new_weather_cannot_clear_warning_before_forecast_recovery(solar_runtime
     assert "are retried automatically" in notice["message"]
     assert "clears when a valid, up-to-date solar forecast is available" in notice["message"]
     assert "prices" not in notice["message"]
-    runtime.set_weather(SITE, weather(now))
+    previous_weather_version = runtime.forecast.weather_version
+    runtime.set_weather(SITE, weather(now, ghi=601))
     assert any(item["owner"] == "solar" for item in center.document()["notifications"])
     location[0] = None
     unknown = center.document()
     assert "solar" in unknown["unavailable_sources"]
     assert next(item for item in unknown["notifications"] if item["owner"] == "solar")["stale"]
     location[0] = SITE
-    assert runtime.install(runtime.build(runtime.job(now)), now)
+    job = runtime.job(now)
+    assert job is not None
+    assert runtime.install(runtime.build(job), now)
+    assert runtime.forecast.weather_version != previous_weather_version
     assert [item["owner"] for item in center.document()["notifications"]] == ["other"]
 
 
@@ -194,8 +198,11 @@ def test_solar_warning_deduplicates_and_publication_recovery_remains_honest(sola
     notices = center.document()["notifications"]
     assert len(notices) == 1 and notices[0]["owner"] == "solar"
     assert notices[0]["key"] == "planning:solar_forecast_unavailable"
+    previous_version = runtime.forecast.version
     runtime.set_weather(SITE, weather(now))
-    assert runtime.install(runtime.build(runtime.job(now)), now)
+    assert runtime.job(now) is None
+    assert runtime.forecast.version == previous_version
+    assert runtime.forecast.freshness_at == now
     state[0] = PlanningStatus("calculating", None, START, "solar_forecast_unavailable")
     recovering = center.document()["notifications"]
     assert len(recovering) == 1 and recovering[0]["state"] == "recovering"
