@@ -898,6 +898,7 @@ def test_optional_inference_failure_preserves_the_physical_forecast(tmp_path, mo
     assert runtime.forecast.model == "pvwatts-v2"
     assert runtime.candidate is None
     assert runtime.document(now)["learning"]["pv0"]["status"] == "training_failed"
+    assert runtime.learning["pv0"].attempt_status is runtime_module.TrainingStatus.FAILED
     assert "private-inference-source-and-token" not in caplog.text
     assert "RuntimeError" in caplog.text
 

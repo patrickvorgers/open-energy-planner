@@ -800,6 +800,7 @@ class SolarRuntime:
                 source_id: replace(
                     result,
                     model=None,
+                    attempt_status=TrainingStatus.FAILED,
                     summary=replace(
                         result.summary,
                         status=TrainingStatus.FAILED,
