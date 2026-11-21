@@ -18,6 +18,7 @@ from open_energy_planner.demand.calculation.model import (
     DemandConfiguration,
     DemandHour,
     EnergyTerm,
+    digest,
 )
 from open_energy_planner.demand.runtime import DemandRuntime
 from open_energy_planner.demand.storage import DemandStore
@@ -311,18 +312,20 @@ def test_interrupted_publication_rolls_back_new_weights_and_pointer(
     assert pointer(demand_store.documents) == before
 
 
-def test_corrupt_pointer_fails_closed_instead_of_retraining_over_original_evidence(
+def test_future_active_fit_is_rejected_with_a_valid_checksum(
     tmp_path, demand_store, configuration, fit_counts
 ):
-    """An impossible future pointer is reported without silently replacing its archived model."""
+    """A validly checksummed future training date fails before the learner can run."""
     samples = samples_before(NOW)
     daily_models(demand_store.documents, configuration, samples, NOW)
     name = next(
         name for name in list_documents(tmp_path, "demand") if name.startswith("active-training-")
     )
     corrupt = {**demand_store.documents.read(name), "day": "2100-01-01"}
+    del corrupt["checksum"]
+    corrupt["checksum"] = digest(corrupt)
     demand_store.documents.write(name, corrupt)
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="from the future"):
         daily_models(demand_store.documents, configuration, samples, NOW)
     assert [learner.call_count for learner in fit_counts] == [1, 1, 0]
     assert demand_store.documents.read(name) == corrupt
