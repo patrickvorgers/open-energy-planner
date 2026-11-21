@@ -84,6 +84,7 @@ def test_all_flowcharts_render_at_each_reading_width(documentation_page, documen
         "design/DEVELOPMENT-FOUNDATION",
         "design/TECHNICAL-DESIGN",
         "docs/development/APPLIANCE-ARCHITECTURE",
+        "docs/development/ARCHITECTURE-OVERVIEW",
         "docs/development/AUTOMATIC-PAIRING",
         "docs/development/CONTRACT-PRICES",
         "docs/development/DATABASE-SCHEMA",
