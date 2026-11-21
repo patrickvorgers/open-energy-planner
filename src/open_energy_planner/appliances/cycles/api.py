@@ -19,6 +19,7 @@ PUBLIC_VALIDATION_MESSAGES = (
     SOURCE_ALREADY_ASSIGNED,
     "Appliance activity is unresolved. Wait for quiet measurements before submitting readiness",
     "A complete measured cycle profile is required",
+    "Additional profile learning must be boolean",
     "A stable completed cycle identity is required",
     "A stable readiness request identity is required",
     "A timezone-aware timestamp is required",
@@ -28,6 +29,7 @@ PUBLIC_VALIDATION_MESSAGES = (
     "Appliance forecast expired",
     "Appliance settings changed. Reload before saving",
     "Archived cycle evidence is incomplete. Retained profile is unchanged",
+    "Choose the default or additional program",
     "Completed cycle identity reused with different evidence",
     "Completed work cannot be cancelled",
     "Completion requires confirmed actual start",
@@ -69,7 +71,8 @@ PUBLIC_VALIDATION_MESSAGES = (
     "Invalid task/attempt identity",
     "Manual average power exceeds 20000 W",
     "Only processing accepts history bounds",
-    "Readiness identity reused with different times",
+    "No additional program has been learned for this appliance",
+    "Readiness identity reused with different times or program",
     "Resolve the open task before changing its deadline",
     "Resolve the open task before changing shift permission",
     "Select this consumer in Appliances settings first",
@@ -142,6 +145,20 @@ def register(app, service, repository, live, lock, ev, thermal):
                         service.configure,
                         (body["entity_id"], body["shiftable"]),
                         {"expected_version": body.get("expected_version")},
+                    )
+                elif operation == "profile_options" and set(body) == {
+                    "entity_id",
+                    "learn_additional_profile",
+                    "expected_version",
+                }:
+                    function, arguments, keywords = (
+                        service.configure_additional_profile,
+                        (
+                            body["entity_id"],
+                            body["learn_additional_profile"],
+                            body["expected_version"],
+                        ),
+                        {},
                     )
                 elif operation == "manual_profile" and set(body) == {
                     "entity_id",
@@ -279,7 +296,7 @@ def register(app, service, repository, live, lock, ev, thermal):
                         ),
                         {"synthetic": body["synthetic"]},
                     )
-                elif operation == "tasks" and set(body) == {
+                elif operation == "tasks" and set(body) - {"program"} == {
                     "entity_id",
                     "request_id",
                     "ready_at",
@@ -294,7 +311,7 @@ def register(app, service, repository, live, lock, ev, thermal):
                             instant(body["deadline"]),
                             now,
                         ),
-                        {},
+                        {"program": body.get("program")},
                     )
                 elif operation == "cancel" and set(body) == {"entity_id", "task_id"}:
                     function, arguments, keywords = (

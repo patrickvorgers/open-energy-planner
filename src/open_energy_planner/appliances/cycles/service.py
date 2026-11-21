@@ -208,6 +208,28 @@ class ApplianceService:
         data["devices"].setdefault(entity, {})["shiftable"] = enabled
         self.commit(data)
 
+    def configure_additional_profile(self, entity, enabled, expected_version):
+        """Persist a per-device opt-in and rebuild it from the existing source-bound archive."""
+        from .evidence import refine
+
+        self.member(entity)
+        if expected_version != self.revision:
+            raise ValueError("Appliance settings changed. Reload before saving")
+        if type(enabled) is not bool:
+            raise ValueError("Additional profile learning must be boolean")
+        data = deepcopy(self.state)
+        settings = data["devices"].setdefault(entity, {})
+        previously_enabled = settings.get("learn_additional_profile", False)
+        if enabled == previously_enabled:
+            return
+        settings["learn_additional_profile"] = enabled
+        power_entity = self.source(entity)
+        if power_entity:
+            records, _, _ = self.collect_cycles(entity, power_entity, (), False)
+            if records:
+                refine(settings, list(records.values()))
+        self.commit(data)
+
     def source(self, entity):
         """Bind learning to the authoritative Energy energy/power pair."""
         option = next((row for row in self.consumers.options if row["entity_id"] == entity), {})
@@ -247,6 +269,7 @@ class ApplianceService:
                 settings.pop("profile_sources", None)
                 settings.pop("profile_basis", None)
                 settings.pop("hourly_profile_policy", None)
+                settings.pop("additional_profile", None)
                 settings.pop("last_detected_end", None)
                 settings.pop("learning_weight", None)
                 settings.pop("first_detected_start", None)
@@ -462,25 +485,70 @@ class ApplianceService:
         *,
         observed_until=None,
         processing_started=None,
+        raw_power=(),
     ):
-        """Admit running evidence at elapsed processing time before changing a task or its frozen observed profile."""
+        """Admit recent running evidence and refine its remaining curve without changing accepted work."""
         from .observed import observe
+        from .programs import CycleProgram, recognize
 
         settings, task = data["devices"][entity], data["tasks"].get(entity)
         if processing_started is not None:
             now += timedelta(seconds=max(0, monotonic() - processing_started))
+        previous_run = settings.get("observed_run")
         accepted_running = observe(
             settings, rows, cycles, activity, power_entity, now, observed_until=observed_until
         )
-        if accepted_running and task and task["status"] in OPEN_STATUSES:
-            if task.get("attempt") and task["attempt"]["status"] != "not_started":
-                settings["observed_run"]["profile"] = deepcopy(task["profile"])
-            if (
+        if not accepted_running:
+            return
+        run = settings["observed_run"]
+        open_task = task and task["status"] in OPEN_STATUSES
+        use_frozen_task = open_task and (
+            settings.get("learn_additional_profile")
+            or task.get("program")
+            or task.get("additional_profile")
+            or (task.get("attempt") and task["attempt"]["status"] != "not_started")
+        )
+        same_run = previous_run and (
+            run["started_at"] == previous_run["started_at"]
+            or (
+                settings.get("learn_additional_profile")
+                and previous_run["status"] == "observed"
+                and abs(instant(run["started_at"]) - instant(previous_run["started_at"]))
+                <= timedelta(seconds=SAMPLE_SECONDS)
+            )
+        )
+        if same_run:
+            for key in ("profile", "additional_profile", "program"):
+                if key in previous_run:
+                    run[key] = previous_run[key]
+            if use_frozen_task and not run.get("program"):
+                run["profile"] = deepcopy(task["profile"])
+        else:
+            source = task if use_frozen_task else settings
+            if use_frozen_task:
+                run["profile"] = deepcopy(task["profile"])
+            if source.get("program"):
+                run["program"] = source["program"]
+            elif source.get("additional_profile") and run.get("profile"):
+                run["additional_profile"] = deepcopy(source["additional_profile"])
+        if settings.get("learn_additional_profile") and run.get("additional_profile"):
+            program = recognize(run, rows, raw_power)
+            if program:
+                run["program"] = program
+                additional = run.pop("additional_profile")
+                if program == CycleProgram.ADDITIONAL:
+                    run["profile"] = additional
+
+        if (
+            task
+            and task["status"] in OPEN_STATUSES
+            and (
                 task["status"] == "execution_observed"
                 or not task.get("attempt")
                 or task["attempt"]["status"] not in ("started", "completed")
-            ):
-                task.update(status="execution_observed", scheduled_start=None, plan_id=None)
+            )
+        ):
+            task.update(status="execution_observed", scheduled_start=None, plan_id=None)
 
     def learn_raw_history(self, body, now, *, processing_started=None):
         """Atomically retain original Recorder frames, conserved cycles and bounded current curves.
@@ -583,14 +651,17 @@ class ApplianceService:
                         for value in (
                             device.get("profile"),
                             device.get("learned_profile"),
+                            device.get("additional_profile"),
                             device.get("observed_run", {}).get("profile"),
+                            device.get("observed_run", {}).get("additional_profile"),
                         )
                         if value and value.get("phase_durations_seconds") is not None
                     ) + sum(
-                        len(task["profile"]["power_w"])
+                        len(value["power_w"])
                         for identity, task in data["tasks"].items()
                         if identity in active
-                        and task["profile"].get("phase_durations_seconds") is not None
+                        for value in (task["profile"], task.get("additional_profile"))
+                        if value and value.get("phase_durations_seconds") is not None
                     )
                     if projected_phases > MAX_PROJECTED_IRREGULAR_PHASES:
                         raise ValueError("Cycle profile exceeds bounded phase complexity")
@@ -672,6 +743,7 @@ class ApplianceService:
             now,
             observed_until=observed_until,
             processing_started=processing_started,
+            raw_power=result["power_curve"],
         )
         self.commit(data, extra=extra)
         if previous_capture is None or end > instant(previous_capture):
@@ -791,9 +863,16 @@ class ApplianceService:
                 self._cycle_records.pop(pair)
         self._cycle_records[(entity, power_entity)] = records
 
-    def submit(self, entity, request_id, ready_at, deadline, now):
-        """Create one idempotent runnable task only on explicit readiness, never historical usage timing."""
+    def submit(self, entity, request_id, ready_at, deadline, now, *, program=None):
+        """Accept explicit readiness and freeze the selected or initial default profile."""
+        from .programs import CycleProgram
+
         self.member(entity)
+        if program is not None:
+            try:
+                program = CycleProgram(program)
+            except ValueError as error:
+                raise ValueError("Choose the default or additional program") from error
         if not isinstance(request_id, str) or not 1 <= len(request_id) <= MAX_CORRELATION_LENGTH:
             raise ValueError("A stable readiness request identity is required")
         request_key = "appliance-request-" + digest([entity, request_id]) + ".json"
@@ -802,11 +881,12 @@ class ApplianceService:
             "request_id": request_id,
             "ready_at": ready_at.isoformat(),
             "deadline": deadline.isoformat(),
+            **({"program": program} if program else {}),
         }
         if self.documents.exists(request_key):
             saved = self.documents.read(request_key)
             if saved["request"] != request:
-                raise ValueError("Readiness identity reused with different times")
+                raise ValueError("Readiness identity reused with different times or program")
             return self.documents.read("appliance-task-" + saved["task_id"] + ".json")
         settings = self.state["devices"].get(entity, {})
         if not settings.get("shiftable") or not settings.get("profile"):
@@ -826,11 +906,15 @@ class ApplianceService:
         old = self.state["tasks"].get(entity)
         if old and old["status"] in OPEN_STATUSES:
             raise ValueError("This appliance already has an unresolved task")
+        additional = settings.get("additional_profile")
+        if program == CycleProgram.ADDITIONAL and not additional:
+            raise ValueError("No additional program has been learned for this appliance")
         task = {
             **request,
             "id": str(uuid4()),
             "status": "pending",
-            "profile": settings["profile"],
+            "profile": additional if program == CycleProgram.ADDITIONAL else settings["profile"],
+            **({"additional_profile": additional} if additional and program is None else {}),
             "attempt": None,
             "events": [],
             "scheduled_start": None,
@@ -881,6 +965,7 @@ class ApplianceService:
         )
 
         from .observed import work as observed_work
+        from .programs import CycleProgram
 
         problem = snapshot.problem
         self.issue = None
@@ -908,12 +993,17 @@ class ApplianceService:
                 fixed = instant(attempt.get("started_at") or attempt["start"])
                 if not attempt.get("started_at") and observed:
                     fixed = observed.fixed_start
+            detected_additional = (
+                observed
+                and not task.get("program")
+                and (run.get("program") == CycleProgram.ADDITIONAL)
+            )
             work = ApplianceWork(
                 task["id"],
                 entity,
                 instant(task["ready_at"]),
                 instant(task["deadline"]),
-                profile(task["profile"]),
+                observed.profile if detected_additional else profile(task["profile"]),
                 fixed,
             )
             starts = candidates(work, problem.intervals)

@@ -61,8 +61,20 @@ async function load() {
                 if (task.attempt) card.append(node("p", `Execution: ${optionLabel(task.attempt.status)}: Start request expires: ${when(task.attempt.expires_at)}.`));
             }
             const form = node("form"), deadline = node("input"), deadlineLabel = node("label", "Finish before (Home Assistant time)"); deadline.type = "datetime-local"; deadline.required = true; deadlineLabel.append(deadline); form.append(deadlineLabel);
+            const program = node("select"), programLabel = node("label", "Cycle profile");
+            if (device?.additional_profile) {
+                for (const [value, label, profile] of [
+                    ["", "Detect after start", null],
+                    ["default", "Default profile", device.profile],
+                    ["additional", "Additional profile", device.additional_profile],
+                ]) {
+                    const choice = node("option", profile ? `${label} (${profileMetrics(profile).minutes} min)` : label);
+                    choice.value = value; program.append(choice);
+                }
+                programLabel.append(program); form.append(programLabel);
+            }
             const submit = node("button", "Appliance is ready"); submit.disabled = !device?.shiftable || !device?.profile || Boolean(task && !["completed", "cancelled"].includes(task.status)); form.append(submit); card.append(form);
-            form.onsubmit = async (event) => { event.preventDefault(); submit.disabled = true; try { await api("v1/appliances/tasks", {entity_id: option.entity_id, request_id: identity(), ready_at: new Date().toISOString(), deadline: localInstant(deadline.value)}); await load(); } catch (error) { find("status").textContent = error.message; submit.disabled = false; } };
+            form.onsubmit = async (event) => { event.preventDefault(); submit.disabled = true; try { await api("v1/appliances/tasks", {entity_id: option.entity_id, request_id: identity(), ready_at: new Date().toISOString(), deadline: localInstant(deadline.value), ...(program.value ? {program: program.value} : {})}); await load(); } catch (error) { find("status").textContent = error.message; submit.disabled = false; } };
             if (task && !["completed", "cancelled"].includes(task.status)) {
                 const cancel = node("button", "Cancel planning"); cancel.type = "button"; cancel.className = "secondary";
                 cancel.onclick = async () => {

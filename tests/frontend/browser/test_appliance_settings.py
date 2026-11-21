@@ -1116,6 +1116,90 @@ def test_appliance_permissions_save_explicitly_and_retain_only_failed_changes(ap
     assert len(writes) == 2
 
 
+def test_additional_appliance_profile_opt_in_and_selection(app_page):
+    """Save a generic per-device opt-in and submit the explicitly selected learned profile."""
+    page, url = app_page
+    entity_id = "sensor.example_washer"
+    device = {
+        "entity_id": entity_id,
+        "shiftable": True,
+        "learning_status": "ready",
+        "profile": {"power_w": [400] * 6, "samples": 3, "evidence": "measured"},
+    }
+    state = {"revision": "one", "devices": [device]}
+    writes = []
+    page.route(
+        "**/v1/consumers?view=settings",
+        lambda route: route.fulfill(
+            json={
+                "version": "selected",
+                "thermal_meters": [],
+                "charging_meters": [],
+                "selected": [{"entity_id": entity_id, "weather_sensitive": False}],
+                "options": [
+                    {
+                        "entity_id": entity_id,
+                        "name": "Example washer",
+                        "power_entity": "sensor.example_washer_power",
+                    }
+                ],
+            }
+        ),
+    )
+    page.route("**/v1/appliances", lambda route: route.fulfill(json=state))
+
+    def save_option(route):
+        """Return a supported learned alternate after saving the opt-in."""
+        writes.append(route.request.post_data_json)
+        device.update(
+            learn_additional_profile=True,
+            additional_profile={"power_w": [800] * 12, "samples": 3, "evidence": "measured"},
+        )
+        state["revision"] = "two"
+        route.fulfill(json={"appliances": state})
+
+    page.route("**/v1/appliances/profile_options", save_option)
+
+    def submit(route):
+        """Capture the selected profile in the readiness request."""
+        writes.append(route.request.post_data_json)
+        route.fulfill(json={})
+
+    page.route("**/v1/appliances/tasks", submit)
+    page.goto(url + "/appliance-settings")
+    page.get_by_label("Installation API token", exact=True).fill(TOKEN)
+    page.get_by_role("button", name="Connect", exact=True).click()
+    option = page.get_by_role("checkbox", name="Learn one additional cycle profile")
+    expect(option).not_to_be_checked()
+    page.get_by_role("button", name="Edit appliance settings", exact=True).click()
+    option.check()
+    assert not writes
+    Path("results/ci").mkdir(parents=True, exist_ok=True)
+    width = page.viewport_size["width"]
+    page.locator("#appliance-detail").screenshot(
+        path=f"results/ci/extra-profile-settings-{width}.png"
+    )
+    page.get_by_role("button", name="Save appliance settings", exact=True).click()
+    expect(page.locator("#appliance-evidence")).to_contain_text("Additional profile: 180 minutes")
+    assert writes == [
+        {"entity_id": entity_id, "learn_additional_profile": True, "expected_version": "one"}
+    ]
+
+    page.goto(url + "/appliances")
+    page.get_by_label("Installation API token", exact=True).fill(TOKEN)
+    page.get_by_role("button", name="Connect", exact=True).click()
+    program = page.get_by_role("combobox", name="Cycle profile")
+    expect(program).to_have_value("")
+    program.select_option("additional")
+    page.get_by_label("Finish before (Home Assistant time)").fill("2026-12-01T16:00")
+    page.locator("[data-appliance-entity]").screenshot(
+        path=f"results/ci/extra-profile-planning-{width}.png"
+    )
+    with page.expect_response("**/v1/appliances/tasks"):
+        page.get_by_role("button", name="Appliance is ready", exact=True).click()
+    assert len(writes) == 2 and writes[-1]["program"] == "additional"
+
+
 def test_appliance_without_complete_cycle_cannot_submit_runnable_work(app_page):
     """A selected meter alone grants no scheduling authority. Missing profile keeps readiness disabled on desktop/mobile."""
     page, url = app_page
