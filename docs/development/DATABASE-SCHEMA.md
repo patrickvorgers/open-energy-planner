@@ -488,26 +488,22 @@ Run admissions read and return the entity/site revision snapshot inside the same
 transaction as evidence updates. Snapshot failures roll back admission. Even an
 unchanged admission refreshes the runtime snapshot from the committed evidence.
 
-Demand `daily-training-<binding>.json` contains `schema` (1), `binding`, local
-`day`, `input_version`, `reference` and boolean `complete`. It selects immutable
-`daily-models-<hash>.json` containing schema, binding and validated baseline,
-optional Ridge and optional existing weather-model parameters. Forecast
-`model_parameters` now uses `{reference: <hash>}` to shared
-`model-parameters-<hash>.json`. Existing inline parameter documents remain
-readable. Composite predictions and individual-device evidence remain inline.
+Weather `temperature-day-<query-hash>-<YYYY-MM-DD>.json` stores completed
+Celsius observations as ordered `[UTC hour, celsius, known_at]` rows. The hash
+binds the provider endpoint and normalized site query. The unique day key
+allows corrected observations to be replaced in place. Matching values and
+accepted hours omitted by a refresh keep their original knowledge time. Missing or incomplete archived
+days are requested in contiguous spans within each provider year. Live IFS manifests
+continue to hold the weather reference for issued predictions.
 
-Demand weather metadata uses `weights_reference` instead of copying `model_json`
-into each bundle or parameter body. Non-expiring demand
-`ml-weights-<hash>.json` stores `{model_json: <native JSON string>}` once. Its
-content digest and the model metadata's `model_digest` are verified before native
-loading. Inline historical native parameters remain readable. Expiry of an
-unused daily model bundle or parameter record does not remove native weights.
-Legacy demand records that still embed native JSON remain non-expiring roots.
-They keep their exact original payload instead of requiring a development-schema
-conversion. New records share weights separately.
-An unavailable optional native library omits the weather candidate while the
-validated saved baseline and Ridge remain usable. Malformed evidence still
-fails validation.
+Demand `active-training-<learner-hash>.json` contains `schema` (1), configuration
+`binding`, HA-local `day`, `input_version`, `models`, boolean `complete` and a
+`checksum` over those fields. The learner identity is the household, residual
+or a consumer source. A replacement uses the same row. The baseline and Ridge
+remain available while an optional weather candidate is evaluated. Weather
+model JSON is verified before native loading. A missing native library leaves
+the baseline and Ridge usable. Original forecast and component documents retain
+their issued steps and weather references independently of model weights.
 
 Savings `archive-retention.json` stores `stage` (`documents`, `values`,
 `complete`) and nullable lexical `after` cursor. Document backfill uses
@@ -536,8 +532,8 @@ before the worker exits and the database engine is disposed.
 | `bonus-counters` | `CounterStore`: confirmed historical counter seeds, period context and optional origin evidence. | Immutable `<version>.json` books and `<seed-digest>.origin.json` provenance. `current.json` selects a book. Scenario continuation is in settlement state. |
 | `savings-bonus-counters` | `CounterStore` via `HistoricalBonuses`: automatically derived historical bonus seeds and optional origin evidence. Confirmed planning books remain in `bonus-counters`. | Immutable `<version>.json` books and `<seed-digest>.origin.json` provenance. `current.json` selects a book of at most 64 seeds. |
 | `installation` | `InstallationStore`: Energy-bound virtual devices, limits, relations and settings. `BatteryCalibration`: measured periodic full-charge progress. | Immutable `<version>.json`. `current.json` selects settings. Mutable bounded `battery-calibration.json` stores schema 1 and per-device progress. |
-| `demand` | `DemandStore`: selected consumption sources/settings. Forecast values and fitted model parameters. | `configuration-<version>.json`, `forecast-<version>.json`. `current.json` selects configuration. |
-| `weather` | Shared live forecast runs and observed weather. | Weather manifests, immutable provider receipts and hourly value blocks. |
+| `demand` | Consumption settings, issued forecasts and current daily fits. | `configuration-<version>.json`, `forecast-<version>.json`, `active-training-<learner-hash>.json`. `current.json` selects configuration. |
+| `weather` | Shared live forecast runs, observed weather and historical training temperatures. | Live manifests, provider receipts, hourly value blocks and mutable `temperature-day-<query-hash>-<YYYY-MM-DD>.json` records. |
 | `solar` | `SolarStore`: per-source configuration, forecasts, models and solar meter history. | Content-addressed kind/version documents. Unchanged daily `block-<hash>.json` reused by manifests. `current.json` selects configuration. |
 | `prices` | `PriceStore`: normalized source series with original receipt/issue/expiry times, published/forecast flags and resolution. `DailyPrices`: calendar quarter prices and extreme selections. | Immutable `<version>.json`. `current.json` is the list of current series references. `daily-<identity>.json` retains daily spot-price evidence. No raw provider payloads or API secrets. |
 | `planning` | `StrategyStore` in `optimization/storage/__init__.py`: requested optimization strategy. `SelectionStore`: immutable forecast-decision captures/evaluations and current model preference evidence. `CalculationHistory` in `optimization/performance.py`: original calculation summaries and bounded progress observations. | `current.json` remains the strategy scalar. `model-selection.json` indexes families. `model-capture-<hash>.json` and `model-evaluation-<hash>.json` preserve content-addressed decision evidence. `calculations-YYYY-MM-DD.json` indexes summaries by UTC start date. `calculation-<id>.json` retains each full observation. |
@@ -1477,11 +1473,17 @@ Individual-consumer ownership now lives in `appliances/forecasting.py`. Cycle,
 EV and thermal services live in `appliances/cycles`, `appliances/ev` and
 `appliances/thermal`. The shared selected-device settings presentation does not add another table,
 document or index. EV inputs display kW while persisted power fields remain
-whole watts. Display conversion does not change the JSON contract. Existing demand/planning
-namespaces, pointer/archive names and payloads are unchanged. Module paths are
-not serialized. See [shared appliance structure](APPLIANCE-ARCHITECTURE.md).
+whole watts. See [shared appliance structure](APPLIANCE-ARCHITECTURE.md).
 
-`consumer-forecast-<forecast-version>.json` stores the complete composite household forecast and its `components`: source identities, per-device forecast intervals (UTC start, duration in hours, kWh), residual forecast, settings version and fitted profile/Ridge parameters. Forecasts and parameters retain their original issue/training identities. No executable estimator pickle is stored. The composite has no excluded devices because residual plus device demand is already recombined. A missing component cannot be archived as zero. Selection/evaluation references stay in the existing planning documents. History streams are transient training inputs. The archived forecasts/parameters are the evidence used for planning. All these rows join existing all-table database transfer and backup procedures automatically and must be covered by the four-backend document contracts.
+`consumer-forecast-<forecast-version>.json` stores the complete issued household
+forecast and its `components`. These include source identities, settings version,
+the residual forecast and per-device intervals with UTC start, duration in hours
+and kWh. The composite already recombines the residual and device demand, so its
+excluded-device list is empty. Missing components retain their availability state.
+Planning evidence is the original issued forecast. Replaceable model fits live in
+`active-training-<learner-hash>.json`. Selection and evaluation references remain
+in the planning documents. These rows are included in all-table database transfer,
+backup and four-backend document contracts.
 
 Ready component records expose `model_selection` with the daily policy, selected
 model ID, readiness, completed/required days, improvement thresholds, matched-day
@@ -1526,8 +1528,8 @@ do not overwrite the original archived component records.
 
 `quality-components-<household-forecast-version>.json` retains either the existing
 `{version, selected}` reference to a complete composite archive, or
-`{selected: false, components}` with the original ready-device predictions and
-fitted parameters inline when composition is incomplete. Both forms are
+`{selected: false, components}` with the original ready-device predictions
+inline when composition is incomplete. Both forms are
 immutable. Inline evidence lets historical quality views retain valid device
 forecasts independently of an unrelated meter's missing training history.
 

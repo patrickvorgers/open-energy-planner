@@ -18,6 +18,7 @@ from open_energy_planner.demand.calculation.model import (
     DemandConfiguration,
     DemandHour,
     EnergyTerm,
+    digest,
 )
 from open_energy_planner.demand.runtime import DemandRuntime
 from open_energy_planner.demand.storage import DemandStore
@@ -53,7 +54,7 @@ def fit_counts():
 
 def pointer(documents):
     """Read the only fit family's durable outcome without depending on its hash construction."""
-    pointers = list(documents.iter_prefix("daily-training-"))
+    pointers = list(documents.iter_prefix("active-training-"))
     assert len(pointers) == 1
     return pointers[0]
 
@@ -166,7 +167,7 @@ def test_configuration_or_measurement_boundary_changes_fit_immediately(
         boundary="changed" if changed == "boundary" else "original",
     )
     assert [learner.call_count for learner in fit_counts] == [2, 2, 0]
-    assert len(list(demand_store.documents.iter_prefix("daily-training-"))) == 2
+    assert len(list(demand_store.documents.iter_prefix("active-training-"))) == 1
 
 
 def test_completed_current_day_samples_are_available_but_future_labels_are_not(
@@ -231,6 +232,31 @@ def test_transient_failure_does_not_publish_or_replace_the_previous_pointer(
     assert pointer(demand_store.documents) != before
 
 
+def test_native_training_failure_keeps_new_scalar_fit_during_retry(demand_store, configuration):
+    """A baseline-only row permits a new Ridge fit when the optional weather trainer fails."""
+    short_history = samples_before(NOW, hours=7 * 24)
+    documents = demand_store.documents
+    first = daily_models(documents, configuration, short_history, NOW, weather_sensitive=True)
+    assert set(first) == {"baseline"}
+    before = pointer(documents)
+    later = NOW + timedelta(days=1)
+    samples = samples_before(later)
+    with patch.object(
+        WeatherDemandModel, "fit", side_effect=RuntimeError("Native learner unavailable")
+    ):
+        usable = daily_models(
+            documents,
+            configuration,
+            samples,
+            later,
+            temperatures=temperatures_for(samples, later),
+            weather_sensitive=True,
+        )
+    assert set(usable) == {"baseline", "ridge"}
+    assert usable["ridge"].trained_until == later
+    assert pointer(documents) == before
+
+
 @pytest.mark.parametrize("learner", [RidgeDemandModel, WeatherDemandModel])
 def test_transient_training_diagnostics_deduplicate_and_recover_without_private_payload(
     demand_store, configuration, caplog, learner
@@ -262,16 +288,15 @@ def test_transient_training_diagnostics_deduplicate_and_recover_without_private_
 def test_interrupted_publication_rolls_back_new_weights_and_pointer(
     demand_store, configuration, monkeypatch
 ):
-    """A pointer-write fault cannot leave a partly published model bundle in the active archive."""
+    """A failed write leaves the previous active models intact."""
     samples = samples_before(NOW)
     daily_models(demand_store.documents, configuration, samples, NOW)
     before = pointer(demand_store.documents)
-    bundles = list(demand_store.documents.iter_prefix("daily-models-"))
     original_write = demand_store.documents.write
 
     def interrupt(name, value):
-        """Fail only after the replacement immutable model has been prepared in its transaction."""
-        if name.startswith("daily-training-"):
+        """Interrupt publication after the candidate models have been fitted and validated."""
+        if name.startswith("active-training-"):
             raise OSError("Synthetic interrupted daily model publication")
         original_write(name, value)
 
@@ -285,21 +310,22 @@ def test_interrupted_publication_rolls_back_new_weights_and_pointer(
             next_day,
         )
     assert pointer(demand_store.documents) == before
-    assert list(demand_store.documents.iter_prefix("daily-models-")) == bundles
 
 
-def test_corrupt_pointer_fails_closed_instead_of_retraining_over_original_evidence(
+def test_future_active_fit_is_rejected_with_a_valid_checksum(
     tmp_path, demand_store, configuration, fit_counts
 ):
-    """An impossible future pointer is reported without silently replacing its archived model."""
+    """A validly checksummed future training date fails before the learner can run."""
     samples = samples_before(NOW)
     daily_models(demand_store.documents, configuration, samples, NOW)
     name = next(
-        name for name in list_documents(tmp_path, "demand") if name.startswith("daily-training-")
+        name for name in list_documents(tmp_path, "demand") if name.startswith("active-training-")
     )
     corrupt = {**demand_store.documents.read(name), "day": "2100-01-01"}
+    del corrupt["checksum"]
+    corrupt["checksum"] = digest(corrupt)
     demand_store.documents.write(name, corrupt)
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="from the future"):
         daily_models(demand_store.documents, configuration, samples, NOW)
     assert [learner.call_count for learner in fit_counts] == [1, 1, 0]
     assert demand_store.documents.read(name) == corrupt
@@ -376,7 +402,7 @@ def test_household_runtime_uses_one_daily_binding_without_weather_candidate(
     for instant in (NOW, NOW + timedelta(minutes=15)):
         assert runtime.install(runtime.build(runtime.job(instant)), instant)
     assert [learner.call_count for learner in fit_counts] == [1, 1, 0]
-    assert len(list(demand_store.documents.iter_prefix("daily-training-"))) == 1
+    assert len(list(demand_store.documents.iter_prefix("active-training-"))) == 1
     assert runtime.forecast.model == "weekday-hour-v2"
 
 

@@ -104,6 +104,7 @@ is introduced.
 flowchart LR
     HA[Home Assistant Energy and telemetry] --> Sources[Shared source membership]
     Sources --> Forecasts[Individual forecasts]
+    Weather["Shared weather service"] -->|"Live forecasts and cached training observations"| Forecasts
     Sources --> Cycles[Cycle service]
     Sources --> EV[Vehicles and charge points]
     Sources --> Thermal[Thermal stores]

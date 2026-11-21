@@ -1,8 +1,7 @@
 """Forecast Energy-owned consumers separately, retaining the total-household safety baseline."""
 
-import json
 from contextlib import contextmanager
-from dataclasses import asdict, replace
+from dataclasses import replace
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
@@ -252,11 +251,7 @@ class ConsumerForecasts:
             "history_issues": dict(self.failures),
         }
         if forecasts:
-            document["result"] = (
-                {key: value for key, value in self.result.items() if key != "model_parameters"}
-                if self.result is not None
-                else None
-            )
+            document["result"] = dict(self.result) if self.result is not None else None
         if forecasts and now is not None and (result := document["result"]) is not None:
             if "devices" in result:
                 result["devices"] = [
@@ -319,7 +314,7 @@ def build_components(
         return None, {"status": "energy_consumer_hierarchy_inconsistent", "devices": []}
     controlled_days = controlled_days or {}
     control_history_unavailable = any("*" in days for days in controlled_days.values())
-    profiles, forecasts, records, ready = [], [], [], []
+    forecasts, records, ready = [], [], []
     has_unavailable_components = False
     for item in selected:
         try:
@@ -334,6 +329,7 @@ def build_components(
                 now,
                 item["weather_sensitive"],
                 documents=documents,
+                learner=item["entity_id"],
                 grid=grid,
                 weather_version=weather_version,
                 excluded_dates=("*",)
@@ -344,7 +340,6 @@ def build_components(
             has_unavailable_components = True
         else:
             ready.append(item)
-            profiles.append((item["entity_id"], asdict(model)))
             forecasts.append(forecast)
             records.append(
                 {
@@ -368,7 +363,7 @@ def build_components(
             configuration, (*household_histories, *histories), before=now
         )
         residual_configuration = replace(configuration, exclusions=())
-        model, remaining, residual_selection, baseline_forecast = component(
+        _, remaining, residual_selection, baseline_forecast = component(
             residual_configuration,
             residual,
             temperatures,
@@ -376,6 +371,7 @@ def build_components(
             True,
             documents=documents,
             boundary=configuration.version,
+            learner="residual",
             grid=grid,
             weather_version=weather_version,
             excluded_dates=("*",)
@@ -395,12 +391,7 @@ def build_components(
             "status": "history_or_weather_not_ready",
             "detail": COMPONENT_FORECAST_UNAVAILABLE,
             "devices": records,
-            "model_parameters": json.loads(
-                json.dumps(profiles, default=lambda value: value.isoformat())
-            ),
         }
-    profiles.append(("residual", asdict(model)))
-    parameters = json.loads(json.dumps(profiles, default=lambda value: value.isoformat()))
     if has_unavailable_components and not ready:
         return None, {
             "status": "history_or_weather_not_ready",
@@ -410,7 +401,6 @@ def build_components(
             "residual_baseline": baseline,
             "residual_selection": residual_selection,
             "configuration_version": settings_version,
-            "model_parameters": parameters,
         }
     try:
         total = tuple(
@@ -428,7 +418,6 @@ def build_components(
             digest(
                 [
                     settings_version,
-                    profiles,
                     remaining.training_version,
                     [part.version for part in forecasts],
                 ]
@@ -456,14 +445,12 @@ def build_components(
             "residual_baseline": baseline,
             "residual_selection": residual_selection,
             "configuration_version": settings_version,
-            "model_parameters": parameters,
         }
     except ValueError:
         return None, {
             "status": "history_or_weather_not_ready",
             "detail": COMPONENT_FORECAST_UNAVAILABLE,
             "devices": records,
-            "model_parameters": parameters,
         }
 
 
@@ -484,6 +471,7 @@ def component(
     documents=None,
     include_weather=True,
     boundary=None,
+    learner="component",
     excluded_dates=(),
     grid=None,
     weather_version=None,
@@ -498,7 +486,8 @@ def component(
         weather_sensitive: Whether temperature features and a weather candidate apply.
         documents: Optional demand archive used for original daily comparisons.
         include_weather: Whether weather sensitivity also fits a separate weather candidate.
-        boundary: Identity of the separated measurement component.
+        boundary: Version of the separated measurement boundary.
+        learner: Stable household or consumer identity for the saved fit.
         excluded_dates: Local ISO dates of controlled use, or '*' to exclude all days.
 
     Returns:
@@ -528,6 +517,7 @@ def component(
         weather_sensitive=weather_sensitive,
         include_weather=include_weather,
         boundary=boundary,
+        learner=learner,
     )
     baseline = fitted["baseline"]
     if not baseline.residual_profile:

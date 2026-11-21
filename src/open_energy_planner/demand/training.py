@@ -15,13 +15,11 @@ from open_energy_planner.demand.calculation.forecasting import (
     features,
 )
 from open_energy_planner.demand.calculation.model import digest, quantity
-from open_energy_planner.demand.storage import resolve_native_weights, share_native_weights
 from open_energy_planner.prices.model import aware
 from open_energy_planner.runtime.diagnostics.logging import BackgroundLog
 
-DAILY_TRAINING_POLICY = "completed-hours-daily-demand-v1"
+DAILY_TRAINING_POLICY = "completed-hours-daily-demand-v2"
 MODEL_DOCUMENT_SCHEMA = 1
-MODEL_REFERENCE_LENGTH = 64
 MAX_PROFILE_CELLS = DAYS_PER_WEEK * HOURS_PER_DAY
 _LOGGER = logging.getLogger(__name__)
 _TRAINING_LOGS = WeakKeyDictionary()
@@ -108,43 +106,31 @@ def _restore(kind, body, configuration, now):
     raise ValueError("Unknown daily demand model")
 
 
-def _read(documents, pointer, binding, configuration, now):
-    """Resolve a verified current model bundle without treating corrupt state as a cache miss."""
-    if not documents.exists(pointer):
+def _read(documents, target, binding, configuration, now):
+    """Restore the latest checked fits for the learner's current configuration."""
+    try:
+        state = documents.read(target)
+    except FileNotFoundError:
         return None, {}
-    state = documents.read(pointer)
     if (
         not isinstance(state, dict)
-        or set(state) != {"schema", "binding", "day", "input_version", "reference", "complete"}
+        or set(state)
+        != {"schema", "binding", "day", "input_version", "models", "checksum", "complete"}
         or type(state["schema"]) is not int
         or state["schema"] != MODEL_DOCUMENT_SCHEMA
-        or state["binding"] != binding
         or type(state["complete"]) is not bool
+        or digest({key: value for key, value in state.items() if key != "checksum"})
+        != state["checksum"]
+        or not isinstance(state["models"], dict)
+        or "baseline" not in state["models"]
     ):
-        raise ValueError("Invalid daily demand training pointer")
-    for key in ("reference", "input_version"):
-        if (
-            not isinstance(state[key], str)
-            or len(state[key]) != MODEL_REFERENCE_LENGTH
-            or any(character not in "0123456789abcdef" for character in state[key])
-        ):
-            raise ValueError("Invalid daily demand training reference")
+        raise ValueError("Invalid active demand training checksum or schema")
+    if state["binding"] != binding:
+        return None, {}
     if date.fromisoformat(state["day"]) > now.astimezone(ZoneInfo(configuration.timezone)).date():
         raise ValueError("Daily demand training is from the future")
-    body = documents.read("daily-models-" + state["reference"] + ".json")
-    if (
-        not isinstance(body, dict)
-        or set(body) != {"schema", "binding", "models"}
-        or body["schema"] != MODEL_DOCUMENT_SCHEMA
-        or body["binding"] != binding
-        or digest(body) != state["reference"]
-        or not isinstance(body["models"], dict)
-        or "baseline" not in body["models"]
-    ):
-        raise ValueError("Invalid daily demand model archive")
     models = {}
-    for kind, parameters in body["models"].items():
-        parameters = resolve_native_weights(documents, parameters)
+    for kind, parameters in state["models"].items():
         try:
             models[kind] = _restore(kind, parameters, configuration, now)
         except (ImportError, OSError):
@@ -172,6 +158,7 @@ def daily_models(
     weather_sensitive=False,
     include_weather=True,
     boundary=None,
+    learner="household",
 ):
     """Reuse daily baseline and learned models while new weather still refreshes predictions.
 
@@ -179,7 +166,8 @@ def daily_models(
     weather received before the actual fit remains admissible. A successful fit
     freezes its input cohort for the day. Missing-history outcomes can improve
     when imports arrive. A new day with unchanged eligible data reuses the exact
-    existing coefficients. Transient fitting failures never publish a new pointer.
+    existing coefficients. Successful fits replace the learner's latest row.
+    Transient fitting failures leave that row and its usable models intact.
     """
     now = aware(now)
     local = now.astimezone(ZoneInfo(configuration.timezone))
@@ -210,9 +198,9 @@ def daily_models(
             use_weather_model,
         ]
     )
-    pointer = "daily-training-" + binding + ".json"
+    target = "active-training-" + digest(learner) + ".json"
     state, previous = (
-        _read(documents, pointer, binding, configuration, now)
+        _read(documents, target, binding, configuration, now)
         if documents is not None
         else (None, {})
     )
@@ -262,35 +250,15 @@ def daily_models(
             )
             failed = True
     if failed:
-        for kind, model in previous.items():
-            models.setdefault(kind, model)
-        return models
+        return {**previous, **models}
     if documents is not None:
-        with documents.transaction():
-            body = {
-                "schema": MODEL_DOCUMENT_SCHEMA,
-                "binding": binding,
-                "models": {
-                    kind: share_native_weights(documents, _parameters(model))
-                    for kind, model in models.items()
-                },
-            }
-            reference = digest(body)
-            target = "daily-models-" + reference + ".json"
-            if documents.exists(target):
-                if documents.read(target) != body:
-                    raise ValueError("Daily demand model archive mismatch")
-            else:
-                documents.write(target, body)
-            documents.write(
-                pointer,
-                {
-                    "schema": MODEL_DOCUMENT_SCHEMA,
-                    "binding": binding,
-                    "day": day,
-                    "input_version": input_version,
-                    "reference": reference,
-                    "complete": complete,
-                },
-            )
+        body = {
+            "schema": MODEL_DOCUMENT_SCHEMA,
+            "binding": binding,
+            "day": day,
+            "input_version": input_version,
+            "models": {kind: _parameters(model) for kind, model in models.items()},
+            "complete": complete,
+        }
+        documents.write(target, {**body, "checksum": digest(body)})
     return models

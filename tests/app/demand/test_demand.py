@@ -611,7 +611,7 @@ def test_sparse_night_history_does_not_turn_unknown_daytime_into_zero_demand():
 
 
 def test_ridge_promotion_uses_consistent_realized_solver_decisions(tmp_path):
-    """A winning Ridge model is promoted and its JSON parameters reproduce every original prediction."""
+    """A winning Ridge model is promoted while its issued prediction is kept as historical evidence."""
     store = make_store(tmp_path, DemandStore)
     store.save(config())
     runtime = DemandRuntime(store, scorer=PlanningScorer())
@@ -624,17 +624,9 @@ def test_ridge_promotion_uses_consistent_realized_solver_decisions(tmp_path):
     assert runtime.model_status == "active"
     assert runtime.forecast.model == "ridge-v2"
     assert runtime.comparison.improved
-    parameters = store.model_parameters(runtime.forecast.version)
-    restored = RidgeDemandModel(
-        timezone=parameters["timezone"],
-        coefficients=tuple(parameters["coefficients"]),
-        means=tuple(parameters["means"]),
-        scales=tuple(parameters["scales"]),
-        temperature_enabled=parameters["temperature_enabled"],
-        trained_until=datetime.fromisoformat(parameters["trained_until"]),
-        recent_kwh=parameters["recent_kwh"],
-    )
-    assert predict(config(), (), now, restored).steps == runtime.forecast.steps
+    original = store.documents.read("forecast-" + runtime.forecast.version + ".json")
+    assert set(original) == {"forecast"}
+    assert original["forecast"]["steps"][0]["kwh"] == runtime.forecast.steps[0].kwh
 
 
 def test_source_histories_commit_as_one_cohort_and_stale_requests_cannot_change_it(tmp_path):
