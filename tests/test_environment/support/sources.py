@@ -5,10 +5,9 @@ from datetime import timedelta
 from math import pi, sin
 from zoneinfo import ZoneInfo
 
-from open_energy_planner.demand.calculation.model import TemperatureHour
 from open_energy_planner.prices.model import PriceKind, PricePoint, PriceSeries
 from open_energy_planner.prices.service import PriceService
-from open_energy_planner.solar.calculation.model import SolarWeatherHour
+from open_energy_planner.weather.model import TemperatureHour, WeatherHour
 
 
 def price_rows(now):
@@ -93,7 +92,7 @@ class TestWeather:
             hour = instant.astimezone(ZoneInfo("Europe/Amsterdam")).hour + 0.5
             daylight_factor = max(0, sin((hour - 7) / 12 * pi)) if 7 <= hour <= 19 else 0
             result.append(
-                SolarWeatherHour(
+                WeatherHour(
                     instant,
                     650 * daylight_factor,
                     500 * daylight_factor,

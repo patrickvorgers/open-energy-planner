@@ -12,10 +12,14 @@ from math import ceil, isfinite, log2
 from aiohttp import ClientError, ClientResponseError, ClientSession, ClientTimeout
 
 from open_energy_planner.core.units import BYTES_PER_KIB, HOURS_PER_DAY
-from open_energy_planner.prices.model import aware
 from open_energy_planner.runtime.diagnostics.logging import BackgroundLog
-from open_energy_planner.solar.calculation.model import SolarWeatherHour, version
-from open_energy_planner.solar.forecast_weather import (
+from open_energy_planner.storage.writes import complete_write
+from open_energy_planner.weather.history_cache import (
+    NORMALIZED_WEATHER_UNITS,
+    WEATHER_NORMALIZATION_REVISION,
+    HistoricalWeatherCache,
+)
+from open_energy_planner.weather.run import (
     FORECAST_RUN_RESPONSE_HOURS,
     FORECAST_WEATHER_MODEL,
     FORECAST_WEATHER_POLICY,
@@ -24,15 +28,10 @@ from open_energy_planner.solar.forecast_weather import (
     SINGLE_RUNS_URL,
     ForecastWeatherRun,
 )
-from open_energy_planner.solar.storage.forecast_weather import ForecastWeatherCache
-from open_energy_planner.solar.storage.weather import (
-    NORMALIZED_WEATHER_UNITS,
-    WEATHER_NORMALIZATION_REVISION,
-    HistoricalWeatherCache,
-)
-from open_energy_planner.storage.writes import complete_write
+from open_energy_planner.weather.run_cache import ForecastWeatherCache
 
 from ..planning_policy import PLANNING_HORIZON_HOURS
+from .model import WeatherHour, aware, version
 
 WEATHER_READ_CHUNK_BYTES = 16384
 MAX_WEATHER_RESPONSE_BYTES = 4 * BYTES_PER_KIB * BYTES_PER_KIB
@@ -102,7 +101,7 @@ def forecast_weather_query(location, run_init):
     }
 
 
-class OpenMeteoSolarSource:
+class OpenMeteoWeatherSource:
     """Fetch current and historical original forecast runs once per site, with durable frozen caching."""
 
     def __init__(self, session, store=None, history_start=None):
@@ -514,12 +513,12 @@ class OpenMeteoSolarSource:
             )
             # Radiation is the preceding-hour mean. Temperature/wind are sampled
             # at that hour's end and used as an explicit approximation for it.
-            result.append(SolarWeatherHour(start, *irradiance, *values[3:], now))
+            result.append(WeatherHour(start, *irradiance, *values[3:], now))
         return tuple(result)
 
 
 @asynccontextmanager
-async def solar_weather_factory(store=None, history_start=None):
-    """Create one transport with optional durable historical caching in the active solar archive."""
+async def live_weather_factory(store=None, history_start=None):
+    """Create one transport with optional durable historical caching in the active weather archive."""
     async with ClientSession() as session:
-        yield OpenMeteoSolarSource(session, store, history_start)
+        yield OpenMeteoWeatherSource(session, store, history_start)

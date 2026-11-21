@@ -1,5 +1,7 @@
 """Authenticated individual forecast choices. All measurement membership belongs to HA Energy."""
 
+from datetime import UTC, datetime
+
 from aiohttp import web
 
 from open_energy_planner.appliances.forecasting import COMPOSITE_MODEL_ID, parse_selection
@@ -20,7 +22,9 @@ def register(app, demand, lock, ev, thermal):
     async def state(request):
         """Return source choices and estimated component forecasts without issuing commands."""
         async with lock:
-            document = demand.consumers.document(forecasts=view(request) != "settings")
+            document = demand.consumers.document(
+                forecasts=view(request) != "settings", now=datetime.now(UTC)
+            )
             document["charging_meters"] = sorted(
                 point["energy_entity"] for point in ev.state["points"]
             )

@@ -8,7 +8,7 @@ import pytest
 
 from open_energy_planner.forecast_quality.daily import day_window
 from open_energy_planner.forecast_quality.radiation import radiation_view
-from open_energy_planner.solar.satellite import OpenMeteoSatelliteSource
+from open_energy_planner.weather.satellite import OpenMeteoSatelliteSource
 from tests.app.demand.test_demand_weather import Response
 
 START = datetime(2026, 10, 26, tzinfo=UTC)

@@ -188,14 +188,15 @@ def model_history():
     required = {"sensor.oep_test_heat_pump_energy", "sensor.oep_test_dishwasher_energy"}
     observed = {}
 
-    def forecast_ready(forecast, model):
-        """Require actual trained prediction metadata and the complete 48-hour energy horizon."""
+    def forecast_ready(forecast, model, *, archived=False):
+        """Require trained evidence covering the planning window, or the exact live projection."""
+        duration_hours = sum(step["duration_h"] for step in forecast.get("steps", ()))
         return (
             forecast.get("model") == model
             and bool(forecast.get("training_version"))
             and datetime.fromisoformat(forecast["issued_at"]) <= datetime.now(UTC)
             and bool(forecast.get("steps"))
-            and sum(step["duration_h"] for step in forecast["steps"]) == 48
+            and (duration_hours >= 48 if archived else duration_hours == 48)
         )
 
     def trained():
@@ -222,8 +223,8 @@ def model_history():
             observed[entity] = {
                 "model": forecast.get("model"),
                 "trained": bool(forecast.get("training_version")),
-                "weather": forecast_ready(weather, "xgboost-weather-v1"),
-                "ridge": forecast_ready(alternatives.get("ridge") or {}, "ridge-v2"),
+                "weather": forecast_ready(weather, "xgboost-weather-v1", archived=True),
+                "ridge": forecast_ready(alternatives.get("ridge") or {}, "ridge-v2", archived=True),
             }
             if not (
                 record.get("status") == "collecting_forward_accuracy"

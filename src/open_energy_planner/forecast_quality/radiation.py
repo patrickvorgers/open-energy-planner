@@ -8,8 +8,8 @@ from aiohttp import ClientError
 
 from open_energy_planner.runtime.diagnostics.logging import BackgroundLog
 from open_energy_planner.solar.calculation.model import version
-from open_energy_planner.solar.satellite import HOUR, SATELLITE_LABEL, SATELLITE_MODEL
 from open_energy_planner.storage.writes import complete_write
+from open_energy_planner.weather.satellite import HOUR, SATELLITE_LABEL, SATELLITE_MODEL
 
 SATELLITE_REFRESH_MINUTES = 10
 
@@ -17,7 +17,7 @@ SATELLITE_REFRESH_MINUTES = 10
 def original_radiation(documents, forecast, start, end):
     """Resolve only hours received before issuance from the exact original weather manifest."""
     reference = forecast.get("weather_version")
-    if not reference or reference == "none":
+    if documents is None or not reference or reference == "none":
         return {}
     manifest = documents.read("weather-" + reference + ".json")
     issued = datetime.fromisoformat(forecast["issued_at"])

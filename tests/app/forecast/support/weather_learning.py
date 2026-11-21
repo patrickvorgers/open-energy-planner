@@ -6,12 +6,8 @@ from math import cos, pi, sin
 
 from open_energy_planner.appliances.weather_learning import select_weather_model
 from open_energy_planner.demand.calculation.forecasting import RidgeDemandModel, predict
-from open_energy_planner.demand.calculation.model import (
-    DemandConfiguration,
-    DemandHour,
-    EnergyTerm,
-    TemperatureHour,
-)
+from open_energy_planner.demand.calculation.model import DemandConfiguration, DemandHour, EnergyTerm
+from open_energy_planner.weather.model import TemperatureHour
 
 START = datetime(2026, 1, 1, tzinfo=UTC)
 CONFIGURATION = DemandConfiguration("UTC", 0, (EnergyTerm("sensor.heat", 1),))

@@ -16,13 +16,13 @@ from open_energy_planner.demand.calculation.model import (
     DemandHour,
     EnergyTerm,
     ExcludedLoad,
-    TemperatureHour,
 )
 from open_energy_planner.demand.evaluation import compare
 from open_energy_planner.demand.reconstruction import DemandReconstructor, ReconstructionResult
 from open_energy_planner.demand.runtime import DemandRuntime
 from open_energy_planner.demand.storage import DemandStore
 from open_energy_planner.history.model import EnergyHistory, EnergyHour
+from open_energy_planner.weather.model import TemperatureHour
 from tests.database.support.archive import corrupt_document, make_store
 
 START = datetime(2026, 1, 1, tzinfo=UTC)
@@ -556,6 +556,45 @@ def test_runtime_always_forecasts_and_keeps_unvalidated_ridge_in_shadow(tmp_path
     assert runtime.failed(runtime.job(now)[0], now)
     assert runtime.job(now + timedelta(minutes=1)) is None
     assert runtime.job(now + timedelta(minutes=6)) is not None
+
+
+def test_live_demand_reuses_the_stored_issue_across_quarters(tmp_path):
+    """A complete shared run covers moving plans until weather or the completed training day changes."""
+    from open_energy_planner.demand.basis import forecast_usable
+    from tests.database.support.archive import list_documents
+
+    store = make_store(tmp_path, DemandStore)
+    store.save(config())
+    runtime = DemandRuntime(store)
+    now = START + timedelta(hours=10)
+    temperatures = tuple(
+        TemperatureHour(now + timedelta(hours=index), 5, now) for index in range(72)
+    )
+    runtime.set_live_weather(temperatures, "a" * 64, now + timedelta(hours=6))
+    assert runtime.install(runtime.build(runtime.job(now)), now)
+    original = runtime.forecast
+    path = "forecast-" + original.version + ".json"
+    archive = store.documents.read(path)
+    assert len(original.steps) == 72 * 4
+    assert len(runtime.document(now)["forecast"]["steps"]) == 120
+    for offset in (15, 30, 45, 60, 75, 90):
+        later = now + timedelta(minutes=offset)
+        assert runtime.job(later) is None
+        assert runtime.forecast.version == original.version
+        assert runtime.forecast.freshness_at == later
+        assert forecast_usable(runtime.configuration, runtime.forecast, later)
+        visible = runtime.document(later)["forecast"]
+        assert datetime.fromisoformat(visible["steps"][0]["start"]) == later
+    assert {
+        name for name in list_documents(tmp_path, "demand") if name.startswith("forecast-")
+    } == {path}
+    assert store.documents.read(path) == archive
+
+    runtime.set_live_weather(temperatures, "b" * 64, now + timedelta(hours=6))
+    later += timedelta(minutes=15)
+    assert runtime.install(runtime.build(runtime.job(later)), later)
+    assert runtime.forecast.version != original.version
+    assert runtime.job(now + timedelta(hours=6)) is not None
 
 
 def test_sparse_night_history_does_not_turn_unknown_daytime_into_zero_demand():

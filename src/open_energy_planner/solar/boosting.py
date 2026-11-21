@@ -25,10 +25,6 @@ from open_energy_planner.solar.calculation.model import (
     number,
     version,
 )
-from open_energy_planner.solar.forecast_weather import (
-    DEFAULT_FORECAST_ORIGIN_DELAY_HOURS,
-    FORECAST_WEATHER_POLICY,
-)
 from open_energy_planner.solar.learning import (
     MIN_CALIBRATION_SAMPLES,
     TrainingExclusion,
@@ -51,6 +47,10 @@ from open_energy_planner.solar.trend import (
     assess_trend,
     estimate_trend,
     quarterly_windows,
+)
+from open_energy_planner.weather.run import (
+    DEFAULT_FORECAST_ORIGIN_DELAY_HOURS,
+    FORECAST_WEATHER_POLICY,
 )
 
 MODEL_ID = "solar-xgboost-production-v2"

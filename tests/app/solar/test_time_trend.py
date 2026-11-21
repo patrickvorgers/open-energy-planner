@@ -181,8 +181,9 @@ def test_production_fit_retains_the_selected_trend_and_does_not_tune_on_its_fina
     """The real cumulative-history fit carries its trend into archives without using final-week outcomes."""
     from open_energy_planner.history.model import EnergyHistory, EnergyHour
     from open_energy_planner.solar.boosting import SolarBoostedModel, fit_boosted_model
-    from open_energy_planner.solar.calculation.model import SolarEnergy, SolarWeatherHour
+    from open_energy_planner.solar.calculation.model import SolarEnergy
     from open_energy_planner.solar.wire import document
+    from open_energy_planner.weather.model import WeatherHour
     from tests.app.solar.support import SITE, plant
 
     start = datetime(2020, 1, 1, tzinfo=UTC)
@@ -194,7 +195,7 @@ def test_production_fit_retains_the_selected_trend_and_does_not_tune_on_its_fina
         lit = 8 <= instant.hour < 16
         years = (instant - start).total_seconds() / 86400 / 365.2425
         observations.append((instant, 0.7 * exp(-0.02 * years) if lit else 0))
-        weather.append(SolarWeatherHour(instant, 600 * lit, 500 * lit, 100 * lit, 20, 2, before))
+        weather.append(WeatherHour(instant, 600 * lit, 500 * lit, 100 * lit, 20, 2, before))
         physical.append(SolarEnergy("pv0", instant, 1, float(lit), 0.96 * lit))
 
     def fit(final_week_multiplier):

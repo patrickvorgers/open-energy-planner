@@ -3,7 +3,7 @@
 import json
 from contextlib import contextmanager
 from dataclasses import asdict, replace
-from datetime import timedelta
+from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from open_energy_planner.appliances.sources import SOURCE_OWNERSHIP_UNAVAILABLE, validate_membership
@@ -19,10 +19,11 @@ from open_energy_planner.demand.calculation.model import (
 )
 from open_energy_planner.demand.reconstruction import DemandReconstructor
 from open_energy_planner.demand.training import daily_models
-from open_energy_planner.demand.wire import forecast_document
+from open_energy_planner.demand.wire import forecast_document, forecast_window
 from open_energy_planner.history.importer import HistoryImport
 from open_energy_planner.history.storage import HistoryArchive
 from open_energy_planner.home_assistant.names import source_name
+from open_energy_planner.installation.forecast_policy import FORECAST_MAX_AGE_MINUTES
 
 CONSUMER_SETTINGS_POINTER = "consumer-settings.json"
 COMPOSITE_MODEL_ID = "consumer-composite-v1"
@@ -62,6 +63,8 @@ class ConsumerForecasts:
         self.catalogue_known = False
         self.histories, self.failures = {}, {}
         self.result = None
+        self.checked_at = None
+        self.weather_reference, self.weather_valid_until = None, None
         self.issue = None
         try:
             if documents.exists(CONSUMER_SETTINGS_POINTER):
@@ -214,8 +217,33 @@ class ConsumerForecasts:
         """Compare borrowed immutable histories without serializing a year of readings on every poll."""
         return self.version, tuple(sorted(self.histories.items()))
 
-    def document(self, *, forecasts=True):
-        """Expose configured choices, actual membership and explicitly shadow component predictions."""
+    def mark_checked(self, now, weather_reference, weather_valid_until):
+        """Attach current validity to the installed component issue without changing the archive."""
+        self.checked_at = now
+        self.weather_reference = weather_reference
+        self.weather_valid_until = weather_valid_until
+
+    def _live_document(self, forecast, now):
+        """Project a native issue onto the transport grid with the app-owned validity deadline."""
+        issued_at = datetime.fromisoformat(forecast["issued_at"])
+        valid_until = (self.checked_at or issued_at) + timedelta(minutes=FORECAST_MAX_AGE_MINUTES)
+        if self.weather_valid_until and forecast.get("weather_version") == self.weather_reference:
+            valid_until = min(valid_until, self.weather_valid_until)
+        steps = tuple(
+            ForecastStep(datetime.fromisoformat(step["start"]), step["duration_h"], step["kwh"])
+            for step in forecast["steps"]
+        )
+        return {
+            **forecast,
+            "valid_until": valid_until.isoformat(),
+            "steps": [
+                {"start": step.start.isoformat(), "duration_h": step.duration_h, "kwh": step.kwh}
+                for step in forecast_window(steps, now)
+            ],
+        }
+
+    def document(self, *, forecasts=True, now=None):
+        """Expose current choices and project live component issues when a request time is supplied."""
         document = {
             "version": self.version,
             "selected": list(self.selected),
@@ -229,6 +257,22 @@ class ConsumerForecasts:
                 if self.result is not None
                 else None
             )
+        if forecasts and now is not None and (result := document["result"]) is not None:
+            if "devices" in result:
+                result["devices"] = [
+                    {
+                        **device,
+                        **{
+                            key: self._live_document(device[key], now)
+                            for key in ("forecast", "baseline_forecast")
+                            if key in device
+                        },
+                    }
+                    for device in result["devices"]
+                ]
+            for key in ("residual", "residual_baseline"):
+                if result.get(key):
+                    result[key] = self._live_document(result[key], now)
         return document
 
 
@@ -241,6 +285,8 @@ def build_components(
     *,
     documents=None,
     controlled_days=None,
+    grid=None,
+    weather_version=None,
 ):
     """Build household demand from its remainder and ready disjoint consumers exactly once.
 
@@ -288,6 +334,8 @@ def build_components(
                 now,
                 item["weather_sensitive"],
                 documents=documents,
+                grid=grid,
+                weather_version=weather_version,
                 excluded_dates=("*",)
                 if control_history_unavailable
                 else controlled_days.get(item["entity_id"], ()),
@@ -328,6 +376,8 @@ def build_components(
             True,
             documents=documents,
             boundary=configuration.version,
+            grid=grid,
+            weather_version=weather_version,
             excluded_dates=("*",)
             if control_history_unavailable
             else sorted(
@@ -387,7 +437,14 @@ def build_components(
             COMPOSITE_MODEL_ID,
             total,
             (),
-            remaining.weather_version,
+            next(
+                (
+                    part.weather_version
+                    for part in (remaining, *forecasts)
+                    if part.weather_version == weather_version
+                ),
+                remaining.weather_version,
+            ),
             quality="estimated",
         )
         return forecast, {
@@ -428,6 +485,8 @@ def component(
     include_weather=True,
     boundary=None,
     excluded_dates=(),
+    grid=None,
+    weather_version=None,
 ):
     """Select suitable models by preserved daily accuracy, retaining a measured weekday baseline.
 
@@ -474,14 +533,26 @@ def component(
     if not baseline.residual_profile:
         raise ValueError("At least seven complete days covering every hour are required")
     models = {"baseline": baseline}
-    forecasts = {"baseline": predict(configuration, samples, now, baseline)}
+    forecasts = {
+        "baseline": predict(
+            configuration, samples, now, baseline, grid=grid, weather_version=weather_version
+        )
+    }
     weather = temperatures if weather_sensitive else ()
     for kind in ("ridge", "weather"):
         if kind not in fitted:
             continue
         try:
             candidate = fitted[kind]
-            prediction = predict(configuration, samples, now, candidate, temperatures=weather)
+            prediction = predict(
+                configuration,
+                samples,
+                now,
+                candidate,
+                temperatures=weather,
+                grid=grid,
+                weather_version=weather_version,
+            )
             models[kind], forecasts[kind] = candidate, prediction
         except (ValueError, ImportError, OSError):
             pass

@@ -49,7 +49,7 @@ def validation_route(kind, reject_validation, tmp_path, monkeypatch):
         app[NOTIFICATIONS] = SimpleNamespace(register=lambda *_arguments, **_keywords: None)
         if kind == "solar-panels":
             catalogue.validate_membership = lambda *_arguments: None
-        solar_api.register(app, service, object(), lock, None, None, None, catalogue)
+        solar_api.register(app, service, object(), lock, None, None, catalogue)
         return app, "PUT", "/v1/solar", {"sources": [], "inverters": []}, {}
     token = "synthetic-maintenance-token-0123456789"
     monkeypatch.setattr(maintenance, "check_destination", reject_validation)

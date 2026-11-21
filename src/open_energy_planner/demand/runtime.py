@@ -1,17 +1,17 @@
 """Cached demand orchestration. Expensive training runs only in an app-owned background executor."""
 
 import logging
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from datetime import UTC, datetime, timedelta
+from zoneinfo import ZoneInfo
 
-from open_energy_planner.demand.calculation.forecasting import (
-    predict,
-)
-from open_energy_planner.demand.calculation.model import digest
+from open_energy_planner.demand.calculation.forecasting import live_forecast_grid, predict
+from open_energy_planner.demand.calculation.model import digest, horizon
 from open_energy_planner.history.importer import HistoryImport
 from open_energy_planner.history.storage import HistoryArchive
 
 from ..planning_policy import FINE_INTERVAL_MINUTES
+from .basis import forecast_usable
 from .evaluation import compare, evaluation_cutoffs
 from .reconstruction import DemandReconstructor
 from .training import daily_models
@@ -33,6 +33,9 @@ class DemandRuntime:
         self.pending_histories = {}
         self.temperatures = ()
         self.weather_version = "none"
+        self.live_temperatures = ()
+        self.live_weather_version = None
+        self.live_weather_until = None
         self.forecast = self.candidate = self.baseline = None
         self.learned_preferred = False
         self.candidate_features = "time"
@@ -57,6 +60,7 @@ class DemandRuntime:
             entity: digest(asdict(history)) for entity, history in self.histories.items()
         }
         self.consumers = ConsumerForecasts(store.documents)
+        self.weather_location = None
 
     def configure(self, configuration):
         """Invalidate incompatible observations/models after a persisted measurement-definition change."""
@@ -126,10 +130,13 @@ class DemandRuntime:
         return (
             self.configuration.version,
             quarter,
+            now.astimezone(ZoneInfo(self.configuration.timezone)).date(),
             tuple(sorted(self.data_versions.items())),
             self.weather_version,
+            self.live_weather_ref(now),
             self.learned_preferred,
             self.consumers.key(),
+            self.weather_location,
         )
 
     def request(self, now):
@@ -190,13 +197,55 @@ class DemandRuntime:
 
     def weather(self, temperatures):
         """Install typed weather. Source receipt/version interpretation stays in the weather adapter."""
-        self.temperatures = tuple(temperatures)
-        self.weather_version = digest([asdict(item) for item in self.temperatures])
+        previous = {row.start: row for row in self.temperatures}
+        self.temperatures = tuple(
+            previous[row.start]
+            if row.start in previous and previous[row.start].celsius == row.celsius
+            else row
+            for row in temperatures
+        )
+        self.weather_version = digest([(row.start, row.celsius) for row in self.temperatures])
+
+    def set_weather_location(self, location):
+        """Revoke old-site predictions before planning accepts observations from a new site."""
+        if self.weather_location is not None and self.weather_location != location:
+            self.weather(())
+            self.set_live_weather((), None, None)
+            self.forecast = self.candidate = self.baseline = self.last_key = None
+            self.consumers.result = None
+        self.weather_location = location
+
+    def set_live_weather(self, temperatures, version, valid_until):
+        """Use the exact shared weather reference and its provider validity deadline."""
+        self.live_temperatures = temperatures
+        self.live_weather_version = version
+        self.live_weather_until = valid_until
+
+    def live_weather_ref(self, now):
+        """Expose the shared run while its provider validity still covers now."""
+        return (
+            self.live_weather_version
+            if self.live_weather_until and now < self.live_weather_until
+            else None
+        )
 
     def job(self, now):
         """Capture immutable worker inputs under the app lock, or skip an unchanged cached quarter."""
         key = self.key(now)
         if key is None or key == self.last_key:
+            return None
+        if self.reuse_forecast(key, now):
+            self.last_key = key
+            self.forecast = replace(
+                self.forecast,
+                checked_at=now,
+                weather_valid_until=(
+                    self.live_weather_until
+                    if self.forecast.weather_version == self.live_weather_ref(now)
+                    else self.forecast.weather_valid_until
+                ),
+            )
+            self.consumers.mark_checked(now, self.live_weather_ref(now), self.live_weather_until)
             return None
         if key == self.failed_key and self.retry_after and now < self.retry_after:
             return None
@@ -204,12 +253,42 @@ class DemandRuntime:
             key,
             self.configuration,
             tuple(self.histories.values()),
-            self.temperatures,
+            self.temperatures_for(now),
             now,
             self.learned_preferred,
             self.consumers.inputs(),
             self.candidate_features,
+            self.live_weather_ref(now),
+            self.live_weather_until,
         )
+
+    def reuse_forecast(self, key, now):
+        """Advance the live quarter only when the installed issue still covers the full horizon."""
+        previous, forecast = self.last_key, self.forecast
+        if (
+            previous is None
+            or self.scorer is not None
+            or key[0] != previous[0]
+            or key[2:] != previous[2:]
+            or not forecast_usable(self.configuration, forecast, now)
+            or not forecast.steps
+        ):
+            return False
+        grid = horizon(now)
+        end = grid[-1][0] + timedelta(hours=grid[-1][1])
+        return forecast.steps[0].start <= grid[0][0] and (
+            forecast.steps[-1].start + timedelta(hours=forecast.steps[-1].duration_h) >= end
+        )
+
+    def temperatures_for(self, now):
+        """Join historical and live evidence while preserving each hour's knowledge time."""
+        hours = {row.start: row for row in self.temperatures}
+        if self.live_weather_ref(now):
+            current_hour = now.replace(minute=0, second=0, microsecond=0)
+            hours.update(
+                (row.start, row) for row in self.live_temperatures if row.start >= current_hour
+            )
+        return tuple(hours[stamp] for stamp in sorted(hours))
 
     def failed(self, key, now):
         """Back off a current failed archive/training job. Never attach an old failure to new inputs."""
@@ -286,7 +365,11 @@ class DemandRuntime:
             learned_preferred,
             consumers,
             previous_features,
+            weather_reference,
+            weather_until,
         ) = job
+        grid = live_forecast_grid(now, temperatures) if weather_reference else None
+        projection = {"grid": grid, "weather_version": weather_reference}
         issue, comparison, daily_selection = None, None, None
         reconstruction = DemandReconstructor().analyze(configuration, histories, before=now)
         samples = reconstruction.samples
@@ -311,7 +394,9 @@ class DemandRuntime:
             ridge = fitted.get("ridge")
             if ridge is None:
                 raise ValueError("Demand model needs more completed training history")
-            candidate = predict(configuration, samples, now, ridge, temperatures=known_weather)
+            candidate = predict(
+                configuration, samples, now, ridge, temperatures=known_weather, **projection
+            )
             status = "shadow_waiting_for_decision_evidence"
             if learned_preferred:
                 selected, status = ridge, "active"
@@ -332,7 +417,7 @@ class DemandRuntime:
             if ridge is not None:
                 status = "shadow_feature_or_evaluation_coverage_missing"
         baseline_forecast = predict(
-            configuration, samples, now, baseline, temperatures=known_weather
+            configuration, samples, now, baseline, temperatures=known_weather, **projection
         )
         from open_energy_planner.appliances.forecasting import (
             build_components,
@@ -348,6 +433,7 @@ class DemandRuntime:
             consumers,
             documents=self.store.documents,
             controlled_days=controlled_days,
+            **projection,
         )
         consumer_features = "consumers:" + consumers[0]
         weather_models = tuple(
@@ -388,11 +474,16 @@ class DemandRuntime:
                     documents=self.store.documents,
                     include_weather=False,
                     excluded_dates=excluded_dates,
+                    **projection,
                 )
                 status = daily_selection["status"]
             elif self.scorer is None:
                 selected, status = baseline, "insufficient_training_history"
-            forecast = predict(configuration, samples, now, selected, temperatures=known_weather)
+            forecast = predict(
+                configuration, samples, now, selected, temperatures=known_weather, **projection
+            )
+        if weather_reference and forecast.weather_version == weather_reference:
+            forecast = replace(forecast, weather_valid_until=weather_until)
         self.store.archive(baseline_forecast, baseline)
         if not consumers[1]:
             self.store.archive(forecast, selected)
@@ -463,6 +554,7 @@ class DemandRuntime:
             self.learned_preferred = False
         self.candidate_features = features
         self.consumers.result = consumer_result
+        self.consumers.mark_checked(now, self.live_weather_ref(now), self.live_weather_until)
         quality_changed = self.history_quality != history_quality
         self.history_quality = history_quality
         if history_quality["usable_hours"] > 0:
@@ -491,8 +583,8 @@ class DemandRuntime:
         comparison = getattr(self, "comparison", None)
         return {
             "configuration": configuration_document(self.configuration),
-            "forecast": forecast_document(self.forecast),
-            "candidate": forecast_document(self.candidate),
+            "forecast": forecast_document(self.forecast, now=now),
+            "candidate": forecast_document(self.candidate, now=now),
             "ridge_status": self.model_status,
             "issue": self.issue or self.store.issue,
             "history_issues": self.history_issues.copy(),

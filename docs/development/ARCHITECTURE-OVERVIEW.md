@@ -355,11 +355,16 @@ reserve safety, numerical precision and historical evidence when optimizing.
 
 ## Find the source owner
 
+Use the [domain ownership rules](../../design/TECHNICAL-DESIGN.md#domain-ownership)
+to decide which module owns a data contract, an OEP endpoint or a provider
+adapter.
+
 | Area | Source location | Start with |
 |---|---|---|
 | Shared planning and publication | `planning.py`, `live_inputs.py`, `planning_policy.py` | [Technical design](../../design/TECHNICAL-DESIGN.md) |
 | Physical installation and commands | `installation/` | [Installation planning](INSTALLATION-PLANNING.md) |
 | Native optimization and pure models | `optimization/` | [Solver selection](../../design/SOLVER-SELECTION.md) and [independent scenarios](../../design/PLANNER-SCENARIOS.md) |
+| Live and historical weather | `weather/` | [Domain ownership](../../design/TECHNICAL-DESIGN.md#domain-ownership) |
 | Demand, solar and forecast quality | `demand/`, `solar/`, `forecast_quality/` | [Reference library](REFERENCE-INDEX.md#forecasts-planning-and-financial-interpretation) |
 | Prices, contracts and evaluated savings | `prices/`, `contracts/`, `savings/` | [Contract prices](CONTRACT-PRICES.md) and [Savings](SAVINGS.md) |
 | Appliance forecasts, cycles, EV and thermal | `appliances/` | [Shared appliance structure](APPLIANCE-ARCHITECTURE.md) |

@@ -9,13 +9,11 @@ from types import SimpleNamespace
 import pytest
 
 from open_energy_planner import app as app_module
-from open_energy_planner.demand.calculation.model import (
-    DemandConfiguration,
-    EnergyTerm,
-    TemperatureHour,
-)
+from open_energy_planner.demand.calculation.model import DemandConfiguration, EnergyTerm
 from open_energy_planner.demand.runtime import DemandRuntime
 from open_energy_planner.installation.location import SiteLocation
+from open_energy_planner.weather import service as weather_service
+from open_energy_planner.weather.model import TemperatureHour
 
 NOW = datetime(2026, 11, 3, 12, tzinfo=UTC)
 
@@ -77,13 +75,12 @@ def test_empty_temperature_evidence_waits_for_usable_recovery(
         monkeypatch.setattr(app_module, "DemandRuntime", runtime_factory)
         monkeypatch.setattr(app_module, "LiveInputs", live_factory)
         monkeypatch.setattr(
-            app_module,
+            weather_service,
             "asyncio",
             SimpleNamespace(
                 create_task=asyncio.create_task,
+                current_task=asyncio.current_task,
                 sleep=sleep,
-                Lock=asyncio.Lock,
-                Event=asyncio.Event,
                 CancelledError=asyncio.CancelledError,
             ),
         )
@@ -139,10 +136,10 @@ def test_empty_temperature_evidence_waits_for_usable_recovery(
             await lifecycle.aclose()
             await application[EVENTS].close()
 
-    with caplog.at_level(logging.DEBUG, logger=app_module.__name__):
+    with caplog.at_level(logging.DEBUG, logger=weather_service.__name__):
         asyncio.run(scenario())
     records = [
-        record for record in caplog.records if "Temperature weather refresh" in record.message
+        record for record in caplog.records if "Historical temperature refresh" in record.message
     ]
     assert [record.levelno for record in records] == (
         [logging.WARNING, logging.DEBUG]

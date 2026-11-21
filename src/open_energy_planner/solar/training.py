@@ -6,6 +6,8 @@ from importlib.metadata import version as distribution_version
 from re import fullmatch
 from zoneinfo import ZoneInfo
 
+from open_energy_planner.weather.run import FORECAST_WEATHER_POLICY
+
 from .boosting import (
     MODEL_ID,
     TRAINING_POLICY,
@@ -15,7 +17,6 @@ from .boosting import (
     TrainingSummary,
 )
 from .calculation.model import version
-from .forecast_weather import FORECAST_WEATHER_POLICY
 from .wire import document
 
 RETRYABLE_TRAINING = frozenset(

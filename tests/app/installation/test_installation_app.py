@@ -345,7 +345,7 @@ def test_live_bootstrap_builds_complete_plan_from_settings_forecasts_prices_and_
                 source="home_assistant",
                 solver=Solver(),
                 price_factory=prices,
-                solar_weather_factory=fixture_weather,
+                live_weather_factory=fixture_weather,
             )
         )
         await runner.setup()

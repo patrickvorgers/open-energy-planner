@@ -16,10 +16,6 @@ from open_energy_planner.planning_policy import PLANNING_HORIZON_HOURS
 from open_energy_planner.prices.model import aware
 from open_energy_planner.solar.calculation.model import version
 from open_energy_planner.solar.curtailment import archive_feedback
-from open_energy_planner.solar.forecast_weather import (
-    FORECAST_WEATHER_MODEL,
-    FORECAST_WEATHER_POLICY,
-)
 from open_energy_planner.solar.learning import (
     ac_comparison_issue,
     learning_interval,
@@ -27,6 +23,10 @@ from open_energy_planner.solar.learning import (
     unrestricted_interval,
 )
 from open_energy_planner.solar.model_policy import MIN_ABSOLUTE_GAIN_KWH, MIN_RELATIVE_GAIN
+from open_energy_planner.weather.run import (
+    FORECAST_WEATHER_MODEL,
+    FORECAST_WEATHER_POLICY,
+)
 
 BACKTEST_POLICY = "four-weekly-frozen-ifs-dual-origin-48h-ac-clipping-v2"
 BACKTEST_RUN_COUNT = 4
