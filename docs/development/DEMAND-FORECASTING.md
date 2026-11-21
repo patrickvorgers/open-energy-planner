@@ -40,6 +40,8 @@ samples. Household lookups share the same baseline/Ridge policy.
 | ML candidate | `ridge-v2`: standardized linear regression with L2 regularization, fixed alpha 10, unpenalized intercept |
 | Numerical runtime | Existing pinned NumPy. Augmented least squares using `numpy.linalg.lstsq`, no new dependency or user compilation |
 | Weather | Shared live ECMWF IFS run for the HA location, plus an independent historical temperature input |
+| Planning | Existing HiGHS/highspy and independent plan validation. Forecasts do not control physical devices |
+| Verification | pytest, actual HA Recorder/API tests and app browser tests, Ruff and the existing complete Linux/Playwright CI |
 
 ## Live weather and forecast reuse
 
@@ -58,8 +60,6 @@ or writing another forecast archive. A changed input, a new local training day,
 expired weather or insufficient window coverage triggers the existing worker.
 Device forecasts have the same live admission check. Appliance planning clips
 them to its coverage while preserving their native interval boundaries.
-| Planning | Existing HiGHS/highspy and independent plan validation. Forecasts do not control physical devices |
-| Verification | pytest, actual HA Recorder/API tests and app browser tests, Ruff and the existing complete Linux/Playwright CI |
 
 Ridge has 16 calendar/recent-load features, or 19 when complete temperature data
 is usable. Features are local daily sine/cosine harmonics, weekday indicators,
