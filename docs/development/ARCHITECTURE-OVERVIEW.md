@@ -57,6 +57,203 @@ flowchart LR
     style EXECUTION fill:#ecf8f3,stroke:#237558,color:#173a30
 ```
 
+## Internal module and data flows
+
+Follow **Live planning inputs** from the input diagrams into the planning round
+and **Published plan** from planning to execution and evaluation. Boxes name the
+responsible module or service. Arrows show the direction of data and decisions.
+App paths are relative to `src/open_energy_planner/`.
+
+- [Home Assistant source discovery and measurements](#home-assistant-source-discovery-and-measurements)
+- [Weather, forecasts and learning](#weather-forecasts-and-learning)
+- [Market prices and contract rates](#market-prices-and-contract-rates)
+- [Consumption and controllable equipment](#consumption-and-controllable-equipment)
+- [Planning, validation and publication](#planning-validation-and-publication)
+- [Home Assistant execution and feedback](#home-assistant-execution-and-feedback)
+- [Historical evaluation, storage and the web UI](#historical-evaluation-storage-and-the-web-ui)
+
+### Home Assistant source discovery and measurements
+
+```mermaid
+flowchart TD
+    accTitle: Home Assistant source and measurement flow
+    accDescr: The HA integration sends source membership, live observations and bounded historical batches to separate app owners. Installation configuration binds sources and gives them a planning role.
+    ENERGY["HA Energy and entity registry<br/>Membership, meter identities and location"] --> HA["HA coordinator.py<br/>Synchronize the catalogue, observations and history"]
+    STATES["HA entity states<br/>Power, battery SoC and equipment state"] --> HA
+    RECORDER["HA Recorder<br/>Statistics and supported raw histories"] --> HA
+    HA -->|Catalogue| CATALOGUE["home_assistant/setup_catalogue.py<br/>Admit and expose available sources"]
+    HA -->|Current timestamped observations| OBS["home_assistant/observations.py and live_inputs.py<br/>Validate observations against the configured sources"]
+    HA -->|History batches| HIST["Domain importers<br/>Normalize and store measured series by source"]
+    CATALOGUE --> CONFIG["installation/<br/>Bind meters and configure topology and limits"]
+    CONFIG --> OBS
+    OBS --> LIVE["Live planning inputs"]
+    HIST --> DOWNSTREAM["Forecast learning, appliance cycles<br/>and historical evaluation"]
+```
+
+Home Assistant owns source membership. The app owns the planning role of each
+source and its electrical constraints. The integration reads Recorder through
+HA, then passes normalized data to the app. Missing measurements remain unknown.
+See [measurement contracts](HA-MEASUREMENT-SOURCES.md) and
+[installation planning](INSTALLATION-PLANNING.md).
+
+### Weather, forecasts and learning
+
+```mermaid
+flowchart TD
+    accTitle: Weather and forecast module flow
+    accDescr: Separate solar and temperature adapters feed forecast services. Histories train models, daily comparison can influence future selection, and selected forecasts go to planning.
+    LOCATION["HA site location"] --> SOLARWX
+    LOCATION --> TEMPWX
+    METEO["Open-Meteo"] --> SOLARWX["solar/weather.py and solar/forecast_weather.py<br/>Normalize live weather and historical forecast runs"]
+    METEO --> TEMPWX["demand/weather.py<br/>Normalize historical and forecast temperature"]
+    SOLARWX --> PV["solar/<br/>Physics and learned PV candidates per source"]
+    HAFC["HA solar forecast adapters"] --> PV
+    TEMPWX --> LOAD["demand/ and appliances/<br/>Household and selected consumer forecasts"]
+    METERS["Measured PV, household<br/>and consumer history"] --> TRAIN["Solar and demand training<br/>Fit and retain candidate model evidence"]
+    SOLARWX -->|Historical weather and runs| TRAIN
+    TEMPWX -->|Temperature history| TRAIN
+    TRAIN --> PV
+    TRAIN --> LOAD
+    PV -->|Selected PV forecast| LIVE["Live planning inputs"]
+    LOAD -->|Selected demand forecast| LIVE
+    PV --> QUALITY["Forecast Quality and model selection<br/>Frozen forecasts matched to measurements"]
+    LOAD --> QUALITY
+    METERS --> QUALITY
+    QUALITY --> PREFS["Preferences for future PV<br/>and demand forecasts"]
+```
+
+Solar uses irradiance, temperature and wind for PV. Demand shares temperature
+inputs with its consumer forecasts and can use calendar profiles without weather.
+Historical weather and meter readings support training. Forecast Quality
+compares preserved predictions with later measurements. Model selection applies
+its own chronological decision policy before changing future preferences.
+See [solar](SOLAR-FORECASTING.md), [demand](DEMAND-FORECASTING.md) and
+[model selection](MODEL-SELECTION.md).
+
+### Market prices and contract rates
+
+```mermaid
+flowchart TD
+    accTitle: Market prices and contract rate assembly
+    accDescr: Price adapters normalize published prices and predictions. The price service selects usable coverage and the contract layer applies supplier rules before planning.
+    PUBLISHED["Published day-ahead prices<br/>Nord Pool or eligible HA source"] --> ADAPTERS["prices/adapters/<br/>Validate units, intervals and provenance"]
+    PREDICTED["Configured market forecast providers"] --> ADAPTERS
+    ADAPTERS --> MARKET["prices/service.py<br/>Cache source data and assemble contiguous spot prices"]
+    PREF["prices/selection.py<br/>Evaluate forecasts and set daily preferences"] --> MARKET
+    MARKET -->|Selected version, native resolution and coverage| CONTRACT["contracts/<br/>Build effective import and export rates"]
+    TERMS["Contract configuration<br/>Market area, supplier rules, taxes and bonuses"] --> CONTRACT
+    CONTRACT -->|Effective buy and sell rates| LIVE["Live planning inputs"]
+    MARKET -->|Source status and original market values| READ["Price API and plan evidence"]
+```
+
+Published prices take precedence over forecast prices where they overlap. The
+first gap ends usable coverage. Contract rules translate market prices into the
+rates the solver uses. A new fetch with unchanged price content and usable
+coverage does not by itself require replanning.
+See [price inputs](PRICE-INPUTS.md) and [contract prices](CONTRACT-PRICES.md).
+
+### Consumption and controllable equipment
+
+```mermaid
+flowchart TD
+    accTitle: From consumption and equipment evidence to planning inputs
+    accDescr: A household forecast and optional component forecasts feed installation planning. Cycles, EV and thermal modules prepare their own device inputs, with controls gated separately from forecasts.
+    BASE["demand/<br/>Household baseline and selected consumer components"] --> BASIS["installation/ and live_inputs.py<br/>Compose residual load, device inputs and topology"]
+    HISTORY["Device history and live evidence"] --> CYCLES["appliances/cycles/<br/>Cycle profiles, task windows and execution state"]
+    HISTORY --> EV["appliances/ev/<br/>Charging demand, session state and readiness"]
+    HISTORY --> THERMAL["appliances/thermal/<br/>Thermal demand, model and eligible flexibility"]
+    CYCLES -->|Profiles and eligible tasks| BASIS
+    EV -->|Forecast or eligible charging constraints| BASIS
+    THERMAL -->|Forecast or eligible thermal constraints| BASIS
+    ASSETS["Installation configuration<br/>Grid, inverter, PV and battery limits"] --> BASIS
+    RULES["User permissions and device settings"] --> CYCLES
+    RULES --> EV
+    RULES --> THERMAL
+    BASIS --> LIVE["Live planning inputs"]
+```
+
+The installation basis keeps modeled device demand and residual household load
+consistent. Separately modeled consumption must have compatible source ownership
+and coverage before replacing part of the baseline. The appliance modules own
+their readiness and task rules. Forecast inclusion alone grants no control.
+See [appliance architecture](APPLIANCE-ARCHITECTURE.md) and
+[installation planning](INSTALLATION-PLANNING.md).
+
+### Planning, validation and publication
+
+```mermaid
+flowchart TD
+    accTitle: Planning round, independent validation and publication
+    accDescr: Live inputs produce a coherent snapshot. A coordinator serializes planning rounds, a worker solves the problem, and independent validation and publication checks guard the plan.
+    LIVE["Live planning inputs"] --> SNAPSHOT["live_inputs.py<br/>Build the problem and freeze its input snapshot"]
+    SNAPSHOT --> QUEUE["PlanningCoordinator<br/>Schedule rounds and coalesce updates"]
+    QUEUE --> SERVICE["PlanningService<br/>Calculate a candidate using the snapshot"]
+    SERVICE --> SOLVE["optimization/adapters/process/<br/>Solve in the isolated native HiGHS worker"]
+    SOLVE --> CHECK["installation/validation.py<br/>Recompute balances, limits and financial results"]
+    CHECK -->|Valid candidate| MAP["CommandMapper<br/>Build the complete command document"]
+    MAP --> PUBLISH["PlanningCoordinator and app publication<br/>Check validity, archive and expose the plan"]
+    PUBLISH --> PLAN["Published plan"]
+    CHECK -->|Rejected candidate| STATUS["Planning status and diagnostics<br/>Readiness, activity and notification reasons"]
+    PUBLISH -->|Expired or invalidated basis| STATUS
+```
+
+Ordinary incoming updates are coalesced into the next round while a valid round
+can finish. Hard invalidation and expiry can prevent publication. Failure to
+publish never extends a previous command's validity. See
+[installation planning](INSTALLATION-PLANNING.md) and the
+[technical design](../../design/TECHNICAL-DESIGN.md).
+
+### Home Assistant execution and feedback
+
+```mermaid
+flowchart TD
+    accTitle: Plan synchronization and feedback in Home Assistant
+    accDescr: The HA integration checks received plans locally and exposes current virtual commands. User automations control equipment, and execution feedback returns over synchronization.
+    PLAN["Published plan<br/>App snapshot API"] --> SYNC["HA coordinator.py<br/>Synchronize and acknowledge a complete plan"]
+    SYNC --> SCHEDULE["HA local schedule and validity<br/>Select the applicable interval or withdraw commands"]
+    SCHEDULE --> ENTITIES["Virtual devices and entities<br/>Expose current proposals and status"]
+    ENTITIES --> AUTOMATION["User-owned HA automations<br/>Translate proposals into device actions"]
+    AUTOMATION --> EQUIPMENT["Physical equipment<br/>Apply local control and safeguards"]
+    EQUIPMENT --> EVIDENCE["HA states, Recorder and execution feedback"]
+    EVIDENCE -->|Observations and supported feedback| SYNC
+    SYNC -->|Measurements and execution state| LIVE["App admission and live planning inputs"]
+```
+
+The integration checks local validity independently of the app. Expiry and
+pause withdraw virtual commands. A receipt proves delivery. Measurements,
+claims and execution feedback provide separate evidence of device behavior.
+See [virtual devices](VIRTUAL-DEVICES.md).
+
+### Historical evaluation, storage and the web UI
+
+```mermaid
+flowchart TD
+    accTitle: Plan archives, historical evaluation and web UI
+    accDescr: Published plans, configuration and measurements are durable. Forecast Quality and Savings read preserved evidence and expose different comparisons through the app APIs.
+    PLAN["Published plan<br/>Original inputs, forecasts, rates and decisions"] --> ARCHIVE[("Shared app SQLAlchemy storage<br/>Plans, configuration, model versions and measurements")]
+    HISTORY["HA historical measurements and source bindings"] --> ARCHIVE
+    REFS["Forecast services<br/>Forecast references available at local midnight"] --> QUALITY["forecast_quality/<br/>Freeze the daily baseline and compare with actuals"]
+    ARCHIVE -->|Forecast archives, measurements and plan activations| QUALITY
+    SAT["Open-Meteo satellite irradiance"] --> QUALITY
+    QUALITY -->|Chronological comparison evidence| PREFS["forecast_selection/<br/>Model preferences for future forecasts"]
+    ARCHIVE --> SAVINGS["savings/<br/>Measured operation versus the reference"]
+    ARCHIVE --> READ["Authenticated app APIs<br/>Settings, current state, archives and diagnostic status"]
+    QUALITY --> READ
+    SAVINGS --> READ
+    READ --> UI["web/pages/ and web/public/<br/>Planning, Forecast Quality, Savings and settings"]
+    UI -->|Validated configuration mutations through API| SETTINGS["Domain configuration owners"]
+    SETTINGS --> LIVE["Live planning inputs"]
+```
+
+Forecast Quality captures the original forecast for the local day independently
+of solver runs and compares it with matched measurements. Satellite irradiance
+supplies separate weather context. Savings compares settled measured operation
+with its reference. The shared database also retains the frozen daily baseline,
+measurement evidence and settings changes. `app.py` composes these services and their authenticated
+routes. See [plan archive](PLAN-ARCHIVE.md),
+[Forecast Quality](FORECAST-QUALITY.md), [Savings](SAVINGS.md) and
+[database ownership](DATABASE-SCHEMA.md).
+
 ## Follow data through the system
 
 | Stage | Owner | Boundary to preserve |
