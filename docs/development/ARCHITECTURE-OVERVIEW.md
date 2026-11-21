@@ -101,32 +101,30 @@ See [measurement contracts](HA-MEASUREMENT-SOURCES.md) and
 ```mermaid
 flowchart TD
     accTitle: Weather and forecast module flow
-    accDescr: Separate solar and temperature adapters feed forecast services. Histories train models, daily comparison can influence future selection, and selected forecasts go to planning.
-    LOCATION["HA site location"] --> SOLARWX
-    LOCATION --> TEMPWX
-    METEO["Open-Meteo"] --> SOLARWX["solar/weather.py and solar/forecast_weather.py<br/>Normalize live weather and historical forecast runs"]
-    METEO --> TEMPWX["demand/weather.py<br/>Normalize historical and forecast temperature"]
-    SOLARWX --> PV["solar/<br/>Physics and learned PV candidates per source"]
+    accDescr: The weather module owns one shared live provider run and separate historical evidence. Solar and demand build forecasts, historical training fits models, and Forecast Quality uses the original weather evidence.
+    LOCATION["HA site location"] --> WEATHER
+    METEO["Open-Meteo"] --> WEATHER["weather/<br/>Validate, version and archive provider data"]
+    WEATHER --> LIVE_RUN["One live IFS run<br/>Weather version and expiry"]
+    WEATHER --> HISTORY["Historical weather<br/>Completed observations and original forecast runs"]
+    LIVE_RUN -->|Irradiance, temperature and wind| PV["solar/<br/>Build and select PV forecasts per source"]
     HAFC["HA solar forecast adapters"] --> PV
-    TEMPWX --> LOAD["demand/ and appliances/<br/>Household and selected consumer forecasts"]
-    METERS["Measured PV, household<br/>and consumer history"] --> TRAIN["Solar and demand training<br/>Fit and retain candidate model evidence"]
-    SOLARWX -->|Historical weather and runs| TRAIN
-    TEMPWX -->|Temperature history| TRAIN
-    TRAIN --> PV
-    TRAIN --> LOAD
+    LIVE_RUN -->|Forecast temperature| LOAD["demand/ and appliances/<br/>Build household and consumer forecasts"]
+    HISTORY -->|Historical weather and runs| TRAIN["Solar and demand training<br/>Fit models against measured energy"]
+    METERS["Measured energy history"] --> TRAIN
+    TRAIN -->|PV candidates| PV
+    TRAIN -->|Demand candidates| LOAD
     PV -->|Selected PV forecast| LIVE["Live planning inputs"]
     LOAD -->|Selected demand forecast| LIVE
-    PV --> QUALITY["Forecast Quality and model selection<br/>Frozen forecasts matched to measurements"]
-    LOAD --> QUALITY
-    METERS --> QUALITY
-    QUALITY --> PREFS["Preferences for future PV<br/>and demand forecasts"]
+    WEATHER -->|Exact run evidence and satellite adapter| QUALITY["Forecast Quality<br/>Weather context for frozen forecasts"]
 ```
 
-Solar uses irradiance, temperature and wind for PV. Demand shares temperature
-inputs with its consumer forecasts and can use calendar profiles without weather.
-Historical weather and meter readings support training. Forecast Quality
-compares preserved predictions with later measurements. Model selection applies
-its own chronological decision policy before changing future preferences.
+The app shares one accepted live run for the site, including when demand uses
+weather and no PV is configured. Historical training uses completed observation
+hours and, for PV backtests, original provider forecast runs. Domain modules own
+their models and forecast selection. Demand can fall back to calendar profiles.
+An eligible demand issue is reused as the planner advances within its compatible
+quarter-hour coverage. A weather-backed issue retains its original weather
+reference and uses that run's deadline for live admission.
 See [solar](SOLAR-FORECASTING.md), [demand](DEMAND-FORECASTING.md) and
 [model selection](MODEL-SELECTION.md).
 
@@ -176,6 +174,8 @@ The installation basis keeps modeled device demand and residual household load
 consistent. Separately modeled consumption must have compatible source ownership
 and coverage before replacing part of the baseline. The appliance modules own
 their readiness and task rules. Forecast inclusion alone grants no control.
+Cycle scheduling clips the demand series to its window while preserving the
+source quarter-hour boundaries within that window.
 See [appliance architecture](APPLIANCE-ARCHITECTURE.md) and
 [installation planning](INSTALLATION-PLANNING.md).
 
@@ -234,7 +234,8 @@ flowchart TD
     HISTORY["HA historical measurements and source bindings"] --> ARCHIVE
     REFS["Forecast services<br/>Forecast references available at local midnight"] --> QUALITY["forecast_quality/<br/>Freeze the daily baseline and compare with actuals"]
     ARCHIVE -->|Forecast archives, measurements and plan activations| QUALITY
-    SAT["Open-Meteo satellite irradiance"] --> QUALITY
+    WX["weather/ archive<br/>Original issued irradiance by weather version"] --> QUALITY
+    SAT["weather/satellite.py<br/>Independent satellite irradiance"] --> QUALITY
     QUALITY -->|Chronological comparison evidence| PREFS["forecast_selection/<br/>Model preferences for future forecasts"]
     ARCHIVE --> SAVINGS["savings/<br/>Measured operation versus the reference"]
     ARCHIVE --> READ["Authenticated app APIs<br/>Settings, current state, archives and diagnostic status"]
@@ -246,8 +247,9 @@ flowchart TD
 ```
 
 Forecast Quality captures the original forecast for the local day independently
-of solver runs and compares it with matched measurements. Satellite irradiance
-supplies separate weather context. Savings compares settled measured operation
+of solver runs and compares it with matched measurements. Its weather view
+resolves forecast irradiance from the original weather reference and shows
+satellite irradiance separately. Savings compares settled measured operation
 with its reference. The shared database also retains the frozen daily baseline,
 measurement evidence and settings changes. `app.py` composes these services and their authenticated
 routes. See [plan archive](PLAN-ARCHIVE.md),
