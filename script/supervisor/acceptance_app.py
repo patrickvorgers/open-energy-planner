@@ -5,8 +5,8 @@ from contextlib import asynccontextmanager
 
 
 @asynccontextmanager
-async def temperature_factory(history_start=None):
-    """Accept the history callback while retaining the fixed offline weather fixture."""
+async def temperature_factory(documents=None, history_start=None):
+    """Accept the production history dependencies and supply fixed offline temperatures."""
     from acceptance_sources import TestTemperatures
 
     yield TestTemperatures()

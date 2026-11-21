@@ -10,7 +10,7 @@ import pytest
 from open_energy_planner.appliances.forecasting import component
 from open_energy_planner.demand.calculation.model import DemandConfiguration, DemandHour, EnergyTerm
 from open_energy_planner.weather import history as weather
-from open_energy_planner.weather import provider, satellite
+from open_energy_planner.weather import provider, satellite, service
 from script.release import package_ha_app
 from script.release.package_ha_app import package
 from script.runtime import ha_app
@@ -61,7 +61,7 @@ def test_acceptance_live_weather_covers_solar_and_demand_without_network(monkeyp
 
 
 def test_acceptance_bootstrap_serves_after_default_weather_lifecycle(tmp_path, monkeypatch):
-    """The real HA bootstrap and app lifecycle accept the default weather history callback."""
+    """A cold HA bootstrap serves setup after binding fixture factories to app-owned dependencies."""
     from aiohttp.test_utils import TestClient, TestServer
 
     from open_energy_planner.runtime import entrypoint
@@ -96,6 +96,9 @@ def test_acceptance_bootstrap_serves_after_default_weather_lifecycle(tmp_path, m
     monkeypatch.setattr(provider, "live_weather_factory", provider.live_weather_factory)
     monkeypatch.setattr(satellite, "satellite_factory", satellite.satellite_factory)
     monkeypatch.setattr(weather, "weather_factory", weather.weather_factory)
+    # A cold start imports the weather service after installing the fixtures.
+    monkeypatch.setattr(service, "default_history_factory", acceptance_app.temperature_factory)
+    monkeypatch.setattr(service, "live_weather_factory", acceptance_app.live_weather_factory)
     monkeypatch.setattr(sys, "argv", list(sys.argv))
     acceptance_app.main()
 
