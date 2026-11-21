@@ -713,10 +713,10 @@ def test_captured_weather_service_is_archived_with_old_forecast_rows_despite_a_l
     runtime.set_weather(SITE, original_weather, service=original_service)
     monkeypatch.setattr(runtime, "_learned_candidates", lambda *_arguments, **_options: {})
 
-    def candidate(configuration, location, weather, issued_at, _models):
+    def candidate(configuration, location, weather, issued_at, _models, *, grid):
         """Supply a distinct deterministic candidate only to exercise its independent archive projection."""
         return replace(
-            PVWattsPredictor().forecast(configuration, location, weather, issued_at),
+            PVWattsPredictor().forecast(configuration, location, weather, issued_at, grid=grid),
             model="solar-xgboost-production-v2",
             quality="shadow",
         )

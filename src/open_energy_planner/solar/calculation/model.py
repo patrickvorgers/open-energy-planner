@@ -4,6 +4,7 @@ import hashlib
 import json
 import re
 from dataclasses import asdict, dataclass
+from dataclasses import field as dataclass_field
 from datetime import UTC, datetime
 from enum import StrEnum
 from functools import cached_property
@@ -330,11 +331,19 @@ class SolarForecast:
     quality: str = "provisional"
     calibration_versions: tuple[str, ...] = ()
     valid_until: datetime | None = None
+    checked_at: datetime | None = dataclass_field(default=None, compare=False)
+
+    @property
+    def freshness_at(self):
+        """Use runtime validation time without changing archived issuance."""
+        return self.checked_at if self.checked_at is not None else self.issued_at
 
     @cached_property
     def version(self):
-        """Identify the archived prediction without recomputing historical plans."""
-        return version(asdict(self))
+        """Identify immutable forecast values and provenance independently of live validation."""
+        body = asdict(self)
+        del body["checked_at"]
+        return version(body)
 
 
 def horizon(now):

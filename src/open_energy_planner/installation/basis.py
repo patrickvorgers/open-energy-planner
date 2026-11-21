@@ -191,7 +191,7 @@ class InstallationBasisSource:
         )
         deadline = min(
             load.issued_at + timedelta(minutes=FORECAST_MAX_AGE_MINUTES),
-            pv.issued_at + timedelta(minutes=FORECAST_MAX_AGE_MINUTES)
+            pv.freshness_at + timedelta(minutes=FORECAST_MAX_AGE_MINUTES)
             if rows
             else load.issued_at + timedelta(minutes=FORECAST_MAX_AGE_MINUTES),
         )

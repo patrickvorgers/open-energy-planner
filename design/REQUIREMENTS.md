@@ -184,7 +184,10 @@ Open: incompatible meaning/unit migrations. Reference detection cannot guarantee
 - FORE-06: Use the same Home Assistant local-day comparison principle for energy forecasts. Preserve original predictions, assess matching measured intervals and report energy volume and timing errors. Controlled operation cannot establish spontaneous-use accuracy. A lower forecast error does not prove a lower financial cost.
 - FORE-07: Archive PV/demand forecasts from installation as received/used, separately from realization. Keep original provider forecasts and local corrections.
 - FORE-08: Distinguish receipt time from provider issue time. Verify the latter's availability per source.
+
 - FORE-09: Mark missing data and curtailment. Curtailed PV must not be learned blindly as available production.
+
+A rolling planning window can reference the same issued solar forecast while the input set is unchanged and the stored series still covers that window. Successful live checks may update admission freshness without rewriting the issue. Material changes to weather, source availability, settings or model evidence create a new issue. Keep the candidate set and its original timestamps available for historical comparison.
 - FORE-10: Automate fetching, normalization and model selection. No required complex panel/ML input.
 
 ### Individual consumption devices: confirmed next increment
