@@ -82,8 +82,8 @@ def index_rows(engine):
         ]
 
 
-def test_daily_models_and_shared_parameters_restore_without_source_or_fitting(route, monkeypatch):
-    """Every backend route restores actual baseline, Ridge and weather fits and shared forecast parameters."""
+def test_active_daily_models_and_forecasts_restore_without_source_or_fitting(route, monkeypatch):
+    """Every backend route restores active daily fits and issued forecasts independently."""
     (source, target), root = route
     repository = SqlPlanRepository(root / "source", engine=source)
     store = DemandStore(SqlDocuments(source, "demand"))
@@ -99,10 +99,11 @@ def test_daily_models_and_shared_parameters_restore_without_source_or_fitting(ro
         kind: predict(configuration, samples, NOW, fitted[kind], temperatures=weather)
         for kind in ("baseline", "ridge")
     }
-    for kind, forecast in forecasts.items():
-        store.archive(forecast, fitted[kind])
-    parameters = {
-        kind: store.model_parameters(forecast.version) for kind, forecast in forecasts.items()
+    for forecast in forecasts.values():
+        store.archive(forecast)
+    originals = {
+        kind: store.documents.read("forecast-" + forecast.version + ".json")
+        for kind, forecast in forecasts.items()
     }
     migrate_archive(source, target, overwrite_target=True)
     repository.close()
@@ -124,7 +125,10 @@ def test_daily_models_and_shared_parameters_restore_without_source_or_fitting(ro
         )
         assert restored == fitted
         for kind, forecast in forecasts.items():
-            assert restored_store.model_parameters(forecast.version) == parameters[kind]
+            assert (
+                restored_store.documents.read("forecast-" + forecast.version + ".json")
+                == originals[kind]
+            )
             assert (
                 predict(configuration, samples, NOW, restored[kind], temperatures=weather)
                 == forecast

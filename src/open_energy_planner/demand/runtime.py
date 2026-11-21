@@ -473,6 +473,7 @@ class DemandRuntime:
                     True,
                     documents=self.store.documents,
                     include_weather=False,
+                    learner="household",
                     excluded_dates=excluded_dates,
                     **projection,
                 )
@@ -484,11 +485,11 @@ class DemandRuntime:
             )
         if weather_reference and forecast.weather_version == weather_reference:
             forecast = replace(forecast, weather_valid_until=weather_until)
-        self.store.archive(baseline_forecast, baseline)
+        self.store.archive(baseline_forecast)
         if not consumers[1]:
-            self.store.archive(forecast, selected)
+            self.store.archive(forecast)
         if candidate is not None and not consumers[1]:
-            self.store.archive(candidate, ridge)
+            self.store.archive(candidate)
         candidates_path = "quality-candidates-" + forecast.version + ".json"
         if not self.store.documents.exists(candidates_path):
             self.store.documents.write(

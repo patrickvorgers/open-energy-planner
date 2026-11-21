@@ -53,7 +53,7 @@ def fit_counts():
 
 def pointer(documents):
     """Read the only fit family's durable outcome without depending on its hash construction."""
-    pointers = list(documents.iter_prefix("daily-training-"))
+    pointers = list(documents.iter_prefix("active-training-"))
     assert len(pointers) == 1
     return pointers[0]
 
@@ -166,7 +166,7 @@ def test_configuration_or_measurement_boundary_changes_fit_immediately(
         boundary="changed" if changed == "boundary" else "original",
     )
     assert [learner.call_count for learner in fit_counts] == [2, 2, 0]
-    assert len(list(demand_store.documents.iter_prefix("daily-training-"))) == 2
+    assert len(list(demand_store.documents.iter_prefix("active-training-"))) == 1
 
 
 def test_completed_current_day_samples_are_available_but_future_labels_are_not(
@@ -262,16 +262,15 @@ def test_transient_training_diagnostics_deduplicate_and_recover_without_private_
 def test_interrupted_publication_rolls_back_new_weights_and_pointer(
     demand_store, configuration, monkeypatch
 ):
-    """A pointer-write fault cannot leave a partly published model bundle in the active archive."""
+    """A failed write leaves the previous active models intact."""
     samples = samples_before(NOW)
     daily_models(demand_store.documents, configuration, samples, NOW)
     before = pointer(demand_store.documents)
-    bundles = list(demand_store.documents.iter_prefix("daily-models-"))
     original_write = demand_store.documents.write
 
     def interrupt(name, value):
-        """Fail only after the replacement immutable model has been prepared in its transaction."""
-        if name.startswith("daily-training-"):
+        """Interrupt publication after the candidate models have been fitted and validated."""
+        if name.startswith("active-training-"):
             raise OSError("Synthetic interrupted daily model publication")
         original_write(name, value)
 
@@ -285,7 +284,6 @@ def test_interrupted_publication_rolls_back_new_weights_and_pointer(
             next_day,
         )
     assert pointer(demand_store.documents) == before
-    assert list(demand_store.documents.iter_prefix("daily-models-")) == bundles
 
 
 def test_corrupt_pointer_fails_closed_instead_of_retraining_over_original_evidence(
@@ -295,7 +293,7 @@ def test_corrupt_pointer_fails_closed_instead_of_retraining_over_original_eviden
     samples = samples_before(NOW)
     daily_models(demand_store.documents, configuration, samples, NOW)
     name = next(
-        name for name in list_documents(tmp_path, "demand") if name.startswith("daily-training-")
+        name for name in list_documents(tmp_path, "demand") if name.startswith("active-training-")
     )
     corrupt = {**demand_store.documents.read(name), "day": "2100-01-01"}
     demand_store.documents.write(name, corrupt)
@@ -376,7 +374,7 @@ def test_household_runtime_uses_one_daily_binding_without_weather_candidate(
     for instant in (NOW, NOW + timedelta(minutes=15)):
         assert runtime.install(runtime.build(runtime.job(instant)), instant)
     assert [learner.call_count for learner in fit_counts] == [1, 1, 0]
-    assert len(list(demand_store.documents.iter_prefix("daily-training-"))) == 1
+    assert len(list(demand_store.documents.iter_prefix("active-training-"))) == 1
     assert runtime.forecast.model == "weekday-hour-v2"
 
 

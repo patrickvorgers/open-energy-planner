@@ -818,7 +818,6 @@ def test_refinement_retains_original_household_and_component_archives(archive, s
     from types import SimpleNamespace
 
     from open_energy_planner.demand.basis import DemandEvidence
-    from open_energy_planner.demand.calculation.forecasting import WeekdayProfile
     from open_energy_planner.demand.calculation.model import DemandForecast, ForecastStep
     from open_energy_planner.demand.storage import DemandStore
     from open_energy_planner.demand.wire import forecast_document
@@ -852,7 +851,7 @@ def test_refinement_retains_original_household_and_component_archives(archive, s
     residual = replace(forecast, steps=tuple(replace(step, kwh=0.075) for step in forecast.steps))
     tasks.consumers.result = {"devices": [device], "residual_baseline": forecast_document(residual)}
     store = DemandStore(archive.documents)
-    store.archive(forecast, WeekdayProfile(8760, "UTC", ((0, 0, 1),), 1))
+    store.archive(forecast)
     archive.documents.write(
         "configuration-house-definition.json",
         {"terms": [{"entity_id": "sensor.house", "sign": 1}], "exclusions": []},
@@ -1147,7 +1146,7 @@ def test_original_component_reference_is_immutable_and_per_source_active_model_i
         composite = SimpleNamespace(version="same-issue")
         store.archive_components(household, composite)
         store.archive_components(household, composite)
-        with pytest.raises(ValueError, match="reference changed"):
+        with pytest.raises(ValueError, match="archive differs"):
             store.archive_components(household, SimpleNamespace(version="later-issue"))
         assert store.documents.read("quality-components-household.json") == {
             "version": "same-issue",

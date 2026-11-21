@@ -409,9 +409,7 @@ def test_short_device_history_retains_independent_forecasts_and_unmodelled_load(
     )
     assert [record["entity_id"] for record in result["devices"]] == [ready_id]
     assert result["devices"][0]["status"] == "forward_archive_required"
-    parameters = dict(json.loads(json.dumps(result["model_parameters"], allow_nan=False)))
-    assert set(parameters) == {ready_id, "residual"}
-    assert parameters[ready_id] and parameters["residual"]
+    assert "model_parameters" not in result
     measured = result["devices"][0]["baseline_forecast"]["steps"]
     remaining = result["residual_baseline"]["steps"]
     assert len(measured) == len(remaining) > 0
@@ -437,7 +435,7 @@ def test_short_device_history_retains_independent_forecasts_and_unmodelled_load(
     assert original_components["devices"][0]["forecast"] == json.loads(
         json.dumps(result["devices"][0]["forecast"])
     )
-    assert original_components["model_parameters"]
+    assert "model_parameters" not in original_components
     assert store.documents.exists("consumer-forecast-" + runtime.forecast.version + ".json")
     runtime.consumers.histories[ready_id] = channel(ready_id, [0.4] * hours)
     later = now + timedelta(minutes=15)
@@ -469,9 +467,7 @@ def test_invalid_residual_retains_valid_device_records_without_enabling_replacem
     )
     assert [record["entity_id"] for record in result["devices"]] == ["sensor.heat"]
     assert result["devices"][0]["status"] == "forward_archive_required"
-    parameters = dict(json.loads(json.dumps(result["model_parameters"], allow_nan=False)))
-    assert set(parameters) == {"sensor.heat"}
-    assert parameters["sensor.heat"]
+    assert "model_parameters" not in result
     assert result["devices"][0]["baseline_forecast"]["steps"]
     assert "residual" not in result and "residual_baseline" not in result
 
@@ -582,13 +578,6 @@ def test_empty_household_boundary_retains_readiness_status(tmp_path):
         replace(config(), terms=()), (), (), START + timedelta(days=35), consumers.inputs()
     )
     assert forecast is None and result["status"] == "household_boundary_missing"
-    consumers.result = {
-        "status": "fixture",
-        "model_parameters": {"private": "coefficients"},
-        "devices": [],
-    }
-    assert "model_parameters" not in consumers.document()["result"]
-    assert consumers.result["model_parameters"] == {"private": "coefficients"}
 
 
 def test_missing_weather_uses_explicit_historical_component_fallback(tmp_path):

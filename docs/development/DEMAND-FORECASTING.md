@@ -18,17 +18,16 @@ fault takes precedence, and recovery dismisses the history notification.
 `daily_models` separates baseline/Ridge and existing device weather-model fitting
 from prediction refreshes. Completed hourly outcomes and then-known historical
 temperatures define the training cohort. A successful fit is frozen for the HA
-local date and survives restart through validated immutable bundles. Unchanged
-cohorts reuse exact parameters on later dates. Changed configuration/boundaries
-bind a new model. Incomplete cohorts retry when inputs change. Failed or
-insufficient new fits retain usable same-binding models. Household training
-keeps its existing baseline/Ridge candidates without adding a weather XGBoost
-candidate. Forecasts share parameter documents while preserving original component
-predictions. See the [archive contracts](DATABASE-SCHEMA.md#oep_document_metadata)
-for reference-safe 30-day expiry and protected historical dependencies.
-Native weather weights are shared in non-expiring archives. Failure to load the
-optional native runtime preserves scalar candidates. A retained household model
-can still forecast when current history loses coverage. Component separation
+local date and survives restart in one validated, replaceable record per
+household, residual or consumer. Unchanged cohorts reuse their parameters on
+later dates. Changed configuration binds a new fit in the same record.
+Incomplete cohorts retry when inputs change. Failed or insufficient training
+retains usable same-binding fits. Household training keeps its baseline and
+Ridge candidates. The optional native weather candidate is used for individual
+consumers. Failure to load the native runtime preserves scalar candidates.
+Forecast archives retain the original values and weather reference after the
+model is replaced. See the [archive contracts](DATABASE-SCHEMA.md#oep_documents).
+A retained household model can still forecast when current history loses coverage. Component separation
 continues to require current measured coverage, and scoring requires current
 samples. Household lookups share the same baseline/Ridge policy.
 
@@ -49,8 +48,10 @@ The independent weather service supplies the same retained Open-Meteo ECMWF
 IFS run to solar and demand, including installations without PV. Demand reads
 its hourly temperatures and records the shared weather reference when a model
 uses them. The service supplies completed historical temperature hours for
-training with their original knowledge times. Solar and demand own their
-models and their predictions.
+training with their original knowledge times. All demand learners share the
+same durable days for the site. The weather service fetches missing or incomplete
+archive days together and replaces refreshed recent days in place. Solar and demand
+own their models and their predictions.
 
 For a complete live run, demand stores predictions at native quarter resolution
 through its contiguous usable coverage. Planning and the current demand API

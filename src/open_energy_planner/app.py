@@ -649,6 +649,7 @@ def create_app(
         live,
         lock,
         weather_factory,
+        weather_store.documents,
         oldest_demand_history,
         lambda: demand.configuration is not None,
         demand.weather,

@@ -282,13 +282,21 @@ def register(
 
 
 def register_history(
-    app, live, lock, weather_factory, oldest_history, needs_history, receive_history, poll_seconds
+    app,
+    live,
+    lock,
+    weather_factory,
+    documents,
+    oldest_history,
+    needs_history,
+    receive_history,
+    poll_seconds,
 ):
     """Supply completed historical temperature hours to training independently of live forecasts."""
     if weather_factory is None or live is None:
         return
     if weather_factory is default_history_factory:
-        weather_factory = partial(weather_factory, history_start=oldest_history)
+        weather_factory = partial(weather_factory, documents, history_start=oldest_history)
     events = app[EVENTS]
 
     async def weather_lifecycle(_app):

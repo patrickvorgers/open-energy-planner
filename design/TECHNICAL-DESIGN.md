@@ -181,8 +181,9 @@ flowchart LR
     subgraph APP["Local EMS app/container"]
         API["Authenticated HTTP/JSON API"]
         CF["Installation configuration and input validation"]
-        SRC["Replaceable external adapters"]
-        ML["Local PV/demand forecasting"]
+        SRC["Market-price adapters"]
+        WEATHER["Weather service: live IFS and historical observations"]
+        ML["Local PV and demand forecasting"]
         CO["Coordinator: snapshots and replanning"]
         PL["Contracts, planning and independent validation"]
         SO["Worker: modular model classes, highspy, HiGHS"]
@@ -193,7 +194,9 @@ flowchart LR
         API --> CF
         CF --> CO
         CF -->|"HA history and installation"| ML
-        SRC --> ML
+        WEATHER -->|"Live weather and shared training observations"| ML
+        WEATHER <-->|"Weather runs and daily training cache"| ST
+        ML <-->|"Current demand fits and issued forecasts"| ST
         SRC --> CO
         ML --> CO
         CO --> PL
@@ -210,7 +213,7 @@ flowchart LR
     end
     PG[("External PostgreSQL, MariaDB or MySQL")]
     ST <-->|"Alternative to SQLite: one active backend"| PG
-    W --> SRC
+    W --> WEATHER
     M --> SRC
     F --> SRC
     SY -->|"Sources, measurements, history, requests, receipts"| API
@@ -368,7 +371,12 @@ For example, `weather` fetches and stores live forecasts, historical weather
 and satellite irradiance. It supplies that data to solar, demand, training
 and Forecast Quality. `solar` and `demand` own their models and energy
 predictions. Forecast Quality compares the original predictions and later
-observations.
+observations. Historical temperatures used for consumption training are cached
+by provider, location and UTC day. The weather service loads cached days in batches,
+fetches missing archive days together and replaces recent observations in place.
+Unchanged observations keep their original knowledge time. All demand learners
+consume the same observations. The live IFS reference still identifies the run
+used to issue a prediction.
 
 ### Current model composition inside the highspy adapter
 
@@ -884,11 +892,15 @@ SQL document transactions commit versions and current pointers together. The app
 owns one engine, borrowed by all stores and source-selection workers. Authenticated
 history reads never reactivate or reoptimize old plans.
 
-Model fitting is independent of live forecast issuance. Solar and household/device
-demand persist source-bound daily training pointers and immutable model bundles.
-Successful fits are reused within the HA local date and across dates without new
-eligible inputs. Weather refreshes update predictions. Failed/incomplete fits
-retain usable same-binding models. Forecasts reference shared fitted parameters.
+Model fitting is independent of live forecast issuance. Solar keeps its own
+source-bound training evidence. Demand keeps a single replaceable fit record per
+household, residual or selected consumer. It holds the current predictor and the
+fallback or challenger fits used by the existing quality comparison. Successful
+fits are reused within the HA local date and across dates without new eligible
+inputs. Weather refreshes update predictions with the current fit. Failed or
+incomplete training retains usable same-binding fits. Original demand forecasts
+keep the exact issued values, model label and weather reference after a fit is
+replaced.
 Transactional document metadata and incoming-reference indexes support bounded
 30-day expiry of unused forecast/diagnostic families. Legacy index initialization
 gives old documents a new grace period. Retained plan values, daily quality
@@ -1604,8 +1616,8 @@ measured residual. Their absence withholds the composite challenger, but does
 not erase ready component records or a valid residual baseline needed for
 controlled-load replacement. Incomplete or inconsistent residual evidence still
 withholds control through the existing boundary checks.
-Ready records retain individual status and fitted parameters. The demand store
-freezes partial component evidence inline in the existing immutable household
+Ready records retain individual status and the issued predictions. The demand
+store freezes partial component evidence inline in the existing immutable household
 quality binding. The quality reader accepts that form independently of a
 complete composite archive. Current selection status never rewrites the original
 component evidence.

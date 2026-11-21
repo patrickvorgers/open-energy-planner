@@ -101,18 +101,18 @@ See [measurement contracts](HA-MEASUREMENT-SOURCES.md) and
 ```mermaid
 flowchart TD
     accTitle: Weather and forecast module flow
-    accDescr: The weather module owns one shared live provider run and separate historical evidence. Solar and demand build forecasts, historical training fits models, and Forecast Quality uses the original weather evidence.
+    accDescr: The weather module shares one live provider run and caches daily training temperatures. Solar and demand build forecasts from current models. Forecast Quality uses the originally issued values and weather evidence.
     LOCATION["HA site location"] --> WEATHER
     METEO["Open-Meteo"] --> WEATHER["weather/<br/>Validate, version and archive provider data"]
     WEATHER --> LIVE_RUN["One live IFS run<br/>Weather version and expiry"]
-    WEATHER --> HISTORY["Historical weather<br/>Completed observations and original forecast runs"]
+    WEATHER --> HISTORY["Historical weather<br/>Cached temperature days and original forecast runs"]
     LIVE_RUN -->|Irradiance, temperature and wind| PV["solar/<br/>Build and select PV forecasts per source"]
     HAFC["HA solar forecast adapters"] --> PV
     LIVE_RUN -->|Forecast temperature| LOAD["demand/ and appliances/<br/>Build household and consumer forecasts"]
     HISTORY -->|Historical weather and runs| TRAIN["Solar and demand training<br/>Fit models against measured energy"]
     METERS["Measured energy history"] --> TRAIN
     TRAIN -->|PV candidates| PV
-    TRAIN -->|Demand candidates| LOAD
+    TRAIN -->|Current demand fit per learner| LOAD
     PV -->|Selected PV forecast| LIVE["Live planning inputs"]
     LOAD -->|Selected demand forecast| LIVE
     WEATHER -->|Exact run evidence and satellite adapter| QUALITY["Forecast Quality<br/>Weather context for frozen forecasts"]
@@ -120,8 +120,10 @@ flowchart TD
 
 The app shares one accepted live run for the site, including when demand uses
 weather and no PV is configured. Historical training uses completed observation
-hours and, for PV backtests, original provider forecast runs. Domain modules own
-their models and forecast selection. Demand can fall back to calendar profiles.
+hours and, for PV backtests, original provider forecast runs. Demand learners
+share cached temperature days for the site. Each learner replaces its stored fit
+after validated training. The demand archive keeps the original forecast values
+and weather reference. Demand can fall back to calendar profiles.
 An eligible demand issue is reused as the planner advances within its compatible
 quarter-hour coverage. A weather-backed issue retains its original weather
 reference and uses that run's deadline for live admission.
