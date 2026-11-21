@@ -10,10 +10,11 @@ import pytest
 
 from open_energy_planner.history.model import EnergyHistory, EnergyHour
 from open_energy_planner.solar.boosting import SolarBoostedModel, fit_boosted_model
-from open_energy_planner.solar.calculation.model import SolarEnergy, SolarWeatherHour
+from open_energy_planner.solar.calculation.model import SolarEnergy
 from open_energy_planner.solar.curtailment import CurtailmentHistory
 from open_energy_planner.solar.trend import YieldTrend
 from open_energy_planner.solar.wire import document
+from open_energy_planner.weather.model import WeatherHour
 from tests.app.solar.boosting_support import runtime_case
 from tests.app.solar.support import SITE, plant
 
@@ -26,7 +27,7 @@ def test_trend_archive_replays_hourly_and_quarterly_forecasts_after_restart():
     trend = YieldTrend(-0.01, before - timedelta(days=365))
     changed = replace(result.model, time_trend=trend)
     restored = SolarBoostedModel.restore(document(changed))
-    weather = (SolarWeatherHour(before + timedelta(hours=12), 600, 500, 100, 20, 2, before),)
+    weather = (WeatherHour(before + timedelta(hours=12), 600, 500, 100, 20, 2, before),)
     for duration, offset in ((1, 0), (0.25, 15)):
         plain = result.model.predict(
             weather, SITE, known_at=before, duration_h=duration, offset_minutes=offset
@@ -81,7 +82,7 @@ def training_data(*, constant=None, corrupt=False, reverse_validation=False):
         total += actual
         readings.append(EnergyHour(instant, total, total % 20))
         physical.append(SolarEnergy("pv0", instant, 1, float(daylight), 0.96 * daylight))
-        weather.append(SolarWeatherHour(instant, 600, 500, 100, 20, 2, end))
+        weather.append(WeatherHour(instant, 600, 500, 100, 20, 2, end))
     return EnergyHistory("sensor.pv0", tuple(readings)), tuple(physical), tuple(weather), end
 
 
@@ -161,7 +162,7 @@ def test_direct_production_pattern_beats_physics_and_replays_json():
     physical = tuple(
         SolarEnergy("pv0", before + timedelta(hours=hour), 1, 1, 0.96) for hour in (9, 14)
     )
-    weather = tuple(SolarWeatherHour(row.start, 600, 500, 100, 20, 2, before) for row in physical)
+    weather = tuple(WeatherHour(row.start, 600, 500, 100, 20, 2, before) for row in physical)
     restored = SolarBoostedModel.restore(document(result.model))
     predicted = restored.predict(weather, SITE, known_at=before)
     assert predicted[physical[0].start] == pytest.approx(0.24, abs=0.06)
@@ -210,7 +211,7 @@ def test_model_and_weather_cannot_be_backdated_before_they_were_known():
     """Historical target cutoff cannot disguise a later model choice or a later weather receipt."""
     result, _history, _physical, _weather, before = fit_case()
     physical = (SolarEnergy("pv0", before + timedelta(hours=9), 1, 1, 0.96),)
-    weather = (SolarWeatherHour(physical[0].start, 600, 500, 100, 20, 2, before),)
+    weather = (WeatherHour(physical[0].start, 600, 500, 100, 20, 2, before),)
     with pytest.raises(ValueError, match="created after prediction"):
         result.model.predict(weather, SITE, known_at=before - timedelta(seconds=1))
     future_receipt = (replace(weather[0], received_at=before + timedelta(seconds=1)),)
@@ -402,7 +403,7 @@ def test_native_prediction_retains_zero_night_and_independent_energy_units():
     """Midnight stays zero while afternoon output is measured kWh rather than a physical ratio."""
     result, *_rest, before = fit_case()
     conditions = tuple(
-        SolarWeatherHour(before + timedelta(hours=hour), 600, 500, 100, 20, 2, before)
+        WeatherHour(before + timedelta(hours=hour), 600, 500, 100, 20, 2, before)
         for hour in (0, 9, 14)
     )
     predicted = result.model.predict(conditions, SITE, known_at=before)
@@ -415,7 +416,7 @@ def test_direct_prediction_respects_physical_power_cap_and_quarter_energy_units(
     """A 0.2 kW physical cap allows at most 0.05 kWh in a quarter without consulting PVWatts."""
     result, *_rest, before = fit_case()
     bounded = replace(result.model, max_power_kw=0.2)
-    conditions = (SolarWeatherHour(before + timedelta(hours=14), 600, 500, 100, 20, 2, before),)
+    conditions = (WeatherHour(before + timedelta(hours=14), 600, 500, 100, 20, 2, before),)
     hourly = bounded.predict(conditions, SITE, known_at=before)
     quarter = bounded.predict(conditions, SITE, known_at=before, duration_h=0.25)
     assert hourly[conditions[0].start] == pytest.approx(0.2)
@@ -513,7 +514,7 @@ def test_physical_prediction_changes_do_not_change_native_weights_or_predictions
     assert original.model.model_json == changed.model.model_json
     assert original.summary.baseline_mae_kwh != changed.summary.baseline_mae_kwh
     future = tuple(
-        SolarWeatherHour(before + timedelta(hours=hour), 600, 500, 100, 20, 2, before)
+        WeatherHour(before + timedelta(hours=hour), 600, 500, 100, 20, 2, before)
         for hour in (9, 14)
     )
     assert original.model.predict(future, SITE, known_at=before) == changed.model.predict(
@@ -528,7 +529,7 @@ def test_valid_yield_above_the_old_factor_ceiling_remains_learnable():
     result, _history, _physical, _weather, before = fit_case(constant=2.4)
     assert result.summary.excluded_counts.get("production_out_of_range", 0) == 0
     assert result.model is not None
-    conditions = (SolarWeatherHour(before + timedelta(hours=14), 600, 500, 100, 20, 2, before),)
+    conditions = (WeatherHour(before + timedelta(hours=14), 600, 500, 100, 20, 2, before),)
     prediction = result.model.predict(conditions, SITE, known_at=before)
     assert prediction[conditions[0].start] == pytest.approx(2.304, abs=0.1)
 
@@ -948,7 +949,7 @@ def test_repeated_multiyear_fits_reuse_history_geometry_without_prediction_evict
     assert computed == [(179200, 52, 6)]
     for day in range(12):
         instant = before + timedelta(days=day, hours=12)
-        conditions = (SolarWeatherHour(instant, 600, 500, 100, 20, 2, before),)
+        conditions = (WeatherHour(instant, 600, 500, 100, 20, 2, before),)
         assert first.model.predict(
             conditions, SITE, known_at=before, duration_h=0.25, offset_minutes=15
         )

@@ -13,10 +13,10 @@ import pytest
 from aiohttp import ClientResponseError
 
 from open_energy_planner.solar.calculation.model import version
-from open_energy_planner.solar.forecast_weather import ForecastWeatherRun
 from open_energy_planner.solar.storage import SolarStore
-from open_energy_planner.solar.storage.forecast_weather import ForecastWeatherCache
-from open_energy_planner.solar.weather import OpenMeteoSolarSource, forecast_weather_query
+from open_energy_planner.weather.provider import OpenMeteoWeatherSource, forecast_weather_query
+from open_energy_planner.weather.run import ForecastWeatherRun
+from open_energy_planner.weather.run_cache import ForecastWeatherCache
 from tests.app.demand.test_demand_weather import Response
 from tests.app.solar.support import SITE
 from tests.database.support.archive import list_documents, make_store
@@ -87,7 +87,7 @@ def snapshot(store, path):
 def test_fixed_run_query_and_normalization_keep_init_origin_retrieval_and_unknown_publication_separate():
     """A public original IFS request yields 95 normalized hours and a simulated origin without fictitious availability."""
     session = FrozenRunSession()
-    run = asyncio.run(OpenMeteoSolarSource(session).read_run(SITE, INITIALIZED, None, RECEIVED))
+    run = asyncio.run(OpenMeteoWeatherSource(session).read_run(SITE, INITIALIZED, None, RECEIVED))
     assert len(session.calls) == 1
     url, options = session.calls[0]
     assert url == "https://single-runs-api.open-meteo.com/v1/forecast"
@@ -122,12 +122,12 @@ def test_cache_restart_and_multiple_origins_reuse_frozen_values_without_any_http
     store = make_store(tmp_path, SolarStore)
     first_session = FrozenRunSession()
     first = asyncio.run(
-        OpenMeteoSolarSource(first_session, store).read_run(SITE, INITIALIZED, None, RECEIVED)
+        OpenMeteoWeatherSource(first_session, store).read_run(SITE, INITIALIZED, None, RECEIVED)
     )
     saved = snapshot(store, tmp_path)
     restarted_store = make_store(tmp_path, SolarStore)
     failing_session = FrozenRunSession("failure")
-    restarted = OpenMeteoSolarSource(failing_session, restarted_store)
+    restarted = OpenMeteoWeatherSource(failing_session, restarted_store)
     for origin in (INITIALIZED, INITIALIZED + timedelta(days=1), INITIALIZED + timedelta(hours=30)):
         run = asyncio.run(
             restarted.read_run(SITE, INITIALIZED, origin, RECEIVED + timedelta(days=1))
@@ -145,7 +145,7 @@ def test_cache_restart_and_multiple_origins_reuse_frozen_values_without_any_http
 def test_site_model_run_and_query_normalization_are_separate_cache_identities(tmp_path):
     """A neighboring site, another initialization or altered model/units cannot reuse the retained request."""
     store = make_store(tmp_path, SolarStore)
-    source = OpenMeteoSolarSource(FrozenRunSession(), store)
+    source = OpenMeteoWeatherSource(FrozenRunSession(), store)
     original = asyncio.run(source.read_run(SITE, INITIALIZED, None, RECEIVED))
     cache = ForecastWeatherCache(store)
     query = forecast_weather_query(SITE, INITIALIZED)
@@ -164,7 +164,7 @@ def test_site_model_run_and_query_normalization_are_separate_cache_identities(tm
     assert cache.read(forecast_weather_query(SITE, INITIALIZED + timedelta(hours=6))) is None
     different_site_session = FrozenRunSession()
     different_site = asyncio.run(
-        OpenMeteoSolarSource(different_site_session, store).read_run(
+        OpenMeteoWeatherSource(different_site_session, store).read_run(
             replace(SITE, longitude=SITE.longitude + 1), INITIALIZED, None, RECEIVED
         )
     )
@@ -191,7 +191,7 @@ def test_failed_or_partial_required_horizon_cannot_install_a_cache_pointer(tmp_p
     before = snapshot(store, tmp_path)
     with pytest.raises((ValueError, OSError)):
         asyncio.run(
-            OpenMeteoSolarSource(FrozenRunSession(damage), store).read_run(
+            OpenMeteoWeatherSource(FrozenRunSession(damage), store).read_run(
                 SITE, INITIALIZED, None, RECEIVED
             )
         )
@@ -205,7 +205,7 @@ def test_a_gap_beyond_the_required_window_preserves_usable_forecast_without_fals
     store = make_store(tmp_path, SolarStore)
     session = FrozenRunSession("late_gap")
     run = asyncio.run(
-        OpenMeteoSolarSource(session, store).read_run(SITE, INITIALIZED, INITIALIZED, RECEIVED)
+        OpenMeteoWeatherSource(session, store).read_run(SITE, INITIALIZED, INITIALIZED, RECEIVED)
     )
     starts = {row.start for row in run.hours}
     assert all(INITIALIZED + timedelta(hours=index) in starts for index in range(49))
@@ -222,7 +222,9 @@ def test_retained_corruption_is_preserved_and_cannot_trigger_http_replacement(tm
     """A damaged active run fails closed before transport and retains the exact damaged original evidence."""
     store = make_store(tmp_path, SolarStore)
     asyncio.run(
-        OpenMeteoSolarSource(FrozenRunSession(), store).read_run(SITE, INITIALIZED, None, RECEIVED)
+        OpenMeteoWeatherSource(FrozenRunSession(), store).read_run(
+            SITE, INITIALIZED, None, RECEIVED
+        )
     )
     documents = snapshot(store, tmp_path)
     prefixes = {
@@ -240,7 +242,7 @@ def test_retained_corruption_is_preserved_and_cannot_trigger_http_replacement(tm
     session = FrozenRunSession()
     with pytest.raises(ValueError):
         asyncio.run(
-            OpenMeteoSolarSource(session, make_store(tmp_path, SolarStore)).read_run(
+            OpenMeteoWeatherSource(session, make_store(tmp_path, SolarStore)).read_run(
                 SITE, INITIALIZED, None, RECEIVED + timedelta(days=1)
             )
         )
@@ -252,7 +254,9 @@ def test_repeated_receipt_keeps_the_first_clock_and_changed_frozen_values_are_re
     """Identical redownloads reuse the first receipt while changed provider values cannot replace a frozen run."""
     store = make_store(tmp_path, SolarStore)
     run = asyncio.run(
-        OpenMeteoSolarSource(FrozenRunSession(), store).read_run(SITE, INITIALIZED, None, RECEIVED)
+        OpenMeteoWeatherSource(FrozenRunSession(), store).read_run(
+            SITE, INITIALIZED, None, RECEIVED
+        )
     )
     cache, query = ForecastWeatherCache(store), forecast_weather_query(SITE, INITIALIZED)
     later = RECEIVED + timedelta(days=1)
@@ -270,7 +274,9 @@ def test_repeated_receipt_keeps_the_first_clock_and_changed_frozen_values_are_re
 def test_typed_run_validates_both_simulation_lags_and_actual_publication_constraints():
     """Required boundary coverage is independent of simulation origin and publication must remain truthful."""
     run = asyncio.run(
-        OpenMeteoSolarSource(FrozenRunSession()).read_run(SITE, INITIALIZED, INITIALIZED, RECEIVED)
+        OpenMeteoWeatherSource(FrozenRunSession()).read_run(
+            SITE, INITIALIZED, INITIALIZED, RECEIVED
+        )
     )
     assert isinstance(run, ForecastWeatherRun)
     assert replace(run, forecast_origin=INITIALIZED + timedelta(hours=24)).hours == run.hours
@@ -314,7 +320,7 @@ def test_current_forecast_uses_actual_latest_publication_without_aging_or_backda
     """Current forecasts use the exact published run at the current hour and retain cached original receipt times."""
     store = make_store(tmp_path, SolarStore)
     session = LatestRunSession()
-    source = OpenMeteoSolarSource(session, store)
+    source = OpenMeteoWeatherSource(session, store)
     now = INITIALIZED + timedelta(hours=8, minutes=15)
     first = asyncio.run(source.read(SITE, now))
     assert source.current_run.forecast_origin == INITIALIZED + timedelta(hours=8)
@@ -362,7 +368,7 @@ def test_unready_stale_or_invalid_latest_metadata_cannot_fall_back_to_other_weat
     """Only finite, published, current and real-cycle initialization metadata may choose a live run."""
     session = LatestRunSession(metadata=metadata)
     with pytest.raises(ValueError):
-        asyncio.run(OpenMeteoSolarSource(session).read(SITE, INITIALIZED + timedelta(hours=8)))
+        asyncio.run(OpenMeteoWeatherSource(session).read(SITE, INITIALIZED + timedelta(hours=8)))
     assert len(session.calls) == 1
 
 
@@ -370,10 +376,10 @@ def test_current_site_change_and_restart_use_only_the_matching_frozen_cache(tmp_
     """Reopening the same site works without original-run HTTP while another site obtains independent evidence."""
     store = make_store(tmp_path, SolarStore)
     now = INITIALIZED + timedelta(hours=8)
-    first = OpenMeteoSolarSource(LatestRunSession(), store)
+    first = OpenMeteoWeatherSource(LatestRunSession(), store)
     asyncio.run(first.read(SITE, now))
     session = LatestRunSession(damage="failure")
-    restarted = OpenMeteoSolarSource(session, make_store(tmp_path, SolarStore))
+    restarted = OpenMeteoWeatherSource(session, make_store(tmp_path, SolarStore))
     assert asyncio.run(restarted.read(SITE, now + timedelta(hours=1)))
     assert len(session.calls) == 1
     other = replace(SITE, latitude=SITE.latitude + 1)
@@ -390,7 +396,7 @@ def test_historical_import_is_batched_newest_first_and_restarts_without_repeated
     now = INITIALIZED + timedelta(hours=8)
     store = make_store(tmp_path, SolarStore)
     session = FrozenRunSession()
-    source = OpenMeteoSolarSource(
+    source = OpenMeteoWeatherSource(
         session, store, history_start=lambda: INITIALIZED - timedelta(days=30)
     )
     runs = asyncio.run(source.import_runs(SITE, now))
@@ -403,7 +409,7 @@ def test_historical_import_is_batched_newest_first_and_restarts_without_repeated
     ]
     assert all(run.received_at == now and run.available_at is None for run in runs)
     restarted_session = FrozenRunSession("failure")
-    restarted = OpenMeteoSolarSource(
+    restarted = OpenMeteoWeatherSource(
         restarted_session,
         make_store(tmp_path, SolarStore),
         history_start=lambda: INITIALIZED - timedelta(days=30),
@@ -427,7 +433,7 @@ def test_slow_historical_provider_does_not_block_current_forecast():
         """Hold one old original run while proving the current weather path completes independently."""
         entered, release = asyncio.Event(), asyncio.Event()
 
-        class SlowHistorySource(OpenMeteoSolarSource):
+        class SlowHistorySource(OpenMeteoWeatherSource):
             """Pause only old initialization requests without changing current provider semantics."""
 
             async def read_run(self, location, run_init, origin, now):
@@ -460,7 +466,7 @@ def test_new_background_runs_do_not_discard_usable_jobs_and_remain_coalesced(tmp
     from tests.app.solar.support import plant
 
     now = INITIALIZED + timedelta(hours=8)
-    source = OpenMeteoSolarSource(LatestRunSession())
+    source = OpenMeteoWeatherSource(LatestRunSession())
     weather = asyncio.run(source.read(SITE, now))
     store = make_store(tmp_path, SolarStore)
     store.save(plant())
@@ -536,7 +542,7 @@ def test_http_lifecycle_publishes_current_forecast_while_history_waits_and_cance
         """Publish a usable forecast through authenticated HTTP while an independent history request stays pending."""
         entered, cancelled, release = asyncio.Event(), asyncio.Event(), asyncio.Event()
 
-        class WaitingHistorySource(OpenMeteoSolarSource):
+        class WaitingHistorySource(OpenMeteoWeatherSource):
             """Expose the actual current/history source protocol with an intentionally slow history provider."""
 
             async def read(self, location, now):
@@ -611,7 +617,7 @@ def test_a_known_missing_run_does_not_block_older_training_and_is_retried_indepe
 
     now = INITIALIZED + timedelta(hours=8)
     session = MissingRunSession()
-    source = OpenMeteoSolarSource(session, history_start=lambda: INITIALIZED - timedelta(days=30))
+    source = OpenMeteoWeatherSource(session, history_start=lambda: INITIALIZED - timedelta(days=30))
     first = asyncio.run(source.import_runs(SITE, now))
     missing = datetime(2026, 3, 29, 12, tzinfo=UTC)
     assert len(first) == 3
@@ -641,7 +647,7 @@ def test_provider_5xx_stops_after_one_attempt_and_retains_global_backoff():
 
     now = INITIALIZED + timedelta(hours=8)
     session = FailingSession()
-    source = OpenMeteoSolarSource(session, history_start=lambda: INITIALIZED - timedelta(days=30))
+    source = OpenMeteoWeatherSource(session, history_start=lambda: INITIALIZED - timedelta(days=30))
     with pytest.raises(ClientResponseError):
         asyncio.run(source.import_runs(SITE, now))
     assert len(session.calls) == 1
@@ -668,7 +674,7 @@ def test_cancellation_drains_the_frozen_cache_transaction_before_cleanup(tmp_pat
     async def scenario():
         """Cancel only after the writer starts and prove its complete commit precedes task termination."""
         task = asyncio.create_task(
-            OpenMeteoSolarSource(FrozenRunSession(), store).read_run(
+            OpenMeteoWeatherSource(FrozenRunSession(), store).read_run(
                 SITE, INITIALIZED, None, RECEIVED
             )
         )
@@ -704,7 +710,7 @@ def test_captured_weather_service_is_archived_with_old_forecast_rows_despite_a_l
     from tests.app.solar.support import plant
 
     now = INITIALIZED + timedelta(hours=8)
-    source = OpenMeteoSolarSource(LatestRunSession())
+    source = OpenMeteoWeatherSource(LatestRunSession())
     original_weather = asyncio.run(source.read(SITE, now))
     original_service = dict(source.service)
     store = make_store(tmp_path, SolarStore)
@@ -726,7 +732,7 @@ def test_captured_weather_service_is_archived_with_old_forecast_rows_despite_a_l
     assert queued[8] == original_service
     assert queued[8] is not runtime.weather_service
     next_initialized = INITIALIZED + timedelta(hours=6)
-    later_source = OpenMeteoSolarSource(
+    later_source = OpenMeteoWeatherSource(
         LatestRunSession(
             metadata={
                 "last_run_initialisation_time": next_initialized.timestamp(),
@@ -774,7 +780,7 @@ def test_live_49_hour_guard_covers_the_final_partial_planning_hour(tmp_path, mon
     from tests.app.solar.support import plant
 
     received = INITIALIZED + timedelta(hours=8)
-    source = OpenMeteoSolarSource(LatestRunSession())
+    source = OpenMeteoWeatherSource(LatestRunSession())
     rows = asyncio.run(source.read(SITE, received))
     selected = tuple(row for row in rows if received <= row.start <= received + timedelta(hours=48))
     assert len(selected) == 49
@@ -802,7 +808,7 @@ def test_history_outage_backoff_does_not_block_cached_other_sites_or_current_wea
         INITIALIZED - timedelta(days=4),
     )
     store = make_store(tmp_path, SolarStore)
-    seed = OpenMeteoSolarSource(FrozenRunSession(), store)
+    seed = OpenMeteoWeatherSource(FrozenRunSession(), store)
     cached_current = asyncio.run(
         seed.read_run(SITE, INITIALIZED, INITIALIZED + timedelta(hours=8), now)
     )
@@ -819,7 +825,7 @@ def test_history_outage_backoff_does_not_block_cached_other_sites_or_current_wea
             return super().get(url, **kwargs)
 
     session = HistoryOutageSession()
-    source = OpenMeteoSolarSource(
+    source = OpenMeteoWeatherSource(
         session, store, history_start=lambda: INITIALIZED - timedelta(days=30)
     )
     with pytest.raises(ClientResponseError):
@@ -856,7 +862,7 @@ def test_one_incomplete_original_run_cannot_block_older_training_or_current_fore
     missing = datetime(2026, 3, 29, 12, tzinfo=UTC)
     store = make_store(tmp_path, SolarStore)
     session = IncompleteRunSession()
-    source = OpenMeteoSolarSource(
+    source = OpenMeteoWeatherSource(
         session, store, history_start=lambda: INITIALIZED - timedelta(days=30)
     )
     first = asyncio.run(source.import_runs(SITE, now))
@@ -896,7 +902,7 @@ def test_one_incomplete_original_run_cannot_block_older_training_or_current_fore
 def test_frozen_run_version_is_computed_once_without_changing_its_original_digest(monkeypatch):
     """Repeated source lookup serializes one immutable run once and retains its independently computed original identity."""
     run = asyncio.run(
-        OpenMeteoSolarSource(FrozenRunSession()).read_run(SITE, INITIALIZED, None, RECEIVED)
+        OpenMeteoWeatherSource(FrozenRunSession()).read_run(SITE, INITIALIZED, None, RECEIVED)
     )
     original = asdict(run)
     expected = hashlib.sha256(
@@ -909,7 +915,7 @@ def test_frozen_run_version_is_computed_once_without_changing_its_original_diges
         serialized.append(value)
         return asdict(value)
 
-    monkeypatch.setattr("open_energy_planner.solar.forecast_weather.asdict", serialize)
+    monkeypatch.setattr("open_energy_planner.weather.run.asdict", serialize)
     assert run.version == expected
     assert run.version == expected
     assert run.version == expected
@@ -923,7 +929,7 @@ def test_frozen_run_version_is_computed_once_without_changing_its_original_diges
 def test_replacing_frozen_run_clocks_or_values_computes_each_new_identity_once(monkeypatch):
     """New origins, real receipt clocks and measured weather values receive independent caches without stale copied digests."""
     run = asyncio.run(
-        OpenMeteoSolarSource(FrozenRunSession()).read_run(SITE, INITIALIZED, None, RECEIVED)
+        OpenMeteoWeatherSource(FrozenRunSession()).read_run(SITE, INITIALIZED, None, RECEIVED)
     )
     original_version = run.version
     later = RECEIVED + timedelta(hours=1)
@@ -947,7 +953,7 @@ def test_replacing_frozen_run_clocks_or_values_computes_each_new_identity_once(m
         serialized.append(value)
         return asdict(value)
 
-    monkeypatch.setattr("open_energy_planner.solar.forecast_weather.asdict", serialize)
+    monkeypatch.setattr("open_energy_planner.weather.run.asdict", serialize)
     for value, identity in zip(replacements, expected, strict=True):
         assert value.version == identity
         assert value.version == identity
@@ -962,7 +968,9 @@ def test_memoized_run_version_preserves_frozen_cache_round_trip_and_original_arc
     """Populating the in-memory digest cache cannot add durable fields, alter original receipts or change reopened identities."""
     store = make_store(tmp_path, SolarStore)
     run = asyncio.run(
-        OpenMeteoSolarSource(FrozenRunSession(), store).read_run(SITE, INITIALIZED, None, RECEIVED)
+        OpenMeteoWeatherSource(FrozenRunSession(), store).read_run(
+            SITE, INITIALIZED, None, RECEIVED
+        )
     )
     original = asdict(run)
     expected = hashlib.sha256(
@@ -1003,7 +1011,7 @@ def test_missing_run_retries_grow_to_one_day_without_stopping_other_originals(un
             return super().get(url, **kwargs)
 
     session = MissingSession()
-    source = OpenMeteoSolarSource(session, history_start=lambda: missing - timedelta(days=5))
+    source = OpenMeteoWeatherSource(session, history_start=lambda: missing - timedelta(days=5))
     instant = INITIALIZED + timedelta(hours=8)
     for attempts, minutes in enumerate((15, 30, 60, 120, 240, 480, 960, 1440, 1440, 1440), start=1):
         asyncio.run(source.import_runs(SITE, instant))
@@ -1028,7 +1036,7 @@ def test_missing_run_retries_grow_to_one_day_without_stopping_other_originals(un
     assert missing not in source._missing_run_retries
     assert missing not in source._missing_run_attempts
     assert source.history_issues == {}
-    source = OpenMeteoSolarSource(MissingSession(), history_start=lambda: missing)
+    source = OpenMeteoWeatherSource(MissingSession(), history_start=lambda: missing)
     asyncio.run(source.import_runs(SITE, INITIALIZED + timedelta(hours=8)))
     assert source._missing_run_attempts[missing] == 1
     source._select_site(replace(SITE, longitude=SITE.longitude + 1))
@@ -1040,7 +1048,7 @@ def test_old_site_import_failure_cannot_set_retry_state_for_a_new_site(failure):
     """A site change during an awaited run read keeps the new site's retry state clean."""
     changed = replace(SITE, longitude=SITE.longitude + 1)
 
-    class SwitchingSource(OpenMeteoSolarSource):
+    class SwitchingSource(OpenMeteoWeatherSource):
         """Complete an old request with a controlled failure after installing the new site."""
 
         async def read_run(self, location, run_init, origin, now):

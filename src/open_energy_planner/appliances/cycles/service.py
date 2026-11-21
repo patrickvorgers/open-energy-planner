@@ -1151,10 +1151,12 @@ class ApplianceService:
         def covered_series(forecast):
             """Require fresh complete evidence even for components removed from the future load."""
             issued_at = instant(forecast["issued_at"])
+            checked_at = getattr(self.consumers, "checked_at", None) or issued_at
             if (
                 not issued_at
+                <= checked_at
                 <= now
-                < issued_at + timedelta(minutes=COMPONENT_FORECAST_MAX_AGE_MINUTES)
+                < checked_at + timedelta(minutes=COMPONENT_FORECAST_MAX_AGE_MINUTES)
             ):
                 raise ValueError("Appliance forecast expired")
             energy = tuple(
@@ -1165,14 +1167,20 @@ class ApplianceService:
                 )
                 for row in forecast["steps"]
             )
-            integrals(
-                energy,
-                tuple(
-                    (step.start, step.start + timedelta(hours=step.duration_h))
-                    for step in problem.intervals
-                ),
+            windows = tuple(
+                (step.start, step.start + timedelta(hours=step.duration_h))
+                for step in problem.intervals
             )
-            return energy
+            integrals(energy, windows)
+            start, end = windows[0][0], windows[-1][1]
+            clipped = []
+            for step in energy:
+                left = max(start, step.start)
+                right = min(end, step.start + timedelta(hours=step.duration_h))
+                if left < right:
+                    duration = (right - left) / timedelta(hours=1)
+                    clipped.append(LoadStep(left, duration, step.kwh * duration / step.duration_h))
+            return tuple(clipped)
 
         try:
             # Keep the active component models and their original measurement

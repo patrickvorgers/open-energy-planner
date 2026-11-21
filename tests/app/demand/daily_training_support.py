@@ -2,7 +2,8 @@
 
 from datetime import UTC, datetime, timedelta
 
-from open_energy_planner.demand.calculation.model import DemandHour, TemperatureHour
+from open_energy_planner.demand.calculation.model import DemandHour
+from open_energy_planner.weather.model import TemperatureHour
 
 NOW = datetime(2026, 8, 20, 12, tzinfo=UTC)
 

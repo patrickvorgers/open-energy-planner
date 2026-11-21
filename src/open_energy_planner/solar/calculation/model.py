@@ -18,12 +18,8 @@ DEFAULT_PANEL_TILT_DEGREES = 30
 MAX_SOLAR_POWER_W = 10000000.0
 MAX_SOLAR_ENERGY_KWH = 10000000.0
 MAX_PANEL_TILT_DEGREES = 90
-MIN_WEATHER_TEMPERATURE_CELSIUS = -90
 DEFAULT_INVERTER_EFFICIENCY = 0.96
 MIN_INVERTER_EFFICIENCY = 0.5
-MAX_WEATHER_TEMPERATURE_CELSIUS = 65
-MAX_WIND_SPEED_M_S = 120
-MAX_IRRADIANCE_W_M2 = 2000
 MIN_POSITIVE_SOLAR_SETTING = 1e-09
 MAX_PANEL_AZIMUTH_DEGREES = 360
 CAPACITY_TOLERANCE_W = 1e-06
@@ -273,30 +269,6 @@ class SolarConfiguration:
             if source["forecast_source"] == ForecastSource.AUTOMATIC:
                 source.pop("forecast_source")
         return version(body)
-
-
-@dataclass(frozen=True)
-class SolarWeatherHour:
-    """Mean weather for [start,start+1h), normalized from provider end-labelled radiation."""
-
-    start: datetime
-    ghi: float
-    dni: float
-    dhi: float
-    celsius: float
-    wind_ms: float
-    received_at: datetime
-
-    def __post_init__(self):
-        """Reject incomplete/invalid hours and retain when evidence actually became available."""
-        object.__setattr__(self, "start", aware(self.start))
-        object.__setattr__(self, "received_at", aware(self.received_at))
-        if self.start.minute or self.start.second or self.start.microsecond:
-            raise ValueError("Weather requires UTC hours")
-        for value in (self.ghi, self.dni, self.dhi):
-            number(value, 0, MAX_IRRADIANCE_W_M2)
-        number(self.celsius, MIN_WEATHER_TEMPERATURE_CELSIUS, MAX_WEATHER_TEMPERATURE_CELSIUS)
-        number(self.wind_ms, 0, MAX_WIND_SPEED_M_S)
 
 
 @dataclass(frozen=True)

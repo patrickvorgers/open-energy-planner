@@ -46,7 +46,7 @@ async def running_forecasts(path, *, weather_factory=None):
         """Supply typed market evidence without starting external network providers."""
         yield PriceService("NL", None, None, store)
 
-    options = {"solar_weather_factory": weather_factory} if weather_factory else {}
+    options = {"live_weather_factory": weather_factory} if weather_factory else {}
     runner = web.AppRunner(
         create_app(
             path, TOKEN, source="home_assistant", solver=Solver(), price_factory=prices, **options

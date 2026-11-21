@@ -95,11 +95,13 @@ def capture_sources(plan, demand, solar, catalogue, ev, thermal=None):
         )
 
 
-def register(app, plans, demand, solar, catalogue, lock, satellite_factory=None):
+def register(
+    app, plans, demand, solar, catalogue, lock, satellite_factory=None, *, weather_documents
+):
     """Reuse the active engine and paired integration, without opening another HA connection."""
     archive = HistoryArchive(SqlDocuments(plans.engine, "demand"))
     daily = DailyForecastArchive(archive.documents)
-    radiation = RadiationArchive(SqlDocuments(plans.engine, "solar"))
+    radiation = RadiationArchive(weather_documents)
 
     if satellite_factory is not None:
 
@@ -246,6 +248,7 @@ def register(app, plans, demand, solar, catalogue, lock, satellite_factory=None)
                 demand.store.documents,
                 solar.store.documents,
                 now,
+                weather_documents=weather_documents,
                 names=energy_source_names(catalogue.value),
                 solar_feedback=solar_feedback,
             )
@@ -267,7 +270,7 @@ def register(app, plans, demand, solar, catalogue, lock, satellite_factory=None)
                     or (demand.consumers.result or {}).get("residual_selection"),
                     "issue": demand.issue,
                 },
-                "consumers": demand.consumers.document(),
+                "consumers": demand.consumers.document(now=datetime.now(UTC)),
                 "solar": {
                     **solar.document(datetime.now(UTC), series=False),
                     "source_names": {
@@ -331,6 +334,7 @@ def register(app, plans, demand, solar, catalogue, lock, satellite_factory=None)
                     datetime.fromisoformat(record["start"]),
                     datetime.fromisoformat(record["end"]),
                 ),
+                weather_documents=weather_documents,
                 names=energy_source_names(catalogue.value),
                 solar_feedback=solar_feedback,
             )

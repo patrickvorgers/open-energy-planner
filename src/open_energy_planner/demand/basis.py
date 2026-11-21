@@ -12,9 +12,10 @@ def forecast_usable(configuration, forecast, now):
         configuration
         and forecast
         and forecast.configuration_version == configuration.version
-        and forecast.issued_at
+        and forecast.freshness_at
         <= now
-        < forecast.issued_at + timedelta(minutes=FORECAST_MAX_AGE_MINUTES)
+        < forecast.freshness_at + timedelta(minutes=FORECAST_MAX_AGE_MINUTES)
+        and (forecast.weather_valid_until is None or now < forecast.weather_valid_until)
     )
 
 

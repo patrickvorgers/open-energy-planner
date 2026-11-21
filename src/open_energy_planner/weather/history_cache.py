@@ -4,8 +4,8 @@ from dataclasses import asdict
 from datetime import UTC, date, datetime, timedelta
 
 from open_energy_planner.core.units import HOURS_PER_DAY
-from open_energy_planner.prices.model import aware
-from open_energy_planner.solar.calculation.model import SolarWeatherHour, version
+
+from .model import WeatherHour, aware, version
 
 WEATHER_NORMALIZATION_REVISION = "end-labelled-hour-negative-radiation-zero-v1"
 MAX_MONTH_DAYS = 31
@@ -58,7 +58,7 @@ class HistoricalWeatherCache:
             raise ValueError("Invalid historical weather cache span")
         start = datetime.combine(first, datetime.min.time(), UTC) - HOUR
         if len(rows) != hours or any(
-            not isinstance(row, SolarWeatherHour) or row.start != start + index * HOUR
+            not isinstance(row, WeatherHour) or row.start != start + index * HOUR
             for index, row in enumerate(rows)
         ):
             raise ValueError("Incomplete historical weather cache range")
@@ -121,7 +121,7 @@ class HistoricalWeatherCache:
             rows = []
             for index, value in enumerate(values):
                 rows.append(
-                    SolarWeatherHour(
+                    WeatherHour(
                         **{**value, "start": datetime.fromisoformat(value["start"])},
                         received_at=stamps[index],
                     )

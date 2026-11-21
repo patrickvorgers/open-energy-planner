@@ -1200,7 +1200,7 @@ def test_midnight_correction_cannot_mix_old_and_new_cumulative_pointer_versions(
 def test_satellite_cache_survives_restart_and_preserves_receipts_on_failure(archive):
     """Concurrent reads share one fetch, restart reuses it, and failed refresh retains the exact earlier hours."""
     from open_energy_planner.forecast_quality.radiation import RadiationArchive
-    from open_energy_planner.solar.satellite import RadiationHour
+    from open_energy_planner.weather.satellite import RadiationHour
 
     class Source:
         """Count independent typed observations and simulate a later network outage."""
@@ -1252,7 +1252,7 @@ def test_satellite_cache_survives_restart_and_preserves_receipts_on_failure(arch
 def test_satellite_failure_backoff_is_independent_for_each_site_and_day(archive, other_key):
     """Alternating unavailable keys must not repeat provider timeouts before each retry deadline."""
     from open_energy_planner.forecast_quality.radiation import RadiationArchive
-    from open_energy_planner.solar.satellite import RadiationHour
+    from open_energy_planner.weather.satellite import RadiationHour
 
     class Source:
         calls = 0
@@ -1305,7 +1305,7 @@ def test_satellite_corrupt_pointer_recovers_without_rewriting_receipts(archive, 
     """Invalid pointer timestamps permit bounded recovery and never overwrite immutable history."""
     from open_energy_planner.forecast_quality.radiation import RadiationArchive
     from open_energy_planner.solar.calculation.model import version
-    from open_energy_planner.solar.satellite import RadiationHour
+    from open_energy_planner.weather.satellite import RadiationHour
 
     class Source:
         calls = 0
@@ -1363,7 +1363,7 @@ def test_satellite_corrupt_pointer_recovers_without_rewriting_receipts(archive, 
 def test_satellite_pending_refresh_does_not_block_another_cached_key(archive, other_key):
     """Hold provider I/O explicitly while another cache hit completes and same-key readers share the fetch."""
     from open_energy_planner.forecast_quality.radiation import RadiationArchive
-    from open_energy_planner.solar.satellite import RadiationHour
+    from open_energy_planner.weather.satellite import RadiationHour
 
     async def scenario():
         entered, release = asyncio.Event(), asyncio.Event()
@@ -1418,7 +1418,7 @@ def test_satellite_empty_receipts_never_announce_recovery(archive, caplog):
 
     from open_energy_planner.forecast_quality.radiation import RadiationArchive
     from open_energy_planner.solar.calculation.model import version
-    from open_energy_planner.solar.satellite import RadiationHour
+    from open_energy_planner.weather.satellite import RadiationHour
 
     async def scenario():
         class Source:
@@ -1478,9 +1478,9 @@ def test_satellite_empty_receipts_never_announce_recovery(archive, caplog):
 def test_original_radiation_uses_frozen_manifest_not_newer_weather(archive):
     """A changed weather block cannot replace the original values or admit evidence received after issuance."""
     from open_energy_planner.forecast_quality.radiation import original_radiation
-    from open_energy_planner.solar.storage import SolarStore
+    from open_energy_planner.storage.series import SeriesArchive
 
-    store = SolarStore(SqlDocuments(archive.documents.engine, "solar"))
+    store = SeriesArchive(SqlDocuments(archive.documents.engine, "weather"))
     rows = [
         {
             "start": (START + timedelta(hours=index)).isoformat(),
@@ -1497,7 +1497,7 @@ def test_original_radiation_uses_frozen_manifest_not_newer_weather(archive):
     assert original_radiation(store.documents, forecast, START, START + timedelta(hours=2)) == {
         START: 100
     }
-    restored = SqlDocuments(archive.documents.engine, "solar")
+    restored = SqlDocuments(archive.documents.engine, "weather")
     assert original_radiation(restored, forecast, START, START + timedelta(hours=2)) == {START: 100}
 
 
@@ -1575,9 +1575,9 @@ def test_solar_day_api_combines_original_weather_and_independent_satellite_cache
     from aiohttp.test_utils import TestClient, TestServer
 
     from open_energy_planner.app import create_app
-    from open_energy_planner.solar.satellite import RadiationHour
-    from open_energy_planner.solar.storage import SolarStore
     from open_energy_planner.storage.adapters.lifecycle.sqlalchemy import SqlPlanRepository
+    from open_energy_planner.storage.series import SeriesArchive
+    from open_energy_planner.weather.satellite import RadiationHour
     from tests.ha_contract.support.metadata import setup_metadata
 
     repository = SqlPlanRepository(tmp_path)
@@ -1597,7 +1597,7 @@ def test_solar_day_api_combines_original_weather_and_independent_satellite_cache
         issued_at=(start - timedelta(minutes=5)).isoformat(),
     )
     solar_documents.write("forecast-pv-original.json", {"forecast": forecast})
-    SolarStore(solar_documents).archive_series(
+    SeriesArchive(SqlDocuments(repository.engine, "weather")).archive_series(
         "weather",
         "frozen-weather",
         [{"start": start.isoformat(), "ghi": 100, "received_at": forecast["issued_at"]}],
@@ -1678,7 +1678,7 @@ def test_solar_day_api_combines_original_weather_and_independent_satellite_cache
                 if restart == 0:
                     from open_energy_planner.solar.calculation.model import version
 
-                    documents = SqlDocuments(repository.engine, "solar")
+                    documents = SqlDocuments(repository.engine, "weather")
                     key = (
                         "quality-satellite-"
                         + version(

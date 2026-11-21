@@ -247,6 +247,7 @@ def daily_evidence(
     *,
     names=None,
     solar_feedback=None,
+    weather_documents=None,
 ):
     """Score a frozen whole day only after all measurements arrive. Partial totals never imply a daily score."""
     from .evidence import evidence
@@ -277,6 +278,7 @@ def daily_evidence(
         window=(start, end),
         names=names,
         solar_feedback=solar_feedback,
+        weather_documents=weather_documents,
     )
     result.update(series=original["series"], issues=original["issues"])
     resolved = {source["id"] for source in result["series"]}

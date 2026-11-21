@@ -15,7 +15,7 @@ from open_energy_planner.solar.calculation.model import (
     horizon,
     version,
 )
-from open_energy_planner.solar.forecast_weather import (
+from open_energy_planner.weather.run import (
     FORECAST_RUN_RESPONSE_HOURS,
     MAX_LIVE_RUN_AGE_HOURS,
     ForecastWeatherRun,
@@ -61,6 +61,7 @@ class SolarRuntime:
     def __init__(self, store):
         """Restore settings while requiring new weather/location before publishing live forecasts."""
         self.store = store
+        self.weather_archive = store
         self.training = DailySolarTraining(store)
         self.configuration_lock = Lock()
         self.configuration, self.issue = store.current, store.issue
@@ -383,7 +384,7 @@ class SolarRuntime:
         self.ha_predictions = predictions
         self.ha_revision += 1
 
-    def set_weather(self, location, weather, *, service=None):
+    def set_weather(self, location, weather, *, service=None, received_at=None):
         """Install typed source evidence. Changing the site revokes old-site weather and outputs."""
         if self.location != location:
             self.forecast, self.candidate, self.baseline, self.last_key = None, None, None, None
@@ -393,7 +394,7 @@ class SolarRuntime:
             self.forecast_runs_revision += 1
         incoming = tuple(weather)
         provenance = dict(service) if service is not None else {}
-        received = incoming[-1].received_at if incoming else None
+        received = received_at or (incoming[-1].received_at if incoming else None)
         if (
             location == self.location
             and len(incoming) == len(self.weather)
@@ -756,7 +757,7 @@ class SolarRuntime:
             tuple(weather_item for weather_item in weather if weather_item.received_at <= now),
         )
         histories = dict(histories)
-        self.store.archive_series(
+        self.weather_archive.archive_series(
             "weather", forecast.weather_version, [document(row) for row in weather]
         )
         for history in histories.values():

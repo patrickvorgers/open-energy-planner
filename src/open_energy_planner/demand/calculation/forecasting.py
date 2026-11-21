@@ -22,6 +22,7 @@ from open_energy_planner.demand.calculation.model import (
     digest,
     horizon,
 )
+from open_energy_planner.planning_policy import FINE_INTERVAL_MINUTES
 
 MIN_PROFILE_TRAINING_DAYS = 7
 MIN_RIDGE_TRAINING_DAYS = 28
@@ -205,7 +206,34 @@ class RidgeDemandModel:
         )
 
 
-def predict(configuration, samples, now, model: ForecastModel, *, temperatures=()):
+def live_forecast_grid(now, temperatures):
+    """Use the contiguous live hours to extend native predictions beyond the planning horizon."""
+    required = horizon(now)
+    start = required[0][0]
+    end = start.replace(minute=0)
+    available = {row.start for row in temperatures if row.known_at <= now}
+    while end in available:
+        end += timedelta(hours=1)
+    required_end = required[-1][0] + timedelta(hours=required[-1][1])
+    if end <= required_end:
+        return required
+    quarter = timedelta(minutes=FINE_INTERVAL_MINUTES)
+    return tuple(
+        (start + index * quarter, FINE_INTERVAL_MINUTES / MINUTES_PER_HOUR)
+        for index in range((end - start) // quarter)
+    )
+
+
+def predict(
+    configuration,
+    samples,
+    now,
+    model: ForecastModel,
+    *,
+    temperatures=(),
+    grid=None,
+    weather_version=None,
+):
     """Integrate bounded within-hour rate estimates, preserving hourly energy and known-at chronology.
 
     Hourly model means remain authoritative. A limited linear slope estimates
@@ -213,7 +241,7 @@ def predict(configuration, samples, now, model: ForecastModel, *, temperatures=(
     request precedes the forecast window or requires weather outside it.
     """
     weather = {item.start: item.celsius for item in temperatures if item.known_at <= now}
-    grid = horizon(now)
+    grid = horizon(now) if grid is None else grid
     final = grid[-1][0] + timedelta(hours=grid[-1][1])
     hour = grid[0][0].replace(minute=0, second=0, microsecond=0)
     rates = {}
@@ -255,7 +283,13 @@ def predict(configuration, samples, now, model: ForecastModel, *, temperatures=(
         model.model_id,
         tuple(steps),
         tuple(item.device_id for item in configuration.exclusions) if residual_profile else (),
-        digest([(item.start, item.celsius, item.known_at) for item in temperatures]),
+        (
+            digest([(item.start, item.celsius, item.known_at) for item in temperatures])
+            if weather_version is None
+            else weather_version
+            if getattr(model, "temperature_enabled", False)
+            else "none"
+        ),
         "total_household"
         if not residual_profile and configuration.exclusions
         else "residual_household",

@@ -13,11 +13,57 @@ from open_energy_planner.appliances.forecasting import (
     parse_selection,
 )
 from open_energy_planner.appliances.weather_model import WeatherDemandModel
-from open_energy_planner.demand.calculation.model import TemperatureHour
 from open_energy_planner.demand.runtime import DemandRuntime
 from open_energy_planner.demand.storage import DemandStore
+from open_energy_planner.weather.model import TemperatureHour
 from tests.app.demand.test_demand import START, channel, config
 from tests.database.support.archive import make_store
+
+
+def test_live_consumer_transport_bounds_reused_native_issue(tmp_path):
+    """A long native component issue stays unchanged in storage while live sensors get 48 hours."""
+    store = make_store(tmp_path, DemandStore)
+    store.save(config())
+    runtime = DemandRuntime(store)
+    entity = "sensor.fixture"
+    hours = 9 * 24
+    now = START + timedelta(hours=hours)
+    runtime.histories["sensor.house"] = channel("sensor.house", [0.5] * hours)
+    runtime.data_versions["sensor.house"] = "household"
+    runtime.consumers.selected = ({"entity_id": entity, "weather_sensitive": False},)
+    runtime.consumers.options = ({"entity_id": entity, "name": "Fixture appliance"},)
+    runtime.consumers.histories[entity] = channel(entity, [0.2] * hours)
+    reference = "a" * 64
+    location = (52.0, 5.0)
+    runtime.set_weather_location(location)
+    runtime.set_live_weather(
+        tuple(TemperatureHour(now + timedelta(hours=index), 5, now) for index in range(72)),
+        reference,
+        now + timedelta(hours=6),
+    )
+    assert runtime.install(runtime.build(runtime.job(now)), now)
+    original = runtime.consumers.result["devices"][0]["forecast"]
+    assert len(original["steps"]) == 288
+    for minutes in (15, 30, 45):
+        later = now + timedelta(minutes=minutes)
+        assert runtime.job(later) is None
+    device = runtime.consumers.document(now=later)["result"]["devices"][0]
+    current = device["forecast"]
+    assert 0 < len(current["steps"]) <= 256
+    assert sum(step["duration_h"] for step in current["steps"]) == 48
+    assert current["steps"][0]["start"] == later.isoformat()
+    assert sum(step["kwh"] for step in current["steps"]) == pytest.approx(9.6)
+    assert current["issued_at"] == now.isoformat()
+    assert current["valid_until"] == (later + timedelta(minutes=30)).isoformat()
+    assert "valid_until" not in original
+    assert len(original["steps"]) == 288
+
+    runtime.set_weather_location(location)
+    assert runtime.forecast is not None
+    runtime.set_weather_location((51.0, 5.0))
+    assert runtime.live_weather_ref(later) is None
+    assert runtime.forecast is None
+    assert runtime.consumers.document(now=later)["result"] is None
 
 
 @pytest.mark.parametrize("persisted", [False, True])

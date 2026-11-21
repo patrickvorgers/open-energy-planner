@@ -8,8 +8,8 @@ from datetime import UTC, date, datetime, timedelta
 import pytest
 
 from open_energy_planner.solar.storage import SolarStore
-from open_energy_planner.solar.storage.weather import HistoricalWeatherCache
-from open_energy_planner.solar.weather import ARCHIVE_URL, OpenMeteoSolarSource
+from open_energy_planner.weather.history_cache import HistoricalWeatherCache
+from open_energy_planner.weather.provider import ARCHIVE_URL, OpenMeteoWeatherSource
 from tests.app.demand.test_demand_weather import Response
 from tests.app.solar.support import SITE
 from tests.database.support.archive import list_documents, make_store
@@ -86,13 +86,13 @@ def test_restart_reuses_closed_month_and_partial_prefix_without_historical_http(
     tmp_path, monkeypatch
 ):
     """May and June's complete prefix survive a new store/source while current forecasts still refresh."""
-    monkeypatch.setattr("open_energy_planner.solar.weather.ARCHIVE_LOOKBACK_DAYS", 50)
+    monkeypatch.setattr("open_energy_planner.weather.provider.ARCHIVE_LOOKBACK_DAYS", 50)
 
     async def scenario():
         """Compare restarted transport requests, durable documents and original normalized receipts."""
         first_store = make_store(tmp_path, SolarStore)
         first_session = MonthlySession()
-        first = await OpenMeteoSolarSource(first_session, first_store).read_observed(SITE, NOW)
+        first = await OpenMeteoWeatherSource(first_session, first_store).read_observed(SITE, NOW)
         calls = archive_calls(first_session)
         assert [(call["start_date"], call["end_date"]) for call in calls] == [
             ("2026-05-01", "2026-05-31"),
@@ -102,7 +102,7 @@ def test_restart_reuses_closed_month_and_partial_prefix_without_historical_http(
         snapshot = documents(first_store, tmp_path)
         second_session = MonthlySession()
         second_store = make_store(tmp_path, SolarStore)
-        second = await OpenMeteoSolarSource(second_session, second_store).read_observed(
+        second = await OpenMeteoWeatherSource(second_session, second_store).read_observed(
             SITE, NOW + timedelta(hours=1)
         )
         assert archive_calls(second_session) == []
@@ -121,15 +121,15 @@ def test_partial_month_extends_only_missing_dates_and_reuses_prior_value_blocks(
     tmp_path, monkeypatch
 ):
     """The next day fetches June13 only and retains May plus June1-12 with their original receipt time."""
-    monkeypatch.setattr("open_energy_planner.solar.weather.ARCHIVE_LOOKBACK_DAYS", 50)
+    monkeypatch.setattr("open_energy_planner.weather.provider.ARCHIVE_LOOKBACK_DAYS", 50)
 
     async def scenario():
         """Extend durable coverage through one complete suffix without copying old value blocks."""
         store = make_store(tmp_path, SolarStore)
-        await OpenMeteoSolarSource(MonthlySession(), store).read_observed(SITE, NOW)
+        await OpenMeteoWeatherSource(MonthlySession(), store).read_observed(SITE, NOW)
         original = documents(store, tmp_path)
         later_session = MonthlySession()
-        later = await OpenMeteoSolarSource(
+        later = await OpenMeteoWeatherSource(
             later_session, make_store(tmp_path, SolarStore)
         ).read_observed(SITE, NOW + timedelta(days=1))
         assert [
@@ -173,16 +173,16 @@ def test_partial_month_extends_only_missing_dates_and_reuses_prior_value_blocks(
 @pytest.mark.parametrize("damage", ["missing", "short", "bad_unit", "shift", "failure"])
 def test_incomplete_or_failed_suffix_cannot_advance_coverage(tmp_path, monkeypatch, damage):
     """Malformed or missing June13 data keeps the old prefix and retries the same suffix on recovery."""
-    monkeypatch.setattr("open_energy_planner.solar.weather.ARCHIVE_LOOKBACK_DAYS", 50)
+    monkeypatch.setattr("open_energy_planner.weather.provider.ARCHIVE_LOOKBACK_DAYS", 50)
 
     async def scenario():
         """Preserve all original documents on failure, then admit only a complete corrected response."""
         store = make_store(tmp_path, SolarStore)
-        await OpenMeteoSolarSource(MonthlySession(), store).read_observed(SITE, NOW)
+        await OpenMeteoWeatherSource(MonthlySession(), store).read_observed(SITE, NOW)
         original = documents(store, tmp_path)
         session = MonthlySession()
         session.damage = damage
-        source = OpenMeteoSolarSource(session, store)
+        source = OpenMeteoWeatherSource(session, store)
         retained = await source.read_observed(SITE, NOW + timedelta(days=1))
         assert any(row.start == datetime(2026, 6, 11, tzinfo=UTC) for row in retained)
         assert any(row.start == NOW - timedelta(hours=1) for row in retained)
@@ -199,14 +199,14 @@ def test_incomplete_or_failed_suffix_cannot_advance_coverage(tmp_path, monkeypat
 
 def test_site_change_does_not_reuse_another_locations_history(tmp_path, monkeypatch):
     """Identical dates at another latitude require independent historical requests and cache identities."""
-    monkeypatch.setattr("open_energy_planner.solar.weather.ARCHIVE_LOOKBACK_DAYS", 50)
+    monkeypatch.setattr("open_energy_planner.weather.provider.ARCHIVE_LOOKBACK_DAYS", 50)
 
     async def scenario():
         """Exercise production request identity rather than relying on manually constructed key equality."""
         store = make_store(tmp_path, SolarStore)
-        await OpenMeteoSolarSource(MonthlySession(), store).read_observed(SITE, NOW)
+        await OpenMeteoWeatherSource(MonthlySession(), store).read_observed(SITE, NOW)
         session = MonthlySession()
-        await OpenMeteoSolarSource(session, store).read_observed(
+        await OpenMeteoWeatherSource(session, store).read_observed(
             replace(SITE, latitude=SITE.latitude + 1), NOW
         )
         assert len(archive_calls(session)) == 2
@@ -227,12 +227,12 @@ def test_site_change_does_not_reuse_another_locations_history(tmp_path, monkeypa
 )
 def test_cache_identity_binds_every_result_parameter(tmp_path, change):
     """Future model/run metadata cannot hit a stored query with different result-affecting parameters."""
-    from open_energy_planner.solar.calculation.model import SolarWeatherHour
+    from open_energy_planner.weather.model import WeatherHour
 
     cache = HistoricalWeatherCache(make_store(tmp_path, SolarStore))
     month = date(2026, 6, 1)
     rows = tuple(
-        SolarWeatherHour(
+        WeatherHour(
             datetime(2026, 5, 31, 23, tzinfo=UTC) + timedelta(hours=index),
             500,
             600,
@@ -251,12 +251,12 @@ def test_cache_identity_binds_every_result_parameter(tmp_path, change):
 
 def test_changed_normalization_does_not_reuse_old_values(tmp_path, monkeypatch):
     """An adapter normalization revision gets a separate cache family even at the same site and dates."""
-    from open_energy_planner.solar.calculation.model import SolarWeatherHour
+    from open_energy_planner.weather.model import WeatherHour
 
     cache = HistoricalWeatherCache(make_store(tmp_path, SolarStore))
     month = date(2026, 6, 1)
     rows = tuple(
-        SolarWeatherHour(
+        WeatherHour(
             datetime(2026, 5, 31, 23, tzinfo=UTC) + timedelta(hours=index),
             500,
             600,
@@ -269,7 +269,7 @@ def test_changed_normalization_does_not_reuse_old_values(tmp_path, monkeypatch):
     )
     cache.write(ARCHIVE_URL, PARAMS, month, month, rows)
     monkeypatch.setattr(
-        "open_energy_planner.solar.storage.weather.WEATHER_NORMALIZATION_REVISION",
+        "open_energy_planner.weather.history_cache.WEATHER_NORMALIZATION_REVISION",
         "synthetic-changed-normalization",
     )
     assert cache.read(ARCHIVE_URL, PARAMS, month) == ((), date(2026, 5, 31))
@@ -277,13 +277,13 @@ def test_changed_normalization_does_not_reuse_old_values(tmp_path, monkeypatch):
 
 def test_changed_cached_values_or_receipts_cannot_rewrite_a_retained_prefix(tmp_path):
     """An extension with changed old irradiance or refreshed old receipt times fails without modifying documents."""
-    from open_energy_planner.solar.calculation.model import SolarWeatherHour
+    from open_energy_planner.weather.model import WeatherHour
 
     store = make_store(tmp_path, SolarStore)
     cache = HistoricalWeatherCache(store)
     month = date(2026, 6, 1)
     rows = tuple(
-        SolarWeatherHour(
+        WeatherHour(
             datetime(2026, 5, 31, 23, tzinfo=UTC) + timedelta(hours=index),
             500,
             600,
@@ -307,7 +307,7 @@ def test_newly_loaded_older_history_fetches_only_missing_months_without_an_age_c
     tmp_path, monkeypatch
 ):
     """A loaded 2024 measurement expands a 2026 cohort without refetching cached recent months or oversized transfers."""
-    monkeypatch.setattr("open_energy_planner.solar.weather.ARCHIVE_LOOKBACK_DAYS", 50)
+    monkeypatch.setattr("open_energy_planner.weather.provider.ARCHIVE_LOOKBACK_DAYS", 50)
 
     async def scenario():
         """Freeze the cohort before transport, then notice older loaded history on the next refresh."""
@@ -325,7 +325,7 @@ def test_newly_loaded_older_history_fetches_only_missing_months_without_an_age_c
 
         store = make_store(tmp_path, SolarStore)
         session = LoadingSession()
-        source = OpenMeteoSolarSource(session, store, history_start=lambda: oldest[0])
+        source = OpenMeteoWeatherSource(session, store, history_start=lambda: oldest[0])
         await source.read_observed(SITE, NOW)
         assert len(archive_calls(session)) == 2
         session.calls.clear()
@@ -345,7 +345,7 @@ def test_newly_loaded_older_history_fetches_only_missing_months_without_an_age_c
         await source.read_observed(SITE, NOW)
         assert archive_calls(session) == []
         restarted = MonthlySession()
-        await OpenMeteoSolarSource(
+        await OpenMeteoWeatherSource(
             restarted, make_store(tmp_path, SolarStore), history_start=lambda: oldest[0]
         ).read_observed(SITE, NOW)
         assert archive_calls(restarted) == []
@@ -357,12 +357,12 @@ def test_corrupt_cached_receipt_is_retained_without_blocking_independent_forecas
     tmp_path, monkeypatch
 ):
     """Changed retained receipt metadata cannot become accepted weather or erase other complete cached months."""
-    monkeypatch.setattr("open_energy_planner.solar.weather.ARCHIVE_LOOKBACK_DAYS", 50)
+    monkeypatch.setattr("open_energy_planner.weather.provider.ARCHIVE_LOOKBACK_DAYS", 50)
 
     async def scenario():
         """Keep corruption observable instead of replacing its original evidence with an unverified cache hit."""
         store = make_store(tmp_path, SolarStore)
-        await OpenMeteoSolarSource(MonthlySession(), store).read_observed(SITE, NOW)
+        await OpenMeteoWeatherSource(MonthlySession(), store).read_observed(SITE, NOW)
         pointer = next(
             name
             for name in list_documents(tmp_path, "solar")
@@ -378,7 +378,7 @@ def test_corrupt_cached_receipt_is_retained_without_blocking_independent_forecas
         corrupt["requests"][0]["received_at"] = "2026-01-01T00:00:00+00:00"
         store.documents.write(path, corrupt)
         session = MonthlySession()
-        result = await OpenMeteoSolarSource(session, store).read_observed(SITE, NOW)
+        result = await OpenMeteoWeatherSource(session, store).read_observed(SITE, NOW)
         assert any(row.start == NOW - timedelta(hours=1) for row in result)
         assert any(row.start == datetime(2026, 6, 11, tzinfo=UTC) for row in result)
         assert not any(row.start < datetime(2026, 5, 31, 23, tzinfo=UTC) for row in result)
@@ -390,16 +390,16 @@ def test_corrupt_cached_receipt_is_retained_without_blocking_independent_forecas
 
 def test_multiyear_archive_outage_tries_once_and_keeps_later_cached_months(tmp_path, monkeypatch):
     """A failed older request cannot multiply timeout waits by all missing months or hide cached recent years."""
-    monkeypatch.setattr("open_energy_planner.solar.weather.ARCHIVE_LOOKBACK_DAYS", 50)
+    monkeypatch.setattr("open_energy_planner.weather.provider.ARCHIVE_LOOKBACK_DAYS", 50)
 
     async def scenario():
         """Expand the measurement cohort during a provider outage without rewriting accepted receipts."""
         store = make_store(tmp_path, SolarStore)
-        accepted = await OpenMeteoSolarSource(MonthlySession(), store).read_observed(SITE, NOW)
+        accepted = await OpenMeteoWeatherSource(MonthlySession(), store).read_observed(SITE, NOW)
         snapshot = documents(store, tmp_path)
         session = MonthlySession()
         session.damage = "failure"
-        result = await OpenMeteoSolarSource(
+        result = await OpenMeteoWeatherSource(
             session, store, history_start=lambda: datetime(2020, 1, 1, tzinfo=UTC)
         ).read_observed(SITE, NOW)
         assert len(archive_calls(session)) == 1
