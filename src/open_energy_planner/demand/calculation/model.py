@@ -11,11 +11,7 @@ from typing import Protocol
 from zoneinfo import ZoneInfo
 
 from open_energy_planner.core.units import MINUTES_PER_HOUR
-from open_energy_planner.planning_policy import (
-    COARSE_INTERVAL_MINUTES,
-    FINE_INTERVAL_MINUTES,
-    planning_grid,
-)
+from open_energy_planner.planning_policy import FINE_INTERVAL_MINUTES, planning_grid
 from open_energy_planner.prices.model import aware
 
 MAX_ANNUAL_CONSUMPTION_KWH = 1000000.0
@@ -165,11 +161,11 @@ class ForecastStep:
     kwh: float
 
     def __post_init__(self):
-        """Accept quarter multiples through one coarse hour, including clipped final blocks."""
+        """Accept quarter multiples through one hour for retained forecast evidence."""
         object.__setattr__(self, "start", aware(self.start))
         if (
             type(self.duration_h) not in (int, float)
-            or not 0 < self.duration_h * MINUTES_PER_HOUR <= COARSE_INTERVAL_MINUTES
+            or not 0 < self.duration_h <= 1
             or self.duration_h * MINUTES_PER_HOUR % FINE_INTERVAL_MINUTES != 0
         ):
             raise ValueError("Unsupported demand resolution")

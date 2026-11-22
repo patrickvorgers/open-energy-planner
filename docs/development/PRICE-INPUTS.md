@@ -46,7 +46,7 @@ Use final published prices wherever they cover the requested market area/currenc
 
 Return a contiguous usable prefix of the requested rolling 48-hour window. A gap ends usable coverage: report `shortened_horizon`, or `unavailable` for a gap at the start. Both provenance and native resolution remain on each resulting interval. An hourly forecast remains an hourly forecast even when published quarters split its displayed coverage. The API does not label repeated forecast values as genuine quarter-hour predictions.
 
-This source timeline is separate from the planner's 96 quarter-hour plus 24 hourly steps. Future projection must preserve underlying price/contract subintervals: a coarse planning step cannot change billing or hide nonlinear eligibility boundaries. No raw wholesale price is silently assigned as both retail buy and sell price.
+The planner uses quarter-hour controls throughout its 48-hour horizon. Tariff projection preserves the underlying price and contract subintervals and their exact eligibility boundaries. Retail buy and sell prices come from the configured contract.
 
 ## Fetching is not replanning
 

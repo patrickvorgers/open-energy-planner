@@ -37,9 +37,8 @@ in this finite estimate. This does not declare them permanently worthless.
 
 The [price adapter](PRICE-FORECAST-SELECTION.md) combines the selected overlap forecast with EpexPredictor prices through 72 hours. Provider selection stays outside this model. Valuation consumes only composed prices and effective contract evidence.
 
-1. Keep the executable target horizon at 48 hours: the first 24 hours in quarters
-   and the last 24 in hours, 120 aligned decisions. Contract boundaries may refine
-   billing segments without creating extra control decisions.
+1. Keep the executable target horizon at 48 hours in 192 quarter-hour decisions.
+   Contract boundaries may refine billing segments within those quarters.
 2. Prefer the first contiguous **up to 24 hours after the accepted command
    horizon** from already cached, fresh normalized prices. Apply the effective
    contract import/export formulas for those delivery times. Stop at missing
@@ -139,7 +138,7 @@ using native expressions. Fabricated financial totals are rejected.
 
 `tests/app/installation/test_terminal_valuation.py` covers hand-calculated average rates, losses,
 wear, reserves, caps, shared inverters/grid, PV headroom, absent batteries,
-negative values, 120 mixed-resolution steps, shortened coverage, later-price
+negative values, 192 quarter-hour steps, shortened coverage, later-price
 provenance, expired extensions, missing future contract coverage, profitable
 retention/sales and settlement of multiple independently specified valid choices.
 The production HTTP app tests verify per-battery evidence and aggregate inventory

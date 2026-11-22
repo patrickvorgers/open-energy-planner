@@ -150,7 +150,7 @@ compiler directly.
 
 ## Horizon, weather and lifecycle
 
-Each source gets 48 elapsed UTC hours: 96 quarters followed by 24 hourly intervals.
+Each source gets 48 elapsed UTC hours in 192 quarter-hour intervals.
 Four calendar days of hourly forecast weather provide sufficient coverage even
 late in a day. Actual coverage is checked, not inferred from the requested range.
 PVWatts v2 evaluates solar geometry at each quarter's midpoint while retaining

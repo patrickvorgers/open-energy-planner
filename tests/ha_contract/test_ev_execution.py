@@ -135,10 +135,10 @@ def test_ev_execution_is_compact_without_removing_original_energy_evidence():
     assert original["ev_schedule"][0]["shortfall_kwh"] == pytest.approx(0, abs=1e-8)
 
 
-def test_four_ev_mixed_horizon_produces_bounded_native_execution():
+def test_four_evs_over_192_quarters_produce_bounded_native_execution():
     """Four distinct departures reach their targets through the production bounded worker.
 
-    The ordinary horizon contains 96 quarters followed by 24 hours. The cars need
+    The horizon contains 192 quarters. The cars need
     (80 - initial SoC) percent of their respective capacities: 27, 26.84, 26.66
     and 26.46 useful kWh. All targets fit the shared 11-kW connection before their
     departures, so positive prices cannot justify missing service. This case
@@ -154,14 +154,11 @@ def test_four_ev_mixed_horizon_produces_bounded_native_execution():
         Interval(
             START + timedelta(minutes=15 * index),
             0.25,
-            0.15 + (index % 8) / 100,
+            0.15 + (index % 8) / 100 if index < 96 else 0.2,
             0.05,
             load_kwh=0.05,
         )
-        for index in range(96)
-    ) + tuple(
-        Interval(START + timedelta(hours=24 + index), 1, 0.2, 0.05, load_kwh=0.2)
-        for index in range(24)
+        for index in range(192)
     )
     works = tuple(
         EVWork(
@@ -195,7 +192,7 @@ def test_four_ev_mixed_horizon_produces_bounded_native_execution():
             if row.session_id == f"session-{index}"
         ) == pytest.approx(expected, abs=1e-6)
     original = plan_document(
-        ev_snapshot(inputs, "four-ev-mixed-horizon"),
+        ev_snapshot(inputs, "four-ev-quarter-hour-horizon"),
         result,
         costs,
         START,

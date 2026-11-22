@@ -190,9 +190,9 @@ HiGHS receives immutable `ApplianceWork` records as part of `InstallationProblem
 Each candidate is one absolute UTC quarter-aligned start and the full consecutive
 profile. Energy is integrated across exact planning/billing overlaps. Only task
 windows are refined to their measured phase boundaries, including exact boundaries for
-already running work. Other coarse forecast hours remain coarse. This preserves
-heater peaks and shared grid/converter constraints, rather than diluting a peak
-over an hour. Nominal 120-step plans can therefore have additional segments.
+already running work. This preserves heater peaks and checks the shared grid and
+converter constraints at those boundaries. A full horizon has 192 control quarters
+and can contain additional billing and device segments.
 
 Within the existing common solver deadline, reserve recovery retains its priority,
 then a proved admission stage maximizes the number of feasible complete tasks.

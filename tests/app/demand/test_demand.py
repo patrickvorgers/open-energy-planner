@@ -413,14 +413,13 @@ def test_rounding_noise_does_not_raise_a_runtime_problem(tmp_path):
     }
 
 
-def test_no_history_always_has_startup_prediction_on_the_120_step_horizon():
-    """3650 kWh/year gives 10 kWh per normal day, split into 96 quarters and 24 hours over 48 hours."""
+def test_no_history_always_has_startup_prediction_on_the_quarter_hour_horizon():
+    """3650 kWh/year gives 10 kWh per normal day, split into 192 quarters over 48 hours."""
     forecast = predict(config(), (), START, WeekdayProfile.fit(config(), ()))
     assert forecast.model == "startup-v2"
     assert forecast.quality == "provisional"
-    assert len(forecast.steps) == 120
-    assert all(step.duration_h == 0.25 for step in forecast.steps[:96])
-    assert all(step.duration_h == 1 for step in forecast.steps[96:])
+    assert len(forecast.steps) == 192
+    assert all(step.duration_h == 0.25 for step in forecast.steps)
     assert sum(step.kwh for step in forecast.steps[:96]) == pytest.approx(10)
     assert sum(step.kwh for step in forecast.steps[96:]) == pytest.approx(10)
 
@@ -431,7 +430,7 @@ def test_no_history_always_has_startup_prediction_on_the_120_step_horizon():
 def test_horizon_remains_48_absolute_hours_across_dst(start):
     """Local clock changes alter feature hours, never the elapsed 48-hour horizon or interval continuity."""
     forecast = predict(config(), (), start, WeekdayProfile.fit(config(), ()))
-    assert forecast.steps[-1].start + timedelta(hours=1) == start + timedelta(hours=48)
+    assert forecast.steps[-1].start + timedelta(minutes=15) == start + timedelta(hours=48)
     for left, right in zip(forecast.steps, forecast.steps[1:]):
         assert left.start + timedelta(hours=left.duration_h) == right.start
 
@@ -576,7 +575,7 @@ def test_live_demand_reuses_the_stored_issue_across_quarters(tmp_path):
     path = "forecast-" + original.version + ".json"
     archive = store.documents.read(path)
     assert len(original.steps) == 72 * 4
-    assert len(runtime.document(now)["forecast"]["steps"]) == 120
+    assert len(runtime.document(now)["forecast"]["steps"]) == 192
     for offset in (15, 30, 45, 60, 75, 90):
         later = now + timedelta(minutes=offset)
         assert runtime.job(later) is None
@@ -675,9 +674,9 @@ def test_source_histories_commit_as_one_cohort_and_stale_requests_cannot_change_
     }
 
 
-@pytest.mark.parametrize("minute,tail", [(0, 1), (15, 0.25), (30, 0.5), (45, 0.75)])
-def test_forecast_projection_uses_the_model_contract_without_concrete_type_checks(minute, tail):
-    """An interchangeable 1-kWh/hour predictor keeps exactly 48 kWh for every clock offset, including clipped 30/45-minute tails."""
+@pytest.mark.parametrize("minute", [0, 15, 30, 45])
+def test_forecast_projection_uses_the_model_contract_without_concrete_type_checks(minute):
+    """A 1 kWh/hour model provides 48 kWh in full quarters at all four start offsets."""
 
     @dataclass(frozen=True)
     class AlternativeModel:
@@ -692,9 +691,9 @@ def test_forecast_projection_uses_the_model_contract_without_concrete_type_check
 
     start = START.replace(minute=minute)
     forecast = predict(config(), (), start, AlternativeModel())
-    assert forecast.steps[-1].duration_h == tail
-    assert forecast.steps[-1].kwh == tail
-    assert forecast.steps[-1].start + timedelta(hours=tail) == start + timedelta(hours=48)
+    assert forecast.steps[-1].duration_h == 0.25
+    assert forecast.steps[-1].kwh == 0.25
+    assert forecast.steps[-1].start + timedelta(minutes=15) == start + timedelta(hours=48)
     assert forecast.model == "alternative-test-v1"
     assert forecast.steps[0].kwh == 0.25
     assert sum(step.kwh for step in forecast.steps) == 48

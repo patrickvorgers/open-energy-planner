@@ -122,7 +122,7 @@ requested, published and accepted strategies or reconstruct archived plans.
 arbitrage, stock depletion, in-horizon solar replacement, converter losses on
 all three model types, multiple batteries, capped bonuses, financial terminal
 value, mandatory reserve precedence, unproved primary results and inconsistent
-reported objective evidence. The real worker test retains the 120-step horizon.
+reported objective evidence. The real worker test retains the 192-quarter horizon.
 `tests/app/planning/test_live_app.py` checks delayed manual activation, unchanged old commands
 and archived plans, stale-write rejection, and separate HA acknowledgement.
 Database persistence runs on all four real backends. Browser tests save/reload

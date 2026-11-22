@@ -142,7 +142,7 @@ The reference is an **outcome derived from input**, not the complete input itsel
 Keep the original household/available-PV forecast chart: available DC PV before
 clipping/losses can differ from reference production. The full-horizon price chart
 shows spot market, effective import and effective export rates from original
-`tariff_evidence`, at its billing resolution, even within an hourly control block.
+`tariff_evidence`, at its exact billing resolution, including within a control interval.
 Missing spot evidence stays a gap. Never derive spot from a retail rate. Conditional
 bonuses stay separate because their payment can depend on time, conditions and
 remaining period quota. Detailed factual explanation follows the graphs.

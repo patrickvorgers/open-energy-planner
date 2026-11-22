@@ -17,7 +17,7 @@ Use maintained planning/publication tests, independent solver regressions, actua
 
 Additional acceptance contracts:
 
-- Confirmed horizon: 48 hours, first 24 hours at 15 minutes and last 24 hours at 60 minutes. 120 decision intervals when aligned. Verify duration-weighted energy/costs, continuity at the resolution transition, partial first intervals, UTC/DST handling and existing shortened-horizon fallback. Coarse decisions must preserve applicable price/contract subinterval accounting, bonus thresholds and physical limits. An hourly net balance alone must not hide an infeasible within-hour deficit.
+- Confirmed horizon: 48 elapsed hours in 192 quarter-hour control intervals. Verify duration-weighted energy and costs, partial first intervals, UTC/DST handling and shortened-horizon fallback. Cover exact price and contract boundaries within each quarter, bonus thresholds and physical limits, including on the second day.
 - Device composition: multiple instances of a type, installations without PV/battery, explicit AC/DC paths and shared inverter limits, stable IDs and correct port measurement sides. No cross-instance state or accidental alternate energy route.
 - Reference policy: share physical properties and financial definitions while preserving independent reference state/counters and unconditional PV production subject to ordinary physical limits. Do not introduce price-dependent reference behavior through solver freedom.
 - If incremental updates are implemented: compare each changed coefficient, forecast, initial state, bound and counter with a clean rebuild. Structural changes invalidate reuse. Native highspy updates are optional. This conditional work is not required merely because the interface supports them.
@@ -78,7 +78,7 @@ S01–S04 and their companions are specified in PLANNER-SCENARIOS.md. The follow
 | P24 | Grid target following with sufficient local power | Expected battery flows meet load/PV imbalance within limits. Zero-grid target has no arbitrary offset | GRID-06/12 |
 | P25 | Grid target following at battery/reserve/inverter limit | Expected residual grid flow is physical. No promise of exact zero beyond capability | GRID, BAT |
 | P26 | Partial first interval and quarter/hour transition | Energy uses actual duration. No full-interval charge in a short remainder | HORIZON-08 |
-| P27 | Coarse tail containing a price/rule/limit boundary | Preserve boundary or reject aggregation. Do not claim equivalence where temporal detail is lost | HORIZON, PRIJS |
+| P27 | Second-day quarter containing a price, rule or device boundary | Preserve the boundary and verify segment billing, bonus eligibility and physical limits | HORIZON, PRIJS |
 | P28 | DST spring/autumn day in a European timezone | UTC identity and correct elapsed duration. No missing/duplicate energy or bonus interval | time contract |
 | P29 | Missing/NaN/overlapping/stale input or inconsistent units | Reject or use explicit allowed fallback. Never turn missing price/SoC into zero | CONFIG, UITVAL |
 | P30 | Time limit with and without candidate | Accept only independently valid candidate with non-optimal status. Otherwise no new plan | SOLVER-02/03 |

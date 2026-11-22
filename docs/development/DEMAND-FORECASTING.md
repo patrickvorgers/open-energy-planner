@@ -302,9 +302,8 @@ Example advanced configuration (all channels must describe disjoint AC flows):
 }
 ```
 
-Forecasts cover 48 elapsed hours: first 24 hours in 96 quarters, then 24 hourly
-intervals. Hourly model averages are split across quarters. This does not claim
-measured or learned quarter-hour detail. Partially elapsed intervals are projected
+Forecasts cover 48 elapsed hours in 192 quarters. Hourly model estimates are
+projected onto the quarter-hour grid. Their original model resolution is hourly. Partially elapsed intervals are projected
 by overlap when used by the planner. Forecast issue time is the actual capture
 time, distinct from the quarter used to coalesce background work.
 
@@ -344,8 +343,9 @@ Calendar/startup forecasts remain available during provider outages. External
 data access terms remain applicable. This is not a promise of unrestricted hosted
 commercial API access. Tests use fixtures and make no external weather calls.
 
-One Linux development-container measurement on 8760 hourly samples and 16 features
-took 353.10 ms to fit and 18.53 ms to produce/version 120 intervals. This is one
+One historical Linux development-container measurement on 8760 hourly samples and
+16 features took 353.10 ms to fit and 18.53 ms to produce/version 120 intervals on
+the former mixed-resolution grid. This is one
 local measurement, not target-device latency, memory sizing or native ARM evidence.
 
 References: [NumPy least squares](https://numpy.org/doc/stable/reference/generated/numpy.linalg.lstsq.html),
@@ -360,7 +360,7 @@ mean. Its slope is the smaller adjacent same-direction change, limited to keep
 the rate nonnegative. Flat hours and local extrema stay flat. First/last weather
 hours use a zero boundary slope, without asking the model for unavailable past
 or future features. Integration preserves each complete hour's kWh exactly,
-including UTC intervals across daylight-saving changes and the mixed-grid seam.
+including UTC quarters across daylight-saving changes.
 For means 1, 2 and 3 kWh/hour, the middle hour becomes 0.40625, 0.46875,
 0.53125 and 0.59375 kWh: still exactly 2 kWh.
 

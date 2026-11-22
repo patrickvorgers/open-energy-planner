@@ -12,14 +12,13 @@ from open_energy_planner.planning_policy import planning_grid
 from open_energy_planner.solar.calculation.model import horizon as solar_horizon
 
 
-def test_shared_default_grid_has_96_quarters_and_24_hours_across_dst():
-    """The agreed 48 elapsed hours remain exactly 120 decisions across Europe's DST change, shared by demand and solar."""
+def test_shared_default_grid_has_192_quarters_across_dst():
+    """Demand and solar share 192 quarters across Europe's DST change."""
     now = datetime(2026, 10, 24, 23, 7, tzinfo=UTC)
     demand, solar = demand_horizon(now), solar_horizon(now)
     assert demand == solar
-    assert len(demand) == 120
-    assert all(duration == 0.25 for _, duration in demand[:96])
-    assert all(duration == 1 for _, duration in demand[96:])
+    assert len(demand) == 192
+    assert all(duration == 0.25 for _, duration in demand)
     assert demand[-1][0] + timedelta(hours=demand[-1][1]) == now.replace(minute=0) + timedelta(
         hours=48
     )
@@ -45,9 +44,9 @@ from open_energy_planner.contracts.bonus import BonusRule
 from open_energy_planner.contracts.calculation.formula import Formula
 now = datetime(2026,10,22,tzinfo=UTC)
 for grid in (demand(now),solar(now)):
-    assert len(grid) == 132
+    assert len(grid) == 240
     assert grid[-1][0]+timedelta(hours=grid[-1][1]) == now+timedelta(hours=60)
-assert len(capture(now).problem.intervals) == 132
+assert len(capture(now).problem.intervals) == 240
 assert evaluation_cutoffs(now) == tuple(now-timedelta(hours=h) for h in (180,120,60))
 prices = PriceSeries("test","NL","EUR",now,now,now+timedelta(hours=1),tuple(
     PricePoint(now+timedelta(hours=h),now+timedelta(hours=h+1),0.1,PriceKind.FORECAST,60) for h in range(84)))
@@ -80,33 +79,24 @@ assert len(asyncio.run(EpexPredictor(Client(),"NL").fetch(now)).points) == 84
 def test_unaligned_synthetic_grid_preserves_the_supplied_start():
     """Explicit synthetic captures preserve their exact input time while ordinary forecasts align to the current quarter."""
     now = datetime(2026, 10, 22, 0, 7, 15, tzinfo=UTC)
-    assert planning_grid(now, align=False)[0][0] == now
+    grid = planning_grid(now, align=False)
+    assert grid[0][0] == now
+    assert grid[-1] == (now + timedelta(hours=47, minutes=45), 0.25)
     assert planning_grid(now)[0][0] == now.replace(minute=0, second=0)
 
 
-@pytest.mark.parametrize(
-    "minute,fine_count,tail", [(0, 96, 1), (15, 99, 0.25), (30, 98, 0.5), (45, 97, 0.75)]
-)
+@pytest.mark.parametrize("minute", [0, 15, 30, 45])
 @pytest.mark.parametrize(
     "day", [datetime(2026, 3, 28, 10, tzinfo=UTC), datetime(2026, 10, 24, 10, tzinfo=UTC)]
 )
-def test_clock_hour_switch_preserves_exact_48_hours_for_every_quarter(
-    minute, fine_count, tail, day
-):
-    """Extend quarters to the next clock hour after 24h. Keep contiguous 48h coverage through both DST transitions.
-
-    Starts at :15/:30/:45 need 99/98/97 fine steps. Coarse decisions start
-    at :00 and only the final horizon edge may be shorter than an hour.
-    """
+def test_quarter_grid_preserves_exact_48_hours_for_every_start(minute, day):
+    """Keep contiguous quarter decisions through both DST transitions and across the second day."""
     start = day.replace(minute=minute)
     grid = planning_grid(start)
-    assert len(grid) == fine_count + 24
-    assert all(duration == 0.25 for _, duration in grid[:fine_count])
-    assert grid[fine_count][0].minute == 0
-    assert grid[fine_count][0] - start == timedelta(minutes=15 * fine_count)
-    assert all(begin.minute == 0 and duration == 1 for begin, duration in grid[fine_count:-1])
-    assert grid[-1][1] == tail
-    assert grid[-1][0] + timedelta(hours=tail) == start + timedelta(hours=48)
+    assert len(grid) == 192
+    assert all(duration == 0.25 for _, duration in grid)
+    assert grid[96][0] == start + timedelta(hours=24)
+    assert grid[-1][0] + timedelta(minutes=15) == start + timedelta(hours=48)
     assert sum(duration for _, duration in grid) == 48
     assert all(
         left + timedelta(hours=duration) == right for (left, duration), (right, _) in pairwise(grid)

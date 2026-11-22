@@ -159,7 +159,7 @@ class EVWindow:
 
 
 def windows(work, intervals):
-    """Use UTC-quarter EV commands, independent of coarser stationary-device command groups."""
+    """Use UTC-quarter EV commands independently of billing subdivisions."""
     first = max(intervals[0].start, work.ready_at)
     last = min(intervals[-1].start + timedelta(hours=intervals[-1].duration_h), work.deadline)
     quantum = FINE_INTERVAL_MINUTES * SECONDS_PER_HOUR / MINUTES_PER_HOUR
@@ -176,9 +176,8 @@ def windows(work, intervals):
 def tail_durations(work, intervals):
     """Allow one exact final maximum-power pulse rather than inventing below-minimum setpoints.
 
-    Full fine/coarse windows contain integer fine-step quanta. At most the first
-    and last clipped window are irregular. Their possible inclusion gives a
-    finite remainder catalogue, including a short session that fits no full slot.
+    Only the first and last windows can be shorter than a quarter. Their possible
+    inclusion gives a finite remainder catalogue, even for a session with no full slot.
     Starts remain on the configured command grid. Only the final stop can be earlier.
     """
     rate = delivered_power(work.maximum_w, work.delivery_points) / WATTS_PER_KW
@@ -210,8 +209,7 @@ def tail_options(work, intervals):
 
     Variable full-window setpoints remain available. A final partial window uses
     one of the physical power limits, keeping the timing contract finite and
-    independently checkable. Coarse controls also need whole fine quanta before
-    their residual stop, rather than discarding these feasible longer pulses.
+    independently checkable.
     """
     powers = {work.maximum_w}
     if work.control == "variable" and work.minimum_w > 0:
@@ -219,16 +217,14 @@ def tail_options(work, intervals):
     maximum_seconds = max(
         (window.duration_h * SECONDS_PER_HOUR for window in windows(work, intervals)), default=0
     )
-    quantum_seconds = FINE_INTERVAL_MINUTES * SECONDS_PER_HOUR / MINUTES_PER_HOUR
     options = set()
     for power in powers:
         adjusted = replace(work, minimum_w=min(work.minimum_w, power), maximum_w=power)
-        remainders = {0, *tail_durations(adjusted, intervals)}
-        for multiple in range(int(maximum_seconds // quantum_seconds) + 1):
-            for remainder in remainders:
-                seconds = round(multiple * quantum_seconds + remainder, TAIL_SECONDS_PRECISION)
-                if 0 < seconds < maximum_seconds:
-                    options.add((power, seconds))
+        options.update(
+            (power, seconds)
+            for seconds in tail_durations(adjusted, intervals)
+            if 0 < seconds < maximum_seconds
+        )
     return tuple(sorted(options))
 
 

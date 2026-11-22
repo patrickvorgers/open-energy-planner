@@ -47,8 +47,7 @@ below-reserve batteries. Shared power limits can produce multiple equally early
 allocations. Financial optimization breaks those ties. This is not a per-battery
 fairness guarantee. Recovery means earliest feasible **interval-end** stocks at
 the configured planning resolution, not a fast local regulator or a new deadline
-setting. Equal-power control groups and the mixed-resolution horizon remain in
-force.
+setting. Equal-power control groups retain a quarter's command across its billing segments.
 
 ## Solver ownership and bounded work
 
@@ -154,7 +153,7 @@ Both scenarios retain independent real battery inventories.
 `tests/app/installation/test_reserve_recovery.py` contains independent numeric oracles for enabled
 versus optional recovery, expensive-first charging, power/grid headroom, several
 batteries sharing a converter, direct-DC losses, post-recovery arbitrage,
-unreachable recovery, zero accessible terminal value, and the complete 120-step
+unreachable recovery, zero accessible terminal value, and the complete 192-quarter
 horizon. It also checks deadline/status failure, original-objective restoration,
 fixed commands and unchanged reference dispatch. Legacy scalar/shared-AC model
 paths use the same policy.

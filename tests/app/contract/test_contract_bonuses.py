@@ -329,13 +329,11 @@ def test_counter_and_bonus_rule_revisions_survive_restart(tmp_path):
 
 
 @pytest.mark.parametrize("window", ["clock", "monthly_schedule"])
-def test_48_hour_billing_refinement_keeps_120_commands(tmp_path, window):
-    """Refine 96 quarters plus 24 hours for exact tariffs/windows without creating additional commands."""
+def test_48_hour_billing_refinement_keeps_192_commands(tmp_path, window):
+    """Split quarter billing at exact tariff and bonus boundaries while retaining 192 commands."""
     steps = tuple(
         Interval(NOW + timedelta(minutes=15 * index), 0.25, 999, 999, pv_kwh=0.25)
-        for index in range(96)
-    ) + tuple(
-        Interval(NOW + timedelta(hours=24 + index), 1, 999, 999, pv_kwh=1) for index in range(24)
+        for index in range(192)
     )
     current = rule(window="clock", start_time="06:07", end_time="22:07", timezone="UTC")
     if window == "monthly_schedule":
@@ -362,7 +360,7 @@ def test_48_hour_billing_refinement_keeps_120_commands(tmp_path, window):
     assert len(basis.problem.intervals) > 192
     assert sum(step.pv_kwh for step in basis.problem.intervals) == pytest.approx(48)
     assert costs.bonus_income == pytest.approx(32 * 0.04)  # Two 16-hour daily windows.
-    assert len(CommandMapper().build(snapshot, result, costs, NOW)["steps"]) == 120
+    assert len(CommandMapper().build(snapshot, result, costs, NOW)["steps"]) == 192
 
 
 def test_contract_year_boundary_and_future_reset_keep_measured_initial_volume(tmp_path):

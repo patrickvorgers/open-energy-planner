@@ -69,7 +69,7 @@ def _validated_example(two_batteries=False):
                 market + 0.10,
                 market,
                 "published" if start < START + timedelta(hours=24) else "forecast",
-                15 if hours == 0.25 else 60,
+                15,
                 "synthetic-teaching-prices",
                 "documentation-prices",
                 schedule.version,

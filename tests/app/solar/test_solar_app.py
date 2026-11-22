@@ -263,9 +263,8 @@ def test_solar_api_projects_two_sources_into_real_plan_and_retains_original_arch
                 raise AssertionError(data)
             forecast = data["forecast"]
             first = datetime.fromisoformat(forecast["energies"][0]["start"])
-            assert (
-                len(forecast["energies"]) == 2 * {0: 120, 15: 123, 30: 122, 45: 121}[first.minute]
-            )
+            assert first.minute % 15 == 0 and first.second == 0
+            assert len(forecast["energies"]) == 2 * 192
             assert forecast["model"] == "pvwatts-v2"
             published = (await wait_ready(session, url))["plan"]
             plan = published["input_snapshot"]

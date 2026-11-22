@@ -258,9 +258,9 @@ instant. Battery series are keyed by immutable device ID, never by the display n
 Only duplicate names receive a readable ordinal. Unique HA device names stay
 unchanged. Native source resolution stays explicit. Repeating hourly forecasts
 does not claim quarter-hour prediction detail. Selected interval values remain accessible through the keyboard-operated inspector.
-The [price timeline and control grid](PRICE-TIMELINE-AND-CONTROL-GRID.md) keeps
-quarter billing separate from clock-hour controls after at least 24 hours, within
-an exact 48-hour horizon. Internal billing rows do not add control decisions.
+The [price timeline and control grid](PRICE-TIMELINE-AND-CONTROL-GRID.md) uses
+quarter-hour control throughout the 48-hour horizon. Billing rows preserve any
+exact boundaries within each control quarter.
 
 Axes use actual UTC instants with local display dates and elapsed time spacing.
 Aggregated day/month evaluation bins retain UTC calendar labels. Missing coverage

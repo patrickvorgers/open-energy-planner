@@ -541,7 +541,7 @@ def test_live_bootstrap_builds_complete_plan_from_settings_forecasts_prices_and_
                                         result = result["plan"]
                                     assert result["reference_forecast_issue"] == expected_issue
                             assert archive.get_plan(retained["plan_id"]) == retained
-                assert len(plan["steps"]) >= 120
+                assert len(plan["steps"]) >= 192
                 assert len(plan["input_snapshot"]["problem"]["batteries"]) == count
                 values = plan["input_snapshot"]["problem"]["terminal_valuations"]
                 assert len(values) == count

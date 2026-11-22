@@ -76,7 +76,8 @@ def test_demand_http_startup_history_and_real_plan_evidence(tmp_path):
             assert demand["forecast"]["model"] == "startup-v2"
             steps = demand["forecast"]["steps"]
             first = datetime.fromisoformat(steps[0]["start"])
-            assert len(steps) == {0: 120, 15: 123, 30: 122, 45: 121}[first.minute]
+            assert first.minute % 15 == 0 and first.second == 0
+            assert len(steps) == 192
             assert sum(step["duration_h"] for step in steps) == 48
             assert demand["forecast"]["quality"] == "provisional"
             original = tmp_path / "demand" / f"forecast-{demand['forecast']['version']}.json"

@@ -79,17 +79,16 @@ def test_east_west_is_equal_capacity_combination_with_distinct_daily_shapes():
         )
 
 
-@pytest.mark.parametrize(
-    "instant,groups", [(START, 120), (datetime(2026, 10, 25, 0, 15, tzinfo=UTC), 123)]
-)
-def test_forecast_preserves_48_hours_clock_hour_controls_and_per_source_energy(instant, groups):
-    """Across normal and DST days, each source keeps 48 hours, clock-hour coarse controls and the hourly-energy integral."""
+@pytest.mark.parametrize("instant", [START, datetime(2026, 10, 25, 0, 15, tzinfo=UTC)])
+def test_forecast_preserves_48_hours_of_quarters_and_per_source_energy(instant):
+    """Across normal and DST days, each source keeps 192 quarters and the hourly-energy integral."""
     forecast = PVWattsPredictor().forecast(plant(count=2), SITE, weather(instant), instant)
-    assert len(forecast.energies) == 2 * groups
+    assert len(forecast.energies) == 2 * 192
     for source in ("pv0", "pv1"):
         series = [
             source_item for source_item in forecast.energies if source_item.source_id == source
         ]
+        assert all(series_item.duration_h == 0.25 for series_item in series)
         assert sum(series_item.duration_h for series_item in series) == 48
         assert series[-1].start + timedelta(hours=series[-1].duration_h) == series[
             0
@@ -409,10 +408,10 @@ def test_basis_trims_only_future_tail_and_still_rejects_internal_solar_gaps():
     source, configuration, report = forecast_basis(START, runtime, load_steps=steps)
     original_load = source.demand.forecast
     result = source.current(configuration, START, report=report)
-    assert len(result.problem.intervals) == 120
+    assert len(result.problem.intervals) == 192
     last = result.problem.intervals[-1]
     assert last.start + timedelta(hours=last.duration_h) == START + timedelta(hours=48)
-    assert last.load_kwh == last.duration_h == 1
+    assert last.load_kwh == last.duration_h == 0.25
     assert sum(interval.pv_kwh for interval in result.problem.intervals) == pytest.approx(
         sum(row.dc_kwh for row in forecast.energies)
     )
@@ -430,7 +429,7 @@ def test_basis_trims_only_future_tail_and_still_rejects_internal_solar_gaps():
 
 
 def test_sixteen_source_basis_indexes_forecast_rows_once_and_preserves_total_energy():
-    """Index 1920 source records once for 120 planning steps. Per-source DC totals retain the independent forecasts."""
+    """Index 3,072 forecasts from 16 sources once and preserve their DC energy over 192 quarters."""
     definition = plant(count=16)
     forecast = PVWattsPredictor().forecast(definition, SITE, weather(), START)
     scans = []
@@ -462,7 +461,7 @@ def test_sixteen_source_basis_indexes_forecast_rows_once_and_preserves_total_ene
     source, configuration, report = forecast_basis(START, runtime)
     result = source.current(configuration, START, report=report)
     assert scans == [1]
-    assert len(result.problem.intervals) == 120
+    assert len(result.problem.intervals) == 192
     assert sum(step.pv_kwh for step in result.problem.intervals) == pytest.approx(
         sum(row.dc_kwh for row in forecast.energies)
     )

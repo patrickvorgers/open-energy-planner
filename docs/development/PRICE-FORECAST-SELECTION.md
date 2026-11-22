@@ -14,7 +14,7 @@ Publication coverage varies with collection time. 0–24 hours is not a fixed
 published-price boundary. Forecast preferences only apply to unpublished hours.
 Never replace a known price with a statistically better prediction.
 
-The command horizon remains 48 hours: 96 quarters followed by 24 hours. Request
+The command horizon covers 48 hours in 192 quarters. Request
 up to 72 hours from EpexPredictor to supply the existing up-to-24-hour terminal
 valuation window beyond the command horizon. This does not add executable steps.
 EnergyPriceForecast supplies its existing free 48-hour forecast. No API key, subscription or locally hosted prediction model is introduced. SQLAlchemy and its PostgreSQL/MariaDB/MySQL drivers provide the agreed storage abstraction.
@@ -179,7 +179,7 @@ runtime rewrite of user settings.
 
 ## Named policy and planning horizon
 
-`planning_policy.py` owns `PLANNING_HORIZON_HOURS`, fine/coarse resolution and the terminal window. Both solar and demand use its shared grid. Synthetic planning, price composition, bonus/contract validation, forecast evaluation and weather coverage read the same policy. Step counts and extra price coverage are derived. Changing the planning horizon from 48 to 60 in an isolated test produces 132 decisions and requests 84 price hours without editing consumers. Provider free-access/availability limits remain separately named bounds and can shorten actual coverage. Changing a constant does not fabricate missing prices/weather or remove physical/admission limits.
+`planning_policy.py` owns `PLANNING_HORIZON_HOURS`, quarter-hour resolution and the terminal window. Both solar and demand use its shared grid. Synthetic planning, price composition, bonus/contract validation, forecast evaluation and weather coverage read the same policy. Step counts and extra price coverage are derived. Changing the planning horizon from 48 to 60 in an isolated test produces 240 decisions and requests 84 price hours without editing consumers. Provider free-access/availability limits remain separately named bounds and can shorten actual coverage. Changing a constant does not fabricate missing prices/weather or remove physical/admission limits.
 
 `prices/policy.py` owns MAE thresholds, evidence window/minimums, streak length and retry intervals. The status API includes the policy so UI text follows actual settings. These are code constants, not extra wizard options.
 

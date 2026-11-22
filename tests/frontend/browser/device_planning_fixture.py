@@ -31,9 +31,9 @@ def seed(directory, *, fractional_boundaries=False, legend_devices=False):
     Args:
         directory: Empty app data directory receiving the validated archived plan.
         fractional_boundaries: Shift ready times forward and deadlines backward
-            by 123456 microseconds, and fix acknowledged starts at ready_at.
-            This isolates boundary precision from free-scheduling search. The
-            default retains ordinary free scheduling over the full 48 hours.
+            by 123456 microseconds. Fix acknowledged starts at ready_at and
+            keep the battery idle to isolate exact device boundaries. The default
+            retains free appliance scheduling and battery dispatch over 48 hours.
         legend_devices: Include an unused meter and an expected-only device
             whose consumption starts exactly at the second day's boundary.
     """
@@ -129,11 +129,18 @@ def seed(directory, *, fractional_boundaries=False, legend_devices=False):
         assert len(snapshot.problem.appliances) == 2
         assert len(snapshot.load_components) == (7 if legend_devices else 5)
         if fractional_boundaries:
-            # Freeze acknowledged starts to test boundary precision independently of timing search.
+            # Test exact device boundaries with fixed starts and an idle battery.
             snapshot = replace(
                 snapshot,
                 problem=replace(
                     snapshot.problem,
+                    batteries=tuple(
+                        replace(
+                            unit,
+                            battery=replace(unit.battery, charge_limit_w=0, discharge_limit_w=0),
+                        )
+                        for unit in snapshot.problem.batteries
+                    ),
                     appliances=tuple(
                         replace(work, fixed_start=work.ready_at)
                         for work in snapshot.problem.appliances

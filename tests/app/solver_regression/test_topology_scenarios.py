@@ -33,7 +33,7 @@ def test_lost_conversion_energy_cannot_be_invented_in_state(solver):
 
 
 @pytest.mark.planner_scenario
-def test_conversion_paths_over_the_confirmed_120_step_horizon(solver):
+def test_conversion_paths_over_the_legacy_120_step_horizon(solver):
     """The unchanged separate AC path exports .9 cubed=.729 kWh over the original 48-hour profile."""
     base = TOPOLOGY_CASES[0].problem
     steps = grid(
