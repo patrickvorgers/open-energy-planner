@@ -452,18 +452,26 @@ def test_first_contract_wakes_price_setup_and_solves_without_poll_or_snapshot(
         opened_areas, solved_import_rates = [], []
         readiness_attempts = []
         failures_remaining = readiness_failures
+        live_planner = None
         original_readiness = LiveInputs.refresh_async
         refresh = ConfiguredPrices.refresh
 
-        async def refresh_readiness(live, *, force=False):
+        async def hold_clock(_live, _lock):
+            """Keep clock-driven rounds out of the independent price wakeup test."""
+            await asyncio.Event().wait()
+
+        monkeypatch.setattr(LiveInputs, "run", hold_clock)
+
+        async def refresh_readiness(live, *, force=False, boundary=None):
             """Fail background reads after price setup without changing saves or subsequent retries."""
-            nonlocal failures_remaining
-            if opened_areas and not force:
+            nonlocal failures_remaining, live_planner
+            live_planner = live.planner
+            if opened_areas and not force and boundary is None:
                 readiness_attempts.append(asyncio.get_running_loop().time())
                 if failures_remaining:
                     failures_remaining -= 1
                     raise OSError("Controlled readiness read failure")
-            return await original_readiness(live, force=force)
+            return await original_readiness(live, force=force, boundary=boundary)
 
         monkeypatch.setattr(LiveInputs, "refresh_async", refresh_readiness)
 
@@ -562,6 +570,8 @@ def test_first_contract_wakes_price_setup_and_solves_without_poll_or_snapshot(
                     # No GET snapshot, new observation or explicit replan between saving and solving.
                     await asyncio.wait_for(solved.wait(), 5)
                     assert solved_import_rates[-1] == pytest.approx(expected_rate)
+                    # Publication and its bookkeeping still own the active round after solve returns.
+                    await asyncio.wait_for(live_planner.wait(), 5)
                     body["expected_version"] = saved["version"]
                 assert opened_areas == ["NL"]
                 assert failures_remaining == 0

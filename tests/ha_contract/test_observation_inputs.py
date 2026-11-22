@@ -744,6 +744,8 @@ def test_live_clock_runs_quarters_and_keeps_pending_updates_through_busy_boundar
             await asyncio.wait_for(started.wait(), 2)
             price[0] = "first-update"
             receive(60)
+            live.refresh(force=True)
+            assert planner.latest.measured_at == NOW + timedelta(seconds=2)
             price[0] = "latest-update"
             receive(299)
             assert len(starts) == 1
