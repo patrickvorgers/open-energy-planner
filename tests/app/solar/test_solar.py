@@ -411,7 +411,7 @@ def test_basis_trims_only_future_tail_and_still_rejects_internal_solar_gaps():
     assert len(result.problem.intervals) == 192
     last = result.problem.intervals[-1]
     assert last.start + timedelta(hours=last.duration_h) == START + timedelta(hours=48)
-    assert last.load_kwh == last.duration_h == 1
+    assert last.load_kwh == last.duration_h == 0.25
     assert sum(interval.pv_kwh for interval in result.problem.intervals) == pytest.approx(
         sum(row.dc_kwh for row in forecast.energies)
     )

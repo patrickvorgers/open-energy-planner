@@ -176,9 +176,8 @@ def windows(work, intervals):
 def tail_durations(work, intervals):
     """Allow one exact final maximum-power pulse rather than inventing below-minimum setpoints.
 
-    Only the first and last windows can be shorter than a quarter.
-    Their possible inclusion gives a
-    finite remainder catalogue, including a short session that fits no full slot.
+    Only the first and last windows can be shorter than a quarter. Their possible
+    inclusion gives a finite remainder catalogue, even for a session with no full slot.
     Starts remain on the configured command grid. Only the final stop can be earlier.
     """
     rate = delivered_power(work.maximum_w, work.delivery_points) / WATTS_PER_KW

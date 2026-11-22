@@ -430,7 +430,7 @@ def test_no_history_always_has_startup_prediction_on_the_quarter_hour_horizon():
 def test_horizon_remains_48_absolute_hours_across_dst(start):
     """Local clock changes alter feature hours, never the elapsed 48-hour horizon or interval continuity."""
     forecast = predict(config(), (), start, WeekdayProfile.fit(config(), ()))
-    assert forecast.steps[-1].start + timedelta(hours=1) == start + timedelta(hours=48)
+    assert forecast.steps[-1].start + timedelta(minutes=15) == start + timedelta(hours=48)
     for left, right in zip(forecast.steps, forecast.steps[1:]):
         assert left.start + timedelta(hours=left.duration_h) == right.start
 
@@ -674,9 +674,9 @@ def test_source_histories_commit_as_one_cohort_and_stale_requests_cannot_change_
     }
 
 
-@pytest.mark.parametrize("minute,tail", [(0, 1), (15, 0.25), (30, 0.5), (45, 0.75)])
-def test_forecast_projection_uses_the_model_contract_without_concrete_type_checks(minute, tail):
-    """An interchangeable 1-kWh/hour predictor keeps exactly 48 kWh for every clock offset, including clipped 30/45-minute tails."""
+@pytest.mark.parametrize("minute", [0, 15, 30, 45])
+def test_forecast_projection_uses_the_model_contract_without_concrete_type_checks(minute):
+    """A 1 kWh/hour model provides 48 kWh in full quarters at all four start offsets."""
 
     @dataclass(frozen=True)
     class AlternativeModel:
@@ -691,9 +691,9 @@ def test_forecast_projection_uses_the_model_contract_without_concrete_type_check
 
     start = START.replace(minute=minute)
     forecast = predict(config(), (), start, AlternativeModel())
-    assert forecast.steps[-1].duration_h == tail
-    assert forecast.steps[-1].kwh == tail
-    assert forecast.steps[-1].start + timedelta(hours=tail) == start + timedelta(hours=48)
+    assert forecast.steps[-1].duration_h == 0.25
+    assert forecast.steps[-1].kwh == 0.25
+    assert forecast.steps[-1].start + timedelta(minutes=15) == start + timedelta(hours=48)
     assert forecast.model == "alternative-test-v1"
     assert forecast.steps[0].kwh == 0.25
     assert sum(step.kwh for step in forecast.steps) == 48
