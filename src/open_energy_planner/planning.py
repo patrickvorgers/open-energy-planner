@@ -497,12 +497,15 @@ class PlanningCoordinator:
         if (
             original.config_revision != current.config_revision
             or original.strategy != current.strategy
-            or original.appliance_revision != current.appliance_revision
+        ):
+            return "configuration_changed"
+        if (
+            original.appliance_revision != current.appliance_revision
             or original.ev_revision != current.ev_revision
             or original.thermal_revision != current.thermal_revision
             or type(original.problem) is not type(current.problem)
         ):
-            return "configuration_changed"
+            return "planning_work_changed"
         if document["input_snapshot_id"] != original.snapshot_id:
             return "candidate_input_mismatch"
         if not original.current_at(now) or not current.current_at(now):

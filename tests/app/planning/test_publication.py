@@ -70,6 +70,27 @@ def test_ev_publication_checks_only_charge_before_command_expiry(
     )
 
 
+@pytest.mark.parametrize(
+    ("field", "reason"),
+    [
+        ("config_revision", "configuration_changed"),
+        ("strategy", "configuration_changed"),
+        ("appliance_revision", "planning_work_changed"),
+        ("ev_revision", "planning_work_changed"),
+        ("thermal_revision", "planning_work_changed"),
+    ],
+)
+def test_publication_distinguishes_configuration_and_device_work(field, reason):
+    """Only changed configuration or strategy is reported as a settings change."""
+    original = capture(NOW, 0.5)
+    coordinator = PlanningCoordinator(service(), None)
+    coordinator.active = original
+    assert (
+        coordinator.publication_rejection({}, NOW, replace(original, **{field: "different"}))
+        == reason
+    )
+
+
 def test_planning_activity_captures_the_actual_calculation_horizon(tmp_path):
     """A real successful calculation publishes its captured interval range on every activity update."""
     from open_energy_planner.activities.events import Events
