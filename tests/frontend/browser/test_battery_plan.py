@@ -50,14 +50,25 @@ def test_optimizer_battery_plan_shares_the_window_and_groups_each_battery(app_pa
     state = page.evaluate("""() => {
         const chart = Chart.getChart('battery-plan-chart');
         const optimizer = Chart.getChart('plan-chart');
-        const optimizerColor = name => optimizer.data.datasets.find(dataset => dataset.label === name).backgroundColor;
+        const optimizerDataset = name => optimizer.data.datasets.find(dataset => dataset.label === name);
+        const optimizerColor = name => optimizerDataset(name).backgroundColor;
+        const powerError = (label, sign) => Math.max(...optimizerDataset(label).data.map((point, index) =>
+            Math.abs(point.y - chart.data.datasets.filter(dataset => dataset.type === 'bar')
+                .reduce((total, dataset) => {
+                    const power = dataset.data[index].y;
+                    return sign * power > 0 ? total + power : total;
+                }, 0))));
         return {soc: [chart.scales.soc.min, chart.scales.soc.max],
             range: [chart.scales.x.min, chart.scales.x.max],
             optimizerRange: [optimizer.scales.x.min, optimizer.scales.x.max],
-            chargeColor: optimizerColor("Battery charge: DC"),
-            dischargeColor: optimizerColor("Battery discharge: DC"),
             pvColor: optimizerColor("Used solar: DC"),
+            pvAcColor: optimizerColor("Used solar: AC"),
+            gridColor: optimizerColor("Grid import: AC"),
+            householdBaseColor: optimizerColor("Household demand: AC"),
+            chargeError: powerError("Battery charge: DC", -1),
+            dischargeError: powerError("Battery discharge: DC", 1),
             series: chart.data.datasets.map(dataset => ({
+                name: dataset.label,
                 edge: dataset.borderColor, color: dataset.backgroundColor, stack: dataset.stack,
                 min: Math.min(...dataset.data.map(point => point.y)),
                 max: Math.max(...dataset.data.map(point => point.y)),
@@ -66,17 +77,37 @@ def test_optimizer_battery_plan_shares_the_window_and_groups_each_battery(app_pa
     }""")
     assert state["soc"] == [0, 100]
     assert state["range"] == state["optimizerRange"]
-    assert len(state["series"]) == 6
-    for offset, initial_soc in [(0, 40), (3, 62.5)]:
-        charge, discharge, soc = state["series"][offset : offset + 3]
-        assert charge["min"] < 0 and charge["max"] == 0
-        assert discharge["min"] == 0 and discharge["max"] > 0
-        assert charge["stack"] == discharge["stack"] == "energy"
-        assert charge["color"] == state["chargeColor"]
-        assert discharge["color"] == state["dischargeColor"]
-        assert charge["edge"] == discharge["edge"] == soc["color"]
+    assert state["chargeError"] < 0.00001
+    assert state["dischargeError"] < 0.00001
+    assert len(state["series"]) == 16
+    for offset, initial_soc in [(0, 40), (8, 62.5)]:
+        pv_dc, pv_ac, grid_import, other_charge, own_use, grid_export, other_discharge, soc = state[
+            "series"
+        ][offset : offset + 8]
+        assert all(bar["max"] == 0 for bar in (pv_dc, pv_ac, grid_import, other_charge))
+        assert all(bar["min"] == 0 for bar in (own_use, grid_export, other_discharge))
+        assert pv_dc["color"] == state["pvColor"]
+        assert pv_ac["color"] == state["pvAcColor"]
+        assert grid_import["color"] == grid_export["color"] == state["gridColor"]
+        assert own_use["color"] != state["householdBaseColor"]
+        assert all(
+            bar["stack"] == "energy" and bar["edge"] == soc["color"]
+            for bar in state["series"][offset : offset + 7]
+        )
         assert soc["first"] == initial_soc
-    assert state["series"][0]["edge"] != state["series"][3]["edge"]
+    assert state["series"][0]["edge"] != state["series"][8]["edge"]
+    for label, bound in [
+        ("PV DC", "min"),
+        ("PV AC", "min"),
+        ("Grid import", "min"),
+        ("Own use", "max"),
+        ("Grid export", "max"),
+    ]:
+        assert any(
+            abs(series[bound]) > 0.01
+            for series in state["series"]
+            if series["name"].endswith(f": {label}")
+        )
     assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
     capture = panel if width < 500 else page.locator(".optimizer-scenario")
     capture.screenshot(path=str(images / f"expanded-{width}.png"))
@@ -85,9 +116,9 @@ def test_optimizer_battery_plan_shares_the_window_and_groups_each_battery(app_pa
     point = canvas.evaluate("""element => {
         const chart = Chart.getChart(element);
         const rect = element.getBoundingClientRect();
-        const index = chart.data.datasets[0].data.findIndex(point => point.chargingSources?.pv_dc > 0.1);
+        const index = chart.data.datasets[0].data.findIndex(point => point.y < -0.1);
         const bar = chart.getDatasetMeta(0).data[index];
-        const pvDcKw = chart.data.datasets[0].data[index].chargingSources.pv_dc;
+        const pvDcKw = -chart.data.datasets[0].data[index].y;
         return {x: rect.x + bar.x, y: rect.y + (bar.y + bar.base) / 2, index, pvDcKw};
     }""")
     if width < 500:
@@ -95,10 +126,11 @@ def test_optimizer_battery_plan_shares_the_window_and_groups_each_battery(app_pa
     else:
         page.mouse.move(point["x"], point["y"])
     tooltip = page.locator("#battery-plan-chart-tooltip")
-    expect(tooltip).to_contain_text("Example home battery: Charging")
+    expect(tooltip).to_contain_text("Example home battery: PV DC")
     expect(tooltip).to_contain_text("Example garage battery: SoC at start")
-    expect(tooltip).to_contain_text("PV DC:")
-    source_color = tooltip.get_by_text("PV DC:", exact=False).first.locator(".series-swatch")
+    source_color = tooltip.get_by_text("Example home battery: PV DC", exact=True).locator(
+        ".series-swatch"
+    )
     assert source_color.evaluate(
         """(element, color) => {
             const comparison = document.createElement('span');
@@ -109,12 +141,28 @@ def test_optimizer_battery_plan_shares_the_window_and_groups_each_battery(app_pa
     )
     if width == 1440:
         tooltip.screenshot(path=str(images / "charging-sources.png"))
+        export_point = canvas.evaluate("""element => {
+            const chart = Chart.getChart(element);
+            const dataset = chart.data.datasets.findIndex(series => series.label.endsWith(': Grid export')
+                && series.data.some(point => point.y > 0.1));
+            const index = chart.data.datasets[dataset].data.findIndex(point => point.y > 0.1);
+            const bar = chart.getDatasetMeta(dataset).data[index];
+            const rect = element.getBoundingClientRect();
+            return {x: rect.x + bar.x, y: rect.y + (bar.y + bar.base) / 2};
+        }""")
+        page.mouse.move(export_point["x"], export_point["y"])
+        expect(tooltip).to_contain_text("Grid export")
+        expect(tooltip).to_contain_text("Own use")
+        tooltip.screenshot(path=str(images / "discharge-destinations.png"))
 
     garage.uncheck()
-    assert page.evaluate("""() => {
+    assert (
+        page.evaluate("""() => {
         const chart = Chart.getChart('battery-plan-chart');
         return chart.data.datasets.map((dataset, index) => chart.isDatasetVisible(index));
-    }""") == [True, True, True, False, False, False]
+    }""")
+        == [True] * 8 + [False] * 8
+    )
     page.get_by_role("button", name="Next 6 hours").click()
     assert (
         page.evaluate("""() => {

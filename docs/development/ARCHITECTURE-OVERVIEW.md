@@ -242,7 +242,7 @@ flowchart TD
     QUALITY -->|Chronological comparison evidence| PREFS["forecast_selection/<br/>Model preferences for future forecasts"]
     ARCHIVE --> SAVINGS["savings/<br/>Measured operation versus the reference"]
     ARCHIVE --> READ["Authenticated app APIs<br/>Settings, current state, archives and diagnostic status"]
-    ARCHIVE -->|Original battery and inverter flows| BATTERY["installation/charge_sources.py<br/>Allocate planned charging sources"]
+    ARCHIVE -->|Original battery, inverter and grid flows| BATTERY["installation/battery_flows.py<br/>Attribute battery sources and destinations"]
     BATTERY --> READ
     QUALITY --> READ
     SAVINGS --> READ

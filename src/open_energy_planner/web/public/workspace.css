@@ -376,8 +376,13 @@
 .battery-plan > summary { min-height:44px; box-sizing:border-box; padding:12px 8px; }
 .battery-plan > summary:focus-visible { outline-offset:-2px; }
 .battery-plan > p { margin:4px 0 8px; }
-.chart-tooltip .charging-source-detail { display:flex; flex-wrap:wrap; gap:4px 12px; padding-inline-start:20px; font-weight:400; }
-.chart-tooltip .charging-source-detail > span { white-space:nowrap; }
+.battery-flow-key { display:flex; flex-wrap:wrap; gap:8px 20px; margin:8px 0; font-size:12px; }
+.battery-flow-key > div { display:flex; flex-wrap:wrap; align-items:center; gap:4px 10px; }
+.battery-flow-key span { display:inline-flex; align-items:center; gap:4px; white-space:nowrap; }
+@media (max-width:560px) {
+    .battery-flow-key > div { width:100%; }
+    .battery-flow-key strong { flex-basis:100%; }
+}
 .workspace .scenario-costs details dl { display:flex; flex-wrap:wrap; gap:12px 32px; margin:10px 0; }
 .workspace .scenario-costs details dd { font-size:16px; font-weight:400; }
 .workspace .scenario-costs > p { font-size:13px; color:var(--oep-muted); }

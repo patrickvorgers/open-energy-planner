@@ -130,7 +130,7 @@ def test_plan_and_simulation_reads_skip_evidence_and_preserve_originals(tmp_path
                         if key != "terminal_valuations"
                     }
                     # The archived interval has no charge or inverter evidence to attribute.
-                    expected["battery_charging_sources"] = [{}]
+                    expected["battery_flow_attribution"] = [{}]
                     assert projected == {"plan": expected}
                     assert len(json.dumps(projected)) < len(json.dumps(complete["plan"]))
                 elif view == "simulations":

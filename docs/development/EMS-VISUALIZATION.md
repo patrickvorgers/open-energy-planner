@@ -32,20 +32,28 @@ bars and line share a legend control keyed by device ID. Missing values remain
 gaps. The chart follows the Planning time window and has its own power scale.
 It is created when opened and is omitted when the original plan has no batteries.
 
-Power bars follow the installation balance colors for charging and discharging.
-The endpoints of each stacked bar use the battery's SoC color. Charging source
-swatches use the same DC solar, AC solar and grid import colors as the balance.
+Charging sources stack below zero. Discharge destinations stack above zero.
+PV segments share the colors of the installation balance. Both grid directions
+use grid blue. Discharge to own use has a distinct dark ochre, while the battery
+SoC color identifies its line and bar edges.
 
-The original display-plan API derives charging attribution from frozen flows.
-Each inverter allocates local PV DC to its battery DC demand before allowing
-remaining PV to contribute to its recorded AC export. AC charging uses that
-PV export before available grid import. Charging demands share a source
-proportionally, with inverter and battery DC conversion losses applied at their
-own boundaries. Attribution is expressed in kWh at each battery's terminals.
-Unsupported or unassigned energy remains explicit. Tooltip power averages the
-attribution over the same covered portion of a quarter as its charge bar.
-The keyboard-operated interval inspector lists the same source attribution in kWh
-for the selected original interval.
+The original display-plan API returns `battery_flow_attribution` from frozen
+flows, per native interval and battery. Each converter assigns local PV DC to
+its battery demand first. At the shared AC boundary, PV supplies aggregate site
+load before battery discharge supplies the remaining load. AC solar surplus
+supplies remaining AC charging before grid import. Reserve any further solar
+surplus against site export before attributing remaining discharge to grid export.
+Each shared allocation is proportional to the corresponding AC contribution or
+request. For a shared DC converter, local flows are apportioned using the DC
+conversion factors. All contributions are expressed in terminal kWh and sum
+to their recorded direction totals. Transfers and missing source or destination
+evidence are displayed as **Other** where the terminal total is known.
+
+Chart bars and tooltips display duration-weighted mean kW over their covered
+quarter. The keyboard-operated interval inspector shows the original interval's
+attribution in kWh. This display convention explains planned flows on a shared
+AC bus. The optimizer, accounting and stored plan continue to use the original
+validated flows.
 
 ## Signed interval balances
 
