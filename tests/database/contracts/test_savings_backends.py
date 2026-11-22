@@ -418,7 +418,7 @@ def test_later_budget_confirmation_initializes_historical_billing_on_every_backe
     )
     confirmed = CounterBook(END, (seed,))
     result = DailySavings(runtime).calculate(
-        "2026-10-22", "UTC", selected, confirmed, END + timedelta(days=1), START, None
+        "2026-10-22", "UTC", selected, END + timedelta(days=1), START
     )
     assert runtime.issue is None
     assert result["cash"]["coverage_seconds"] == 1800
@@ -434,15 +434,15 @@ def test_later_budget_confirmation_initializes_historical_billing_on_every_backe
     assert current.current.seeds[0].used_kwh == 9
 
 
-def test_historical_source_confirmation_survives_a_current_meter_change(settlement, monkeypatch):
-    """A new physical meter's 99-kWh confirmation cannot replace the retained old source's 1-kWh opening volume."""
-    from open_energy_planner.contracts.bonus import CounterBook, CounterSeed
+def test_retained_export_seed_does_not_limit_current_estimates(settlement, monkeypatch):
+    """A retained opening volume above the cap cannot suppress the independently priced export bonus."""
+    from open_energy_planner.contracts.bonus import CounterSeed
 
     runtime, store, _docs, _engine, _plans = settlement
     selected = contract(bonus=True)
     original = store.frames
     seed = CounterSeed(
-        "bonus", selected.bonuses[0].period_start(START), 1, 10, "sensor.export", START
+        "bonus", selected.bonuses[0].period_start(START), 99, 10, "sensor.export", START
     )
     record = json.loads(json.dumps(asdict(seed), default=lambda value: value.isoformat()))
 
@@ -455,9 +455,8 @@ def test_historical_source_confirmation_survives_a_current_meter_change(settleme
         return rows
 
     monkeypatch.setattr(store, "frames", historical_context)
-    new_source = CounterBook(END, (replace(seed, entity_id="sensor.replacement", used_kwh=99),))
     result = DailySavings(runtime).calculate(
-        "2026-10-22", "UTC", selected, new_source, END + timedelta(days=1), START, None
+        "2026-10-22", "UTC", selected, END + timedelta(days=1), START
     )
     assert runtime.issue is None
     assert result["cash"]["coverage_seconds"] == 1800

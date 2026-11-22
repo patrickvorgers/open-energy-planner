@@ -17,9 +17,7 @@ from tests.app.savings.support.scenarios import END, START, contract
 def test_settlement_replay_survives_removal_of_complete_original_plan(settlement):
     """Measured cash remains .80 on both sides after the complete original plan is removed."""
     runtime, store, _documents, engine, plans = settlement
-    DailySavings(runtime).calculate(
-        "2026-10-22", "UTC", contract(), None, END + timedelta(days=1), START, None
-    )
+    DailySavings(runtime).calculate("2026-10-22", "UTC", contract(), END + timedelta(days=1), START)
     expected_context = plans.get_context("original-plan")
     plans.preserve_history()
     plans.state["plan"] = None
@@ -37,7 +35,7 @@ def test_settlement_replay_survives_removal_of_complete_original_plan(settlement
     assert store.context_plan(START) == "original-plan"
     restored = SavingsRuntime(SettlementStore(engine), SqlDocuments(engine, "savings"), reopened)
     result = DailySavings(restored).calculate(
-        "2026-10-22", "UTC", contract(buy="0.4"), None, END + timedelta(days=1), START, None
+        "2026-10-22", "UTC", contract(buy="0.4"), END + timedelta(days=1), START
     )
     assert result["cash"]["actual_cost"] == pytest.approx(0.8)
     assert result["cash"]["without_battery_cost"] == pytest.approx(0.8)

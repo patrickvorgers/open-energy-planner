@@ -109,20 +109,21 @@ class BonusRule:
         """Resolve every strategy through the same rate-independent window contract."""
         return BonusWindow(self.window, self.start_time, self.end_time, self.monthly_schedule)
 
-    def boundaries(self, start, end, *, location=None):
-        """Combine payment edges with dated activation and annual counter boundaries."""
+    def boundaries(self, start, end, *, location=None, include_resets=True):
+        """Combine payment, activation and optionally annual counter boundaries."""
         result = set(
             self.payment_window.boundaries(start, end, timezone=self.timezone, location=location)
         )
         result.add(self.effective_from)
         if self.contract_start is not None:
             result.add(self.contract_start)
-        zone = ZoneInfo(self.timezone)
-        day = start.astimezone(zone).date() - timedelta(days=1)
-        last = end.astimezone(zone).date() + timedelta(days=1)
-        while day <= last:
-            result.add(self.period_start(datetime.combine(day, time(12), zone)))
-            day += timedelta(days=1)
+        if include_resets:
+            zone = ZoneInfo(self.timezone)
+            day = start.astimezone(zone).date() - timedelta(days=1)
+            last = end.astimezone(zone).date() + timedelta(days=1)
+            while day <= last:
+                result.add(self.period_start(datetime.combine(day, time(12), zone)))
+                day += timedelta(days=1)
         return tuple(sorted(instant for instant in result if start < instant < end))
 
     def extra_rate(self, market, instant, *, check_window=True, location=None):

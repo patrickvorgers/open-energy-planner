@@ -616,7 +616,7 @@ def register(
                     contract, book, site = contracts.current, counters.current, location()
                 async with mutation_lock:
                     cancelled = await complete_write(
-                        daily.process, contract, book, datetime.now(UTC), site
+                        daily.process, contract, datetime.now(UTC), site
                     )
                     if cancelled:
                         raise cancelled

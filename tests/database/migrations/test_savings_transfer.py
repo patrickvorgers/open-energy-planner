@@ -55,7 +55,7 @@ def test_settlement_transfers_with_every_archive_table(settlement, tmp_path):
     docs.write("recovery.json", {"end": END.isoformat()})
     daily = DailySavings(runtime)
     report = daily.calculate(
-        "2026-10-22", "UTC", contract(buy="market"), None, END + timedelta(days=1), START, None
+        "2026-10-22", "UTC", contract(buy="market"), END + timedelta(days=1), START
     )
     runtime.store.put_day(report, docs, "2026-10-23")
     start, end = day_window("2026-10-22", "UTC")
@@ -91,7 +91,7 @@ def test_settlement_transfers_with_every_archive_table(settlement, tmp_path):
                 ),
             )
         corrected = DailySavings(restored).calculate(
-            "2026-10-22", "UTC", contract(buy="market"), None, END + timedelta(days=2), START, None
+            "2026-10-22", "UTC", contract(buy="market"), END + timedelta(days=2), START
         )
         restored.store.put_day(corrected, restored.documents, "2026-10-23")
         assert DailySavings(restored).overview(start, end)["cash"]["actual_cost"] == pytest.approx(
@@ -114,7 +114,7 @@ def test_later_budget_confirmation_survives_backend_transfer(settlement, tmp_pat
     )
     confirmed = CounterBook(END, (seed,))
     report = DailySavings(runtime).calculate(
-        "2026-10-22", "UTC", selected, confirmed, END + timedelta(days=1), START, None
+        "2026-10-22", "UTC", selected, END + timedelta(days=1), START
     )
     store.put_day(report, runtime.documents, "2026-10-23")
     start, end = day_window("2026-10-22", "UTC")

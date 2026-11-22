@@ -19,7 +19,7 @@ costs for timezone-aware subperiods of an original plan. A different chart windo
 does not optimize again or change original valuation curves, prices or bonus
 chronology. Whole-plan evidence remains separate from selected-period amounts.
 
-Measured Savings uses `measured-battery-cash-v1`. It runs no continuous battery
+Current measured Savings uses `measured-battery-cash-uncapped-v2`. It runs no continuous battery
 simulation and needs no historical SoC, original physical forecast, wear rate or
 terminal valuation. It does require frozen, disjoint AC measurement bindings,
 published prices and dated contract rules.
@@ -33,7 +33,7 @@ flowchart TD
     R --> B[Without-battery electricity bill]
     T[Published prices and contract rules] --> A
     T --> B
-    C[Independent bonus counters] --> A
+    C[Bonus rates and eligibility windows] --> A
     C --> B
     A --> M[Match accepted quarters]
     B --> M
@@ -64,7 +64,7 @@ not isolate every effect of energy management.
 
 ## Cash and bonus accounting
 
-`bill` splits quarters at published-price, dated-contract, bonus-window and reset
+`bill` splits Savings quarters at published-price, dated-contract and bonus-window
 boundaries. Partial splits use uniform energy rates and retain estimated quality.
 For each side:
 
@@ -80,17 +80,12 @@ Negative savings remain negative. Investment costs, wear and inventory-value
 changes are excluded. Initial or externally introduced battery energy can affect
 cash costs when discharged. Its economic value is not credited or debited here.
 
-The two sides retain independent chronological gross-export bonus usage. A
-confirmed actual export anchor may establish actual usage, or their original
-common opening before divergence. It cannot repair a later unknown no-battery
-allowance. Meter gaps invalidate dependent usage until valid evidence or a real
-contractual reset establishes it. Zero export or a zero bonus rate may still
-produce an exact payment without establishing unknown usage. Missing prices do
-not erase independently established gross export progress.
-
-`HistoricalBonuses` retains bounded native hourly-statistics recovery, confirmed
-reference provenance and compatible aggregate-meter identities. It never grants
-a fresh allowance merely because a view or provisional day starts.
+Savings estimates each side's bonus as its export multiplied by the applicable
+extra rate, subject to the dated rule, price formula, price condition and payment
+window. It ignores contractual export volume caps and needs no opening usage,
+annual reset or prior export evidence. Each available quarter can be evaluated
+independently. The UI discloses that an estimated bonus may exceed a supplier's
+payment. Planning and original-plan repricing continue to value contractual caps.
 
 DC solar meters cannot establish measured AC production behind a hybrid converter.
 These intervals retain actual energy and costs but do not contribute a matched
@@ -134,20 +129,21 @@ updated. Missing raw evidence remains explicitly missing at closure.
 `oep_savings_days` retains the compact report, original policy, recovery/finalization
 metadata, meter totals and original evidence. New reports contain actual and
 without-battery cash breakdowns, a `cash` comparison and `matched_components` on
-matching quarters, and a checkpoint with independent `cash_counters`. There is no reference stock,
-inventory trajectory or self-consumption continuation in new reports.
+matching quarters, and a calendar checkpoint. There is no bonus-counter or
+simulated battery continuation in these reports.
 
-`oep_savings_cash_days` is a portable indexed projection of matching cash totals.
-It references the original day, commits with that report, shares its immutable
-closure and participates in every database transfer. Period totals and daily or
-monthly chart bins are read from one repeatable snapshot. They never aggregate
-legacy economic/reference columns into the new cash basis.
+`oep_savings_uncapped_days` is the indexed projection for the current estimate.
+`oep_savings_cash_days` retains the older capped
+comparison. A selected period containing usable current estimates displays
+only that basis. A period containing only capped results displays those results.
+The UI points to earlier dates when the selection spans both. A report hash
+binds each current projection to its exact report, so an older writer can
+replace a provisional day without leaving stale estimates visible on recovery.
 
 The overview also returns `cash.breakdown.actual` and
 `cash.breakdown.without_battery`, each containing `purchase`, `sale` and `bonus`,
 or null when comparable component evidence is incomplete. Daily settlement
-adds each component only when both scenarios accept the quarter, and projects
-the totals into `oep_savings_cash_components` in the same transaction. Older
+adds each component only when both scenarios accept the quarter. Older capped
 reports can use normalized scenario totals when their coverage equals the
 matched coverage and all components exist. Finalized reports remain immutable.
 An indexed SQL aggregate covers the entire selected range, and a second grouped
@@ -158,8 +154,8 @@ bounded daily payloads.
 Finalized legacy reports and their tables are retained without reinterpretation
 or destructive migration. `GET /v1/evaluations` and explicit revision reads retain
 access to already stored interval evaluations. These readers cannot create new
-legacy evaluations. Expired quarters, missing bonus usage and missing original
-facts are not invented to backfill the new policy. The current UI explains when
+legacy evaluations. Provisional days replay from retained original quarters.
+Expired quarters and missing original facts are never invented. The UI explains when
 a selected historical period has no new-policy comparison.
 
 See the [data dictionary](DATABASE-SCHEMA.md) for columns, signs and payloads.

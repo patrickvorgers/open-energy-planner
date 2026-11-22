@@ -340,20 +340,29 @@ SAVINGS_CASH_DAYS = archive_table(
     Column("coverage_seconds", Double, nullable=False),
     Column("estimated_seconds", Double, nullable=False),
 )
-SAVINGS_CASH_COMPONENTS = archive_table(
-    "oep_savings_cash_components",
+SAVINGS_UNCAPPED_DAYS = archive_table(
+    "oep_savings_uncapped_days",
     Column(
         "start",
         String(TIMESTAMP_LENGTH),
-        ForeignKey(SAVINGS_CASH_DAYS.c.start, ondelete="CASCADE"),
+        ForeignKey(SAVINGS_DAYS.c.start, ondelete="CASCADE"),
         primary_key=True,
     ),
-    Column("actual_purchase", Double, nullable=False),
-    Column("actual_sale", Double, nullable=False),
-    Column("actual_bonus", Double, nullable=False),
-    Column("without_battery_purchase", Double, nullable=False),
-    Column("without_battery_sale", Double, nullable=False),
-    Column("without_battery_bonus", Double, nullable=False),
+    Column("end", String(TIMESTAMP_LENGTH), nullable=False),
+    Column("day", String(TIMESTAMP_LENGTH), nullable=False),
+    Column("currency", String(AREA_LENGTH), nullable=False),
+    Column("report_hash", text_key(HASH_LENGTH), nullable=False),
+    Column("actual_cost", Double),
+    Column("without_battery_cost", Double),
+    Column("savings", Double),
+    Column("coverage_seconds", Double, nullable=False),
+    Column("estimated_seconds", Double, nullable=False),
+    Column("actual_purchase", Double),
+    Column("actual_sale", Double),
+    Column("actual_bonus", Double),
+    Column("without_battery_purchase", Double),
+    Column("without_battery_sale", Double),
+    Column("without_battery_bonus", Double),
 )
 PUBLISHED_PRICES = archive_table(
     "oep_published_prices",

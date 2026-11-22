@@ -10,7 +10,11 @@ from open_energy_planner.core.calendar import day_window
 from open_energy_planner.prices.model import PriceKind, PricePoint, PriceSeries
 from open_energy_planner.prices.storage.adapters.published import retain
 from open_energy_planner.savings.daily import DailySavings
-from open_energy_planner.storage.adapters.lifecycle.schema import SETTLEMENT_FRAMES
+from open_energy_planner.savings.model import CAPPED_CASH_POLICY_VERSION
+from open_energy_planner.savings.storage.adapters.sqlalchemy import stamp
+from open_energy_planner.storage.adapters.lifecycle.schema import SAVINGS_DAYS, SETTLEMENT_FRAMES
+from open_energy_planner.storage.adapters.lifecycle.sqlalchemy import canonical, digest
+from open_energy_planner.storage.adapters.payloads import encode_payload
 from tests.app.savings.support.scenarios import END, START, bindings, contract, frame
 
 
@@ -55,19 +59,19 @@ def test_gap_does_not_block_later_cash_or_require_soc_or_a_simulated_battery(
             ),
         )
     day = DailySavings(runtime).calculate(
-        START.date().isoformat(), "UTC", contract(), None, START + timedelta(days=2), START, None
+        START.date().isoformat(), "UTC", contract(), START + timedelta(days=2), START
     )
     assert day["cash"]["savings"] == pytest.approx(1.20)
     assert day["cash"]["coverage_seconds"] == 1800
     assert "reference" not in day["scenarios"]
-    assert set(day["checkpoint"]) == {"end", "cash_counters"}
+    assert set(day["checkpoint"]) == {"end"}
 
 
 def test_cash_index_retains_matching_totals_and_does_not_mix_a_legacy_day(settlement):
     """Two import-only quarters cost .60 on both sides, and the independent cash index stores exact zero."""
     runtime, store, documents, _engine, _plans = settlement
     day = DailySavings(runtime).calculate(
-        START.date().isoformat(), "UTC", contract(), None, START + timedelta(days=2), START, None
+        START.date().isoformat(), "UTC", contract(), START + timedelta(days=2), START
     )
     store.put_day(day, documents, (START.date() + timedelta(days=1)).isoformat())
     legacy = deepcopy(day)
@@ -101,71 +105,68 @@ def test_cash_index_retains_matching_totals_and_does_not_mix_a_legacy_day(settle
     assert "checkpoint" not in result["days"][0]
 
 
-def test_unknown_without_battery_bonus_preserves_the_exact_matched_breakdown(settlement):
-    """Without-battery export needs its own opening allowance, even though actual export is zero."""
+def test_capped_history_is_retained_and_never_blended_with_current_estimates(settlement):
+    """Choose one cash basis for totals and bins and ignore projections orphaned by an older writer."""
     runtime, store, documents, engine, _plans = settlement
-    with engine.begin() as connection:
-        connection.execute(SETTLEMENT_FRAMES.delete())
-    measured_bindings = bindings()
-    measured_bindings["terms"].append({"entity_id": "sensor.charge", "sign": -1})
-    first = frame(discharged_kwh=0.5)
-    second = frame(start=END, pv_kwh=3)
-    store.put_frames(
-        (
-            replace(first, channels={**first.channels, "sensor.charge": 0.0}),
-            replace(second, channels={**second.channels, "sensor.charge": 2.0}),
-        ),
-        {
-            "bindings": measured_bindings,
-            "seeds": [],
-            "location": None,
-            "market_identity": {"currency": "EUR", "market_area": "NL"},
-        },
-    )
-    date = START.date().isoformat()
-    start, end = day_window(date, "UTC")
+    start, end = day_window(START.date().isoformat(), "UTC")
     day = DailySavings(runtime).calculate(
-        date,
-        "UTC",
-        contract(bonus=True),
-        None,
-        START + timedelta(days=2),
-        start,
-        {"cash_counters": {"actual": None, "without_battery": None}},
+        START.date().isoformat(), "UTC", contract(), START + timedelta(days=2), START
     )
-    actual, without = (day["scenarios"][kind] for kind in ("actual", "without_battery"))
-    assert actual["coverage_seconds"] == 1800
-    assert actual["totals"]["purchase"] == pytest.approx(0.60)
-    assert without["coverage_seconds"] == 900
-    assert without["missing"][1]["start"] == END.isoformat()
-    assert without["missing"][1]["reason"].startswith("The export allowance without a battery")
     store.put_day(day, documents, end.date().isoformat())
-    cash, _days, _count = store.daily_overview(start, end)
-    assert cash["coverage_seconds"] == 900
-    assert cash["savings"] == pytest.approx(0.15)
-    assert cash["breakdown"] == {
-        "actual": {"purchase": pytest.approx(0.30), "sale": 0, "bonus": 0},
-        "without_battery": {"purchase": pytest.approx(0.45), "sale": 0, "bonus": 0},
-    }
+    day_before = start - timedelta(days=1)
+    capped = deepcopy(day)
+    capped.update(
+        day=day_before.date().isoformat(),
+        start=day_before.isoformat(),
+        end=start.isoformat(),
+        policy=CAPPED_CASH_POLICY_VERSION,
+        accounting_policy=CAPPED_CASH_POLICY_VERSION,
+        finalized_at=(end + timedelta(days=4)).isoformat(),
+    )
+    capped["checkpoint"]["end"] = capped["end"]
+    capped["cash"].update(actual_cost=3, without_battery_cost=4, savings=1)
+    capped["scenarios"]["actual"]["totals"].update(purchase=3, grid_cash=3)
+    capped["scenarios"]["without_battery"]["totals"].update(purchase=4, grid_cash=4)
+    capped.pop("matched_components")
+    store.put_day(capped, documents, start.date().isoformat())
+
+    old_cash, _days, _count = store.daily_overview(day_before, start)
+    assert old_cash["bonus_volume_cap_ignored"] is False
+    assert old_cash["savings"] == 1
+    assert old_cash["breakdown"]["actual"]["purchase"] == 3
+    assert store.day(after=day_before) == capped
+
+    cash, _days, _count = store.daily_overview(day_before, end)
+    assert cash["bonus_volume_cap_ignored"] is True
+    assert cash["has_capped_history"] is True
+    assert cash["coverage_seconds"] == 1800
+    assert cash["actual_cost"] == pytest.approx(0.60)
+    assert len(cash["chart"]) == 1
     assert cash["chart"][0]["breakdown"] == cash["breakdown"]
 
-    # An earlier version can replay a provisional day without leaving stale matched components.
-    earlier_report = deepcopy(day)
-    earlier_report.pop("matched_components")
-    store.put_day(earlier_report, documents, end.date().isoformat())
-    older_cash, _days, _count = store.daily_overview(start, end)
-    assert older_cash["breakdown"]["actual"] is None
-    assert older_cash["breakdown"]["without_battery"] == cash["breakdown"]["without_battery"]
+    # Older writers can replace the provisional parent without touching the new projection.
+    rolled_back = {**day, "policy": CAPPED_CASH_POLICY_VERSION}
+    with engine.begin() as connection:
+        connection.execute(
+            SAVINGS_DAYS.update()
+            .where(SAVINGS_DAYS.c.start == stamp(start))
+            .values(
+                payload=encode_payload(canonical(rolled_back)), payload_hash=digest(rolled_back)
+            )
+        )
+    stale, _days, _count = store.daily_overview(day_before, end)
+    assert stale["bonus_volume_cap_ignored"] is False
+    assert stale["savings"] == 1
     store.put_day(day, documents, end.date().isoformat())
-    replayed_cash, _days, _count = store.daily_overview(start, end)
-    assert replayed_cash == cash
+    replayed, _days, _count = store.daily_overview(day_before, end)
+    assert replayed == cash
 
 
 def test_finalized_cash_day_is_immutable_with_its_matching_index(settlement):
     """A rejected rewrite cannot change either the retained report or the associated cash totals."""
     runtime, store, documents, _engine, _plans = settlement
     day = DailySavings(runtime).calculate(
-        START.date().isoformat(), "UTC", contract(), None, START + timedelta(days=7), START, None
+        START.date().isoformat(), "UTC", contract(), START + timedelta(days=7), START
     )
     day["finalized_at"] = (START + timedelta(days=5)).isoformat()
     store.put_day(day, documents, (START.date() + timedelta(days=1)).isoformat())
@@ -182,7 +183,7 @@ def test_legacy_report_is_retained_without_fabricating_new_policy_totals(settlem
     """A finalized legacy day remains readable but cannot be relabelled as measured-cash savings."""
     runtime, store, documents, _engine, _plans = settlement
     day = DailySavings(runtime).calculate(
-        START.date().isoformat(), "UTC", contract(), None, START + timedelta(days=7), START, None
+        START.date().isoformat(), "UTC", contract(), START + timedelta(days=7), START
     )
     day.pop("cash")
     day["policy"] = "daily-savings-v1"
@@ -233,10 +234,8 @@ def test_frozen_market_identity_never_bills_an_old_frame_under_another_currency(
         "2026-10-22",
         "UTC",
         replace(contract(buy="market"), currency="USD"),
-        None,
         START + timedelta(days=2),
         START,
-        None,
     )
     assert report["cash"]["savings"] is None
     assert report["cash"]["coverage_seconds"] == 0
@@ -257,10 +256,8 @@ def test_frozen_market_identity_never_bills_an_old_frame_under_another_currency(
         "2026-10-22",
         "UTC",
         replace(contract(buy="market"), currency="USD"),
-        None,
         START + timedelta(days=2),
         START,
-        None,
     )
     assert matching["cash"]["coverage_seconds"] == 1800
     assert matching["cash"]["actual_cost"] == pytest.approx(0.8)
@@ -278,7 +275,7 @@ def test_dc_solar_preserves_actual_cash_without_fabricating_an_ac_comparison(set
         (frame(), frame(start=END)), {"bindings": selected, "seeds": [], "location": None}
     )
     report = DailySavings(runtime).calculate(
-        "2026-10-22", "UTC", contract(), None, START + timedelta(days=2), START, None
+        "2026-10-22", "UTC", contract(), START + timedelta(days=2), START
     )
     assert report["scenarios"]["actual"]["totals"]["grid_cash"] == pytest.approx(0.60)
     assert report["energy"]["household"]["kwh"] == 2
@@ -319,17 +316,15 @@ def test_unidentified_old_frames_never_infer_market_from_prices(
         "2026-10-22",
         "UTC",
         replace(contract(buy="market"), currency=currency, market_area=area),
-        None,
         START + timedelta(days=2),
         START,
-        None,
     )
     assert report["cash"]["coverage_seconds"] == 0
     assert report["cash"]["actual_cost"] is None
 
 
-def test_missing_price_advances_known_bonus_family_without_establishing_unknown_family(settlement):
-    """Unknown old A stays unknown. Known B advances across an unpriced export and still bills the next quarter."""
+def test_missing_price_skips_only_its_quarter_with_multiple_dated_bonus_rules(settlement):
+    """An unpriced export leaves a gap. The latest rule pays both independently priced quarters."""
     from open_energy_planner.contracts.bonus import BonusRule
     from open_energy_planner.contracts.calculation.formula import Formula
     from open_energy_planner.storage.adapters.lifecycle.schema import PUBLISHED_PRICES
@@ -338,7 +333,6 @@ def test_missing_price_advances_known_bonus_family_without_establishing_unknown_
     old = BonusRule("old", START - timedelta(days=2), Formula("0"), 10, timezone="UTC")
     active = BonusRule("active", START - timedelta(days=1), Formula("0.1"), 1, timezone="UTC")
     selected = replace(contract(), bonuses=(old, active))
-    key = "active|" + active.period_start(START).isoformat()
     measured = tuple(
         frame(start=START + timedelta(minutes=15 * index), exported_kwh=0.5) for index in range(3)
     )
@@ -377,13 +371,11 @@ def test_missing_price_advances_known_bonus_family_without_establishing_unknown_
         "2026-10-22",
         "UTC",
         selected,
-        None,
         START + timedelta(days=2),
         START,
-        {"cash_counters": {"actual": {key: 0.0}, "without_battery": {key: 0.0}}},
     )
     assert report["cash"]["coverage_seconds"] == 1800
-    assert report["scenarios"]["without_battery"]["totals"]["bonus"] == pytest.approx(0.05)
+    assert report["scenarios"]["without_battery"]["totals"]["bonus"] == pytest.approx(0.10)
 
 
 @pytest.mark.parametrize("changed", [{"currency": "USD"}, {"market_area": "BE"}, {}])
@@ -481,10 +473,8 @@ def test_legacy_market_lookup_respects_activation_changes_while_disabled(settlem
             "2026-10-22",
             "UTC",
             replace(contract(), market_area=area),
-            None,
             START + timedelta(days=2),
             START,
-            None,
         )
         assert report["energy"]["grid_import"]["kwh"] == 2
         assert report["cash"]["coverage_seconds"] == 900
@@ -499,8 +489,9 @@ def test_cash_breakdown_never_substitutes_components_from_broader_or_unknown_tim
     """A matched .60 cost remains known while incompatible actual components stay unavailable independently."""
     runtime, store, documents, _engine, _plans = settlement
     day = DailySavings(runtime).calculate(
-        START.date().isoformat(), "UTC", contract(), None, START + timedelta(days=2), START, None
+        START.date().isoformat(), "UTC", contract(), START + timedelta(days=2), START
     )
+    day.update(policy=CAPPED_CASH_POLICY_VERSION, accounting_policy=CAPPED_CASH_POLICY_VERSION)
     day.pop("matched_components")
     if missing_detail == "broader_time":
         day["scenarios"]["actual"]["coverage_seconds"] += 900
@@ -525,14 +516,18 @@ def test_cash_breakdown_never_substitutes_components_from_broader_or_unknown_tim
     assert store.day(after=start) == original
 
 
-def test_cash_breakdown_aggregates_signed_income_across_a_long_range_without_legacy_days(
-    settlement, monkeypatch
+@pytest.mark.parametrize("uncapped", [False, True])
+def test_cash_breakdown_aggregates_signed_income_across_a_long_range(
+    settlement, monkeypatch, uncapped
 ):
-    """New and older rows explain matched net totals across years without loading report payloads."""
+    """Each pricing basis reproduces its matched totals across years without loading report payloads."""
     runtime, store, documents, _engine, _plans = settlement
     day = DailySavings(runtime).calculate(
-        START.date().isoformat(), "UTC", contract(), None, START + timedelta(days=2), START, None
+        START.date().isoformat(), "UTC", contract(), START + timedelta(days=2), START
     )
+    if not uncapped:
+        day.update(policy=CAPPED_CASH_POLICY_VERSION, accounting_policy=CAPPED_CASH_POLICY_VERSION)
+        day.pop("matched_components")
     for offset in (0, 400):
         report = deepcopy(day)
         first = START.date() + timedelta(days=offset)
@@ -542,15 +537,13 @@ def test_cash_breakdown_aggregates_signed_income_across_a_long_range_without_leg
         report["scenarios"]["without_battery"]["totals"].update(
             purchase=18, sale=-2, bonus=0, grid_cash=20
         )
-        if offset:
+        if uncapped:
             report["matched_components"] = {
                 "actual": {"purchase": 12, "sale": 3, "bonus": 1},
                 "without_battery": {"purchase": 18, "sale": -2, "bonus": 0},
             }
             report["scenarios"]["actual"]["coverage_seconds"] += 900
             report["scenarios"]["actual"]["totals"]["purchase"] += 99
-        else:
-            report.pop("matched_components")
         report["cash"].update(actual_cost=8, without_battery_cost=20, savings=12)
         store.put_day(report, documents, end.date().isoformat())
     monkeypatch.setattr(store, "days", lambda *_args, **_kwargs: [])
@@ -576,7 +569,10 @@ def test_chart_breakdown_keeps_each_day_independent_and_rejects_incomplete_month
     """Two days retain distinct .60 and 1.80 costs. One missing component invalidates only its side of that day or month."""
     runtime, store, documents, _engine, _plans = settlement
     first_day = DailySavings(runtime).calculate(
-        START.date().isoformat(), "UTC", contract(), None, START + timedelta(days=2), START, None
+        START.date().isoformat(), "UTC", contract(), START + timedelta(days=2), START
+    )
+    first_day.update(
+        policy=CAPPED_CASH_POLICY_VERSION, accounting_policy=CAPPED_CASH_POLICY_VERSION
     )
     for offset in range(2):
         report = deepcopy(first_day)

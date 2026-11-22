@@ -478,7 +478,7 @@ def test_final_daily_results_and_controls_survive_every_transfer_route_without_s
     )
     runtime = SavingsRuntime(store, documents, original)
     report = DailySavings(runtime).calculate(
-        "2026-10-22", "UTC", contract(), None, END + timedelta(days=4), START, None
+        "2026-10-22", "UTC", contract(), END + timedelta(days=4), START
     )
     report["finalized_at"] = (END + timedelta(days=4)).isoformat()
     store.put_day(report, documents, "2026-10-23")

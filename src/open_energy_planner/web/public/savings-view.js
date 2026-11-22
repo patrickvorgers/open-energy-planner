@@ -38,6 +38,7 @@ export function createSavingsView(host, api) {
         find("savings-total").textContent = message;
         find("savings-total").classList.remove("savings-loss");
         find("savings-outcome").textContent = "Your battery saved";
+        find("savings-bonus-basis").hidden = true;
         for (const id of ["savings-actual", "savings-without"]) find(id).textContent = "Unavailable";
         for (const id of ["savings-actual-bar", "savings-without-bar"]) find(id).style.width = "0%";
         find("savings-selected").textContent = "";
@@ -92,10 +93,13 @@ export function createSavingsView(host, api) {
             }
             const cash = data.cash, currency = cash?.currency || data.currency || "";
             const known = cash?.savings != null && cash.coverage_seconds > 0;
+            const uncapped = known && cash.bonus_volume_cap_ignored === true;
             const amount = value => `${money(value)} ${currency}`.trim();
             find("savings-total").textContent = known ? amount(Math.abs(cash.savings)) : "Not available";
             find("savings-total").classList.toggle("savings-loss", known && cash.savings < 0);
-            find("savings-outcome").textContent = known && cash.savings < 0 ? "Extra electricity cost" : "Your battery saved";
+            if (uncapped) find("savings-outcome").textContent = cash.savings < 0 ? "Estimated extra electricity cost" : "Estimated battery saving";
+            else if (known && cash.savings < 0) find("savings-outcome").textContent = "Extra electricity cost";
+            find("savings-bonus-basis").hidden = !uncapped;
             if (known) {
                 find("savings-actual").textContent = amount(cash.actual_cost);
                 find("savings-without").textContent = amount(cash.without_battery_cost);
@@ -109,8 +113,9 @@ export function createSavingsView(host, api) {
             const complete = known && cash.coverage_seconds === cash.expected_seconds;
             find("savings-status").textContent = complete ? "All measured time in this period is included." : known ? "Partial period: Both costs include only the same available measured time. Missing intervals are excluded." : legacy ? "These retained days use the previous calculation. New measured savings become available for newly evaluated days." : "Waiting for completed measurements and published electricity prices for this period.";
             if (known && cash.estimated_seconds > 0) find("savings-status").textContent += " Includes reconstructed measurements.";
+            if (cash?.has_capped_history) find("savings-status").textContent += " Select earlier dates to see retained results calculated with the volume cap.";
             if (data.issue) find("savings-status").textContent += " " + data.issue;
-            draw(cash?.chart || [], currency, start, end, cash?.aggregation);
+            draw(cash?.chart || [], currency, start, end, cash?.aggregation, uncapped);
             return true;
         } catch {
             if (current !== request) return false;
@@ -119,7 +124,7 @@ export function createSavingsView(host, api) {
         }
     }
     /** Expose each signed daily/monthly amount through tooltips and native keyboard inspection. */
-    function draw(bins, currency, start, end, aggregation) {
+    function draw(bins, currency, start, end, aggregation, uncapped) {
         const canvas = find("savings-chart");
         const points = bins.map(bin => ({x: (Date.parse(bin.start) + Date.parse(bin.end)) / 2, y: bin.savings, bin}));
         selectedIndex = 0;
@@ -147,6 +152,7 @@ export function createSavingsView(host, api) {
             total.textContent = bin.savings == null ? "No comparable measurements" : `Saving: ${money(bin.savings)} ${currency}`;
             if (bin.coverage_seconds > 0 && (!bin.breakdown?.actual || !bin.breakdown?.without_battery)) total.textContent += "\nSome component details are unavailable for the same comparable time.";
             if (bin.estimated_seconds) total.textContent += "\nIncludes reconstructed measurements.";
+            if (uncapped) total.textContent += "\n" + find("savings-bonus-basis").textContent;
             tooltip.replaceChildren(heading, table, total);
             canvas.setAttribute("aria-describedby", tooltip.id);
             document.addEventListener("keydown", dismissTooltip);

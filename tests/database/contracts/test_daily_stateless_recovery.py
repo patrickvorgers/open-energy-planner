@@ -6,7 +6,6 @@ from datetime import timedelta
 import pytest
 from sqlalchemy import delete
 
-from open_energy_planner.contracts.bonus import CounterBook, CounterSeed
 from open_energy_planner.prices.model import PriceKind, PricePoint, PriceSeries
 from open_energy_planner.prices.storage.adapters.published import retain
 from open_energy_planner.savings.daily import DailySavings
@@ -60,14 +59,8 @@ def test_measured_cash_recovers_after_a_missing_quarter_without_stock_replay(set
         "2026-10-22",
         "UTC",
         contract(bonus=stateful == "bonus"),
-        CounterBook(
-            START, (CounterSeed("bonus", START - timedelta(days=1), 0, 10, "sensor.export", START),)
-        )
-        if stateful == "bonus"
-        else None,
         END + timedelta(days=1),
         START,
-        None,
     )
     assert report["scenarios"]["actual"]["coverage_seconds"] == 1800
     assert report["cash"]["actual_cost"] == pytest.approx(0.60)
@@ -79,7 +72,7 @@ def test_measured_cash_recovers_after_a_missing_quarter_without_stock_replay(set
         and item["end"] == (END + timedelta(minutes=15)).isoformat()
         for item in report["scenarios"]["without_battery"]["missing"]
     )
-    assert set(report["checkpoint"]) == {"end", "cash_counters"}
+    assert set(report["checkpoint"]) == {"end"}
 
 
 def test_absent_solar_meter_preserves_cash_without_inventing_measured_zero(settlement):
@@ -96,7 +89,7 @@ def test_absent_solar_meter_preserves_cash_without_inventing_measured_zero(settl
     )
     store.put_frames((measured,), {"bindings": selected, "seeds": [], "location": None})
     report = DailySavings(runtime).calculate(
-        "2026-10-22", "UTC", contract(), None, END + timedelta(days=1), START, None
+        "2026-10-22", "UTC", contract(), END + timedelta(days=1), START
     )
     assert report["energy"]["solar_ac"] == {"kwh": None, "coverage_seconds": 0}
     assert report["scenarios"]["actual"]["totals"]["purchase"] == pytest.approx(0.3)

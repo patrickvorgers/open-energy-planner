@@ -69,6 +69,7 @@ def test_bar_tooltip_explains_its_own_backend_costs_and_clears_after_refresh(app
                 end=datetime(2026, index + 2, 1, tzinfo=UTC).isoformat(),
             )
     data["cash"]["aggregation"] = aggregation
+    data["cash"].update(bonus_volume_cap_ignored=True, has_capped_history=True)
     data["cash"]["chart"][2].update(
         actual_cost=4,
         without_battery_cost=12,
@@ -101,6 +102,11 @@ def test_bar_tooltip_explains_its_own_backend_costs_and_clears_after_refresh(app
         page.get_by_label("Installation API token", exact=True).fill(TOKEN)
         page.get_by_role("button", name="Connect", exact=True).click()
     expect(page.locator("#savings-total")).to_contain_text(f"{data['cash']['savings']:.2f}")
+    expect(page.locator("#savings-outcome")).to_have_text("Estimated battery saving")
+    expect(page.locator("#savings-bonus-basis")).to_be_visible()
+    expect(page.locator("#savings-status")).to_contain_text(
+        "retained results calculated with the volume cap"
+    )
     page.locator("#savings-period").get_by_role("button", name="Choose period").click()
     dialog = page.get_by_role("dialog", name="Choose period")
     dialog.get_by_role("button", name="Custom period", exact=True).click()
@@ -128,6 +134,7 @@ def test_bar_tooltip_explains_its_own_backend_costs_and_clears_after_refresh(app
     expect(table.get_by_role("row", name="Bonus income 0.25 EUR 0.50 EUR")).to_be_visible()
     expect(table.get_by_role("row", name="Net electricity cost 4.00 EUR 12.00 EUR")).to_be_visible()
     expect(tooltip).to_contain_text("Saving: 8.00 EUR")
+    expect(tooltip).to_contain_text("Export bonus volume caps are ignored in these estimates.")
     if page.viewport_size["width"] >= 500:
         bounds = tooltip.bounding_box()
         page.mouse.move(
@@ -171,6 +178,7 @@ def test_bar_tooltip_explains_its_own_backend_costs_and_clears_after_refresh(app
     expect(tooltip).to_contain_text("Saving: -4.56 EUR")
     expect(tooltip.get_by_role("row", name="Export income -2.00 EUR 0.00 EUR")).to_be_visible()
     data["cash"]["chart"][3]["breakdown"]["actual"] = None
+    data["cash"].update(bonus_volume_cap_ignored=False, has_capped_history=False)
     page.get_by_role("button", name="Refresh overview", exact=True).click()
     expect(tooltip).not_to_be_visible()
     expect(canvas).to_have_attribute("tabindex", "0")
@@ -182,6 +190,8 @@ def test_bar_tooltip_explains_its_own_backend_costs_and_clears_after_refresh(app
         page.keyboard.press("ArrowRight")
     expect(tooltip.get_by_role("row", name="Import cost Unavailable", exact=False)).to_be_visible()
     expect(tooltip).to_contain_text("same comparable time")
+    expect(tooltip).not_to_contain_text("Export bonus volume caps are ignored")
+    expect(page.locator("#savings-bonus-basis")).not_to_be_visible()
     expect(tooltip).not_to_contain_text("9.75 EUR")
     if page.viewport_size["width"] >= 500:
         page.keyboard.press("PageDown")

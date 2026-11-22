@@ -30,7 +30,7 @@ def test_recovery_skips_all_97_retained_frames_when_a_configuration_splits_a_qua
     day = (START + timedelta(days=1)).date().isoformat()
     first, end = day_window(day, "UTC")
     now = end + timedelta(hours=1)
-    report = DailySavings(runtime).calculate(day, "UTC", contract(), None, now, START, None)
+    report = DailySavings(runtime).calculate(day, "UTC", contract(), now, START)
     report["finalized_at"] = None
     store.put_day(report, documents, end.date().isoformat())
     fragments = [
@@ -78,7 +78,7 @@ def test_permanent_first_gap_does_not_starve_later_recovery_after_restart(
         store.put_frames(
             tuple(frame(start=instant) for instant in measured if instant not in gaps), context
         )
-        report = DailySavings(runtime).calculate(day, "UTC", contract(), None, last, START, None)
+        report = DailySavings(runtime).calculate(day, "UTC", contract(), last, START)
         report["finalized_at"] = None
         store.put_day(report, documents, (last.date()).isoformat())
     original_context = plans.get_context
@@ -190,9 +190,7 @@ def test_sparse_capture_retains_later_costs_and_recovers_only_the_missing_quarte
         None,
     )
     daily = DailySavings(runtime)
-    report = daily.calculate(
-        "2026-10-22", "UTC", contract(), None, scanned + timedelta(days=1), START, None
-    )
+    report = daily.calculate("2026-10-22", "UTC", contract(), scanned + timedelta(days=1), START)
     assert report["scenarios"]["actual"]["coverage_seconds"] == 1800
     assert report["scenarios"]["actual"]["totals"]["purchase"] == pytest.approx(0.6)
     assert {
@@ -236,7 +234,7 @@ def test_sparse_capture_retains_later_costs_and_recovers_only_the_missing_quarte
     assert documents.read("capture.json")["end"] == forward.isoformat()
     assert len(store.frames()) == 3
     assert runtime.request(*arguments)["start"] == scanned.isoformat()
-    repaired = daily.calculate("2026-10-22", "UTC", contract(), None, now, START, None)
+    repaired = daily.calculate("2026-10-22", "UTC", contract(), now, START)
     assert repaired["scenarios"]["actual"]["coverage_seconds"] == 2700
     assert repaired["scenarios"]["actual"]["totals"]["purchase"] == pytest.approx(0.9)
     report["finalized_at"] = now.isoformat()
@@ -259,7 +257,7 @@ def test_measured_energy_survives_unavailable_plan_accounting(settlement, monkey
         original["market_area"] = "PRIVATE-MARKET-SENTINEL"
     monkeypatch.setattr(plans, "get_context", lambda _identity: original)
     report = DailySavings(runtime).calculate(
-        "2026-10-22", "UTC", contract(), None, END + timedelta(days=1), END, None
+        "2026-10-22", "UTC", contract(), END + timedelta(days=1), END
     )
     assert report["energy"] == {
         "grid_import": {"kwh": 1, "coverage_seconds": 900},
@@ -290,7 +288,7 @@ def test_invalid_energy_bindings_do_not_abort_later_measured_quarters(settlement
         )
     store.put_frames((frame(),), {"bindings": malformed, "seeds": [], "location": None})
     report = DailySavings(runtime).calculate(
-        "2026-10-22", "UTC", contract(), None, END + timedelta(days=1), START, None
+        "2026-10-22", "UTC", contract(), END + timedelta(days=1), START
     )
     assert report["energy"] == {
         "grid_import": {"kwh": 1, "coverage_seconds": 900},
@@ -333,7 +331,7 @@ def test_malformed_price_only_invalidates_its_original_frame_overlap(settlement)
             .values(start="2026-10-22T10:15:PRIVATE")
         )
     report = DailySavings(runtime).calculate(
-        "2026-10-22", "UTC", contract(), None, END + timedelta(days=1), START, None
+        "2026-10-22", "UTC", contract(), END + timedelta(days=1), START
     )
     actual = report["scenarios"]["actual"]
     assert actual["totals"]["purchase"] == pytest.approx(0.6)
@@ -341,7 +339,7 @@ def test_malformed_price_only_invalidates_its_original_frame_overlap(settlement)
     assert {
         "start": END.isoformat(),
         "end": third.isoformat(),
-        "reason": "Required prices, counters or physical evidence are unavailable.",
+        "reason": "Required prices or physical evidence are unavailable.",
     } in actual["missing"]
     # The valid meter-only middle quarter advances stock. Accepted costs are .20 then .30.
     assert report["energy"]["grid_import"] == {"kwh": 3, "coverage_seconds": 2700}
@@ -377,7 +375,7 @@ def test_missing_daily_prerequisite_is_visible_and_blocks_maintenance_until_reco
 
     runtime, store, docs, _engine, plans = settlement
     report = DailySavings(runtime).calculate(
-        "2026-10-22", "UTC", contract(), None, END + timedelta(days=5), START, None
+        "2026-10-22", "UTC", contract(), END + timedelta(days=5), START
     )
     report["finalized_at"] = (END + timedelta(days=5)).isoformat()
     store.put_day(report, docs, datetime.now(UTC).date().isoformat())
@@ -471,12 +469,12 @@ def test_prerequisite_recovery_does_not_clear_an_unrelated_issue_before_a_day_ca
             ACTIVATIONS.insert().values(activated_at=stamp(now), plan_id="original-plan")
         )
     runtime.issue, runtime.attention = "An unrelated retained warning", True
-    assert DailySavings(runtime).process(contract(), None, now, SiteLocation(52, 6, "UTC")) is None
+    assert DailySavings(runtime).process(contract(), now, SiteLocation(52, 6, "UTC")) is None
     assert runtime.issue == "An unrelated retained warning"
     assert runtime.attention is True
     with engine.begin() as connection:
         connection.execute(ACTIVATIONS.delete())
-    assert DailySavings(runtime).process(None, None, now, None) is None
+    assert DailySavings(runtime).process(None, now, None) is None
     assert runtime.issue == "An unrelated retained warning"
 
 
@@ -495,7 +493,7 @@ def test_timezone_pause_is_owned_visible_and_recovers_without_rewriting_days(
 
     runtime, store, docs, _engine, plans = settlement
     report = DailySavings(runtime).calculate(
-        "2026-10-22", "UTC", contract(), None, END + timedelta(days=5), START, None
+        "2026-10-22", "UTC", contract(), END + timedelta(days=5), START
     )
     report["finalized_at"] = (END + timedelta(days=5)).isoformat()
     store.put_day(report, docs, datetime.now(UTC).date().isoformat())
@@ -577,9 +575,7 @@ def test_daily_partial_results_keep_measured_totals_without_extrapolating(settle
     """Two measured import-only quarters cost .60 on both sides and compare exactly 1800 seconds."""
     runtime, _store, _docs, _engine, _plans = settlement
     daily = DailySavings(runtime)
-    report = daily.calculate(
-        "2026-10-22", "UTC", contract(), None, END + timedelta(days=1), START, None
-    )
+    report = daily.calculate("2026-10-22", "UTC", contract(), END + timedelta(days=1), START)
     assert report["expected_seconds"] == 86400
     assert report["scenarios"]["actual"]["coverage_seconds"] == 1800
     assert report["scenarios"]["actual"]["status"] == "partial"
@@ -597,10 +593,8 @@ def test_later_cash_intervals_do_not_require_continuous_battery_history(settleme
         "2026-10-22",
         "UTC",
         contract(),
-        None,
         END + timedelta(days=1),
         START - timedelta(minutes=15),
-        None,
     )
     assert report["cash"]["savings"] == 0
     assert report["scenarios"]["actual"]["totals"]["purchase"] == pytest.approx(0.6)
@@ -613,7 +607,7 @@ def test_final_day_survives_restart_and_rejects_corrections(settlement):
     daily = DailySavings(runtime)
     now = datetime(2026, 10, 26, tzinfo=UTC)
     docs.write("daily-upgrade.json", {"day": "2026-10-22", "timezone": "UTC"})
-    report = daily.process(contract(), None, now, SiteLocation(52, 6, "UTC"))
+    report = daily.process(contract(), now, SiteLocation(52, 6, "UTC"))
     assert report["finalized_at"] == now.isoformat()
     assert store.day(finalized=True) == report
     assert report["scenarios"]["actual"]["status"] == "partial"
@@ -631,7 +625,7 @@ def test_provisional_day_accepts_late_evidence_before_calendar_deadline(settleme
     runtime, store, docs, _engine, _plans = settlement
     daily = DailySavings(runtime)
     first = daily.process(
-        contract(), None, datetime(2026, 10, 23, tzinfo=UTC), SiteLocation(52, 6, "UTC")
+        contract(), datetime(2026, 10, 23, tzinfo=UTC), SiteLocation(52, 6, "UTC")
     )
     assert first["finalized_at"] is None
     second = {**first, "evaluated_at": "2026-10-24T00:00:00+00:00"}
@@ -697,7 +691,7 @@ def test_complete_days_use_every_quarter_and_independent_cost_oracles(
         context,
     )
     daily = DailySavings(runtime)
-    report = daily.calculate(day, timezone, contract(), None, end + timedelta(hours=1), start, None)
+    report = daily.calculate(day, timezone, contract(), end + timedelta(hours=1), start)
     assert report["expected_seconds"] == quarters * 900
     assert report["scenarios"]["actual"]["totals"]["purchase"] == pytest.approx(quarters * 0.3)
     assert report["scenarios"]["without_battery"]["totals"]["purchase"] == pytest.approx(
@@ -711,7 +705,7 @@ def test_upgrade_does_not_immediately_seal_old_missing_data(settlement):
     """Old partial history gets a recovery window after upgrade rather than losing its first pending HA response."""
     runtime, store, _docs, _engine, _plans = settlement
     report = DailySavings(runtime).process(
-        contract(), None, datetime(2026, 11, 1, 12, tzinfo=UTC), SiteLocation(52, 6, "UTC")
+        contract(), datetime(2026, 11, 1, 12, tzinfo=UTC), SiteLocation(52, 6, "UTC")
     )
     assert report["finalized_at"] is None
     assert report["finalizes_after"] == "2026-11-05T00:00:00+00:00"
@@ -726,7 +720,7 @@ def test_missing_price_does_not_block_a_later_cash_interval(settlement):
             PUBLISHED_PRICES.delete().where(PUBLISHED_PRICES.c.start == stamp(START))
         )
     report = DailySavings(runtime).calculate(
-        "2026-10-22", "UTC", contract(), None, END + timedelta(days=1), START, None
+        "2026-10-22", "UTC", contract(), END + timedelta(days=1), START
     )
     assert report["cash"]["savings"] == 0
     assert report["cash"]["coverage_seconds"] == 900
@@ -735,8 +729,8 @@ def test_missing_price_does_not_block_a_later_cash_interval(settlement):
     assert report["energy"]["grid_import"] == {"kwh": 2, "coverage_seconds": 1800}
 
 
-def test_unpriced_export_consumes_each_scenarios_own_bonus_allowance(settlement):
-    """Unpriced .50-kWh export exhausts both remaining allowances. The next export pays no bonus on either side."""
+def test_unpriced_export_cannot_reduce_the_next_quarters_bonus(settlement):
+    """Unpriced export leaves a gap. The following quarter gets the independently computed bonus."""
     import json
     from dataclasses import asdict, replace
 
@@ -781,11 +775,11 @@ def test_unpriced_export_consumes_each_scenarios_own_bonus_allowance(settlement)
         (measured, later), {"bindings": bindings(), "seeds": [seed_wire], "location": None}
     )
     report = DailySavings(runtime).calculate(
-        "2026-10-22", "UTC", contract(bonus=True), None, END + timedelta(days=1), START, None
+        "2026-10-22", "UTC", contract(bonus=True), END + timedelta(days=1), START
     )
-    assert report["scenarios"]["actual"]["totals"]["grid_cash"] == pytest.approx(0.05)
-    assert report["scenarios"]["actual"]["totals"]["bonus"] == 0
-    assert report["scenarios"]["without_battery"]["totals"]["bonus"] == 0
+    assert report["scenarios"]["actual"]["totals"]["grid_cash"] == 0
+    assert report["scenarios"]["actual"]["totals"]["bonus"] == pytest.approx(0.05)
+    assert report["scenarios"]["without_battery"]["totals"]["bonus"] == pytest.approx(0.05)
     assert report["scenarios"]["without_battery"]["coverage_seconds"] == 900
     assert report["cash"]["savings"] == 0
 
@@ -845,7 +839,7 @@ def test_partial_price_day_continues_after_sealing_and_expiring_raw_quarters(set
     )
     daily = DailySavings(runtime)
     report = daily.calculate(
-        "2026-10-22", "UTC", contract(bonus=True), None, end + timedelta(days=4), start, None
+        "2026-10-22", "UTC", contract(bonus=True), end + timedelta(days=4), start
     )
     assert report["scenarios"]["actual"]["totals"]["grid_cash"] == pytest.approx(28.5)
     report["finalized_at"] = (end + timedelta(days=4)).isoformat()
@@ -857,10 +851,8 @@ def test_partial_price_day_continues_after_sealing_and_expiring_raw_quarters(set
         "2026-10-23",
         "UTC",
         contract(bonus=True),
-        None,
         end + timedelta(days=4),
         start,
-        store.day(finalized=True)["checkpoint"],
     )
     assert following["scenarios"]["actual"]["totals"]["grid_cash"] == pytest.approx(0.3)
     assert following["cash"]["savings"] == pytest.approx(0)
@@ -870,11 +862,9 @@ def test_daily_read_cannot_mix_concurrently_corrected_details_and_totals(settlem
     """A .60 cash snapshot stays consistent while another connection publishes a .80 cash correction."""
     runtime, store, docs, _engine, _plans = settlement
     daily = DailySavings(runtime)
-    old = daily.calculate(
-        "2026-10-22", "UTC", contract(), None, END + timedelta(days=1), START, None
-    )
+    old = daily.calculate("2026-10-22", "UTC", contract(), END + timedelta(days=1), START)
     corrected = daily.calculate(
-        "2026-10-22", "UTC", contract(buy=".4"), None, END + timedelta(days=2), START, None
+        "2026-10-22", "UTC", contract(buy=".4"), END + timedelta(days=2), START
     )
     store.put_day(old, docs, "2026-10-23")
     from sqlalchemy import event
@@ -886,7 +876,7 @@ def test_daily_read_cannot_mix_concurrently_corrected_details_and_totals(settlem
         nonlocal published
         if (
             not published
-            and "sum(oep_savings_cash_days" in statement
+            and "sum(oep_savings_uncapped_days" in statement
             and "GROUP BY" not in statement
         ):
             published = True
@@ -930,7 +920,7 @@ def test_daily_http_projection_returns_matching_cash_without_internal_checkpoint
     monkeypatch.setattr(savings_api, "datetime", CalendarNow)
     runtime, store, docs, _engine, plans = settlement
     report = DailySavings(runtime).calculate(
-        "2026-10-22", "UTC", contract(), None, END + timedelta(days=4), START, None
+        "2026-10-22", "UTC", contract(), END + timedelta(days=4), START
     )
     report["finalized_at"] = (END + timedelta(days=4)).isoformat()
     report["device_names"] = {"battery": "Archived battery"}

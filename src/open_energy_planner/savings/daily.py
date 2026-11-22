@@ -1,27 +1,19 @@
 """Close measured local days independently of retained complete plans.
 
-Daily reports contain compact monetary/energy totals and chronological scenario
-checkpoints. Raw quarters remain temporary evidence during three complete local
+Daily reports contain compact monetary/energy totals and calendar checkpoints.
+Raw quarters remain temporary evidence during three complete local
 recovery days. Missing evidence never becomes zero or a whole-day extrapolation.
 """
 
-import json
-from dataclasses import asdict
 from datetime import datetime, timedelta
 from math import fsum
 from zoneinfo import ZoneInfo
 
-from open_energy_planner.contracts.wire import parse_counters
 from open_energy_planner.core.calendar import day_window
 from open_energy_planner.demand.calculation.model import EnergyTerm
 from open_energy_planner.installation.location import SiteLocation
 
-from .accounting import (
-    advance_counters,
-    cash_account,
-    comparison_counters_ready,
-    measured_cash_flows,
-)
+from .accounting import bill, measured_cash_flows
 from .model import (
     CASH_COMPONENTS,
     CASH_POLICY_VERSION,
@@ -35,7 +27,7 @@ from .storage.adapters.sqlalchemy import TOTAL_KEYS, stamp
 RECOVERY_CALENDAR_DAYS = 3
 DAILY_POLICY_VERSION = CASH_POLICY_VERSION
 SCENARIOS = ("actual", "without_battery")
-MISSING_ACCOUNT = "Required prices, counters or physical evidence are unavailable."
+MISSING_ACCOUNT = "Required prices or physical evidence are unavailable."
 TIMEZONE_PAUSE_MESSAGE = "Historical savings are paused because the Home Assistant timezone changed. Restore the original Home Assistant timezone to resume. Existing daily results are retained."
 CONTRACT_PREREQUISITE_MESSAGE = "Contract configuration is required for settlement"
 LOCATION_PREREQUISITE_MESSAGE = (
@@ -126,7 +118,7 @@ class DailySavings:
             "issue": self.runtime.issue,
         }
 
-    def process(self, contract, book, now, location):
+    def process(self, contract, now, location):
         """Revisit provisional days chronologically, then seal due days before any retention is allowed."""
         first = self.store.first_activation()
         if first is None:
@@ -174,12 +166,9 @@ class DailySavings:
             return None
         start, _end = day_window(day.isoformat(), timezone)
         previous = self.store.day(before=start, latest=True)
-        checkpoint = (
-            previous["checkpoint"] if previous and previous["end"] == start.isoformat() else None
-        )
-        if previous and checkpoint is None:
+        if previous and previous["end"] != start.isoformat():
             raise ValueError("Daily savings calendar continuity is unavailable")
-        report = self.calculate(day.isoformat(), timezone, contract, book, now, initial, checkpoint)
+        report = self.calculate(day.isoformat(), timezone, contract, now, initial)
         report["finalizes_after"] = max(
             finalization_time(day.isoformat(), timezone),
             finalization_time(upgrade["day"], timezone),
@@ -230,7 +219,7 @@ class DailySavings:
                 )
         return report
 
-    def calculate(self, day, timezone, contract, book, now, initial, previous):
+    def calculate(self, day, timezone, contract, now, initial):
         """Settle independent measured quarters without simulating a battery trajectory.
 
         Keep actual and reconstructed bonus counters separate. A missing quarter
@@ -245,13 +234,6 @@ class DailySavings:
         if cursor > start:
             for scenario in scenarios.values():
                 missing(scenario, start, min(end, cursor), "Comparison had not started yet.")
-        counters = (previous or {}).get("cash_counters", {})
-        counters = {
-            "actual": counters.get("actual", (previous or {}).get("actual_counters")),
-            "without_battery": counters.get("without_battery"),
-        }
-        if previous is None and cursor == initial:
-            counters = {kind: {} for kind in SCENARIOS}
         paired = {
             "actual_cost": None,
             "without_battery_cost": None,
@@ -264,7 +246,7 @@ class DailySavings:
             key: {"kwh": None, "coverage_seconds": 0.0}
             for key in ("grid_import", "grid_export", "household", "solar_ac")
         }
-        seed_evidence, price_versions = {}, set()
+        price_versions = set()
         historical_markets = {}
         historical_activations = None
         while cursor < end:
@@ -278,7 +260,6 @@ class DailySavings:
                 if frame.start > cursor:
                     for scenario in scenarios.values():
                         missing(scenario, cursor, frame.start, MISSING_MEASUREMENTS)
-                    counters = {kind: None for kind in SCENARIOS}
                 accepted, flows, missing_reasons = {}, {}, {}
                 context = row["context"]
                 try:
@@ -334,35 +315,6 @@ class DailySavings:
                         flows.update(measured_cash_flows(frame, bindings))
                     except (ValueError, KeyError, TypeError) as error:
                         missing_reasons["without_battery"] = self._problem(error)
-                    seeds = (
-                        parse_counters({"seeds": context["seeds"]}, now).seeds
-                        if context["seeds"]
-                        else ()
-                    )
-                    try:
-                        seeds = self.runtime.bonus.prepare(
-                            contract,
-                            frame,
-                            bindings,
-                            seeds,
-                            book,
-                            now,
-                            version(bindings),
-                            {
-                                "counters": {
-                                    "actual": counters["actual"] or {},
-                                    "reference": counters["without_battery"] or {},
-                                }
-                            },
-                        )
-                    except PendingSettlement as error:
-                        self._problem(error)
-                        seeds = ()
-                    for seed in seeds:
-                        record = json.loads(
-                            json.dumps(asdict(seed), default=lambda value: value.isoformat())
-                        )
-                        seed_evidence[version(record)] = record
                     frame_start, frame_end = stamp(frame.start), stamp(frame.end)
                     prices = [
                         price
@@ -370,51 +322,29 @@ class DailySavings:
                         if price["start"] < frame_end and price["end"] > frame_start
                     ]
                     site = SiteLocation(**context["location"]) if context["location"] else None
-                    for kind in SCENARIOS:
-                        if kind not in flows:
-                            counters[kind] = None
-                            continue
+                    for kind, (imported, exported) in flows.items():
                         try:
-                            accepted[kind], counters[kind] = cash_account(
+                            result = bill(
                                 contract,
                                 frame,
-                                flows[kind],
-                                counters[kind],
-                                seeds,
+                                imported,
+                                exported,
+                                None,
+                                (),
                                 prices,
                                 site,
-                                actual=kind == "actual",
-                                common_start=frame.start == initial,
+                                uncapped=True,
                             )
+                            result.update(import_kwh=imported, export_kwh=exported)
+                            accepted[kind] = result
                             price_versions.update(
                                 tariff["source_version"] for tariff in accepted[kind]["tariffs"]
                             )
                         except (ValueError, KeyError, TypeError) as error:
                             missing_reasons[kind] = self._problem(error)
-                            try:
-                                known = kind == "actual" or comparison_counters_ready(
-                                    contract,
-                                    frame.start,
-                                    counters[kind],
-                                    common_start=frame.start == initial,
-                                )
-                                counters[kind] = (
-                                    advance_counters(
-                                        contract,
-                                        frame,
-                                        flows[kind][1],
-                                        counters[kind],
-                                        seeds if known else (),
-                                        site,
-                                    )
-                                    or None
-                                )
-                            except (ValueError, KeyError, TypeError):
-                                counters[kind] = None
                 except (ValueError, KeyError, TypeError) as error:
                     reason = self._problem(error)
                     missing_reasons = dict.fromkeys(SCENARIOS, reason)
-                    counters = {kind: None for kind in SCENARIOS}
                 estimated = frame.quality != "recorded" or any(
                     len(result["tariffs"]) > 1 for result in accepted.values()
                 )
@@ -449,7 +379,6 @@ class DailySavings:
         if cursor < end:
             for scenario in scenarios.values():
                 missing(scenario, cursor, end, MISSING_MEASUREMENTS)
-            counters = {kind: None for kind in SCENARIOS}
         expected = (end - start).total_seconds()
         for scenario in scenarios.values():
             scenario["status"] = (
@@ -471,16 +400,14 @@ class DailySavings:
             "accounting_policy": DAILY_POLICY_VERSION,
             "day_plan_id": self.runtime.plans.day_plan(start, end),
             "contract_version": contract.version,
-            "counter_version": book.version if book else None,
             "published_price_versions": sorted(price_versions),
             "currency": contract.currency,
             "market_area": contract.market_area,
             "energy": energy,
-            "counter_seed_evidence": seed_evidence,
             "scenarios": scenarios,
             "cash": paired,
             "matched_components": matched_components if paired["coverage_seconds"] else None,
-            "checkpoint": {"end": end.isoformat(), "cash_counters": counters},
+            "checkpoint": {"end": end.isoformat()},
         }
 
     def _problem(self, error):

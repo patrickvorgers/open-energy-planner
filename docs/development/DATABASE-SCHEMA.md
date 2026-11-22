@@ -1256,7 +1256,7 @@ Null costs mean unavailable, while a measured/evaluated zero is stored as zero.
 | `self_consumption_comparison_seconds` | Double | Pairwise accepted self-consumption/without-battery duration, or zero. |
 
 The scenario columns above preserve the original historical archive contract.
-New `measured-battery-cash-v1` reports populate actual and without-battery cash
+The two measured battery cash policies populate actual and without-battery cash
 components and accepted seconds. They do not populate reference, wear, inventory,
 economic-cost or old comparison totals. Existing finalized reports remain unchanged.
 
@@ -1267,18 +1267,17 @@ saving and coverage. `matched_components` retains each side's purchase, sale and
 bonus totals on those same intervals, or null when no intervals match. Monetary
 values use the report currency. `energy` retains
 measured gross import/export, household and AC solar kWh with independent coverage.
-Contract/counter versions, published price versions, accounting policy, evaluation
+Contract version, published price versions, accounting policy, evaluation
 time, recovery deadline and optional daily-plan ID remain in the permanent report.
 
-`checkpoint` contains the exclusive UTC `end` and `cash_counters`, with independent
-actual/without-battery rule-period usage in kWh. Null means unknown continuation.
-It contains no simulated battery stock. The public daily response omits checkpoints.
-`counter_seed_evidence` retains opening records keyed by content hash. Older
-physical/inventory checkpoint fields remain readable historical JSON only.
+`checkpoint` contains the exclusive UTC `end`. The current uncapped policy
+requires no counter continuation. Older capped reports may contain
+`checkpoint.cash_counters`, a counter version and `counter_seed_evidence`.
+The public daily response omits checkpoints.
 
 ### `oep_savings_cash_days`
 
-Owned by `SettlementStore`. One matched cash index per new-policy daily report.
+Owned by `SettlementStore`. One matched cash index per capped daily report.
 The parent report, this index and daily progress commit in the same transaction.
 Finalized parent immutability protects both. Legacy reports are never relabelled or
 indexed as this policy. Shared schema creation adds the empty table to existing
@@ -1303,33 +1302,43 @@ SQL and share a repeatable snapshot with bounded parent details. Charts use dail
 bins up to 366 elapsed days and monthly bins for longer ranges. The start primary
 key supports inclusive-start/exclusive-end period reads without loading raw quarters.
 
-### `oep_savings_cash_components`
+Earlier capped reports can show component totals for a scenario only when all
+three components are present and that scenario's coverage equals the matched
+coverage. This proves that the stored components use the same quarters.
 
-Owned by `SettlementStore`. One projection per daily cash index with matched
-component evidence. The report, cash index, components and progress commit
-together. Shared schema creation adds the table without rewriting old rows. All
-four backend transfers include it. Deleting a provisional cash index cascades to
-its component row, including when an older writer replaces that index. Finalized
-reports are immutable.
+### `oep_savings_uncapped_days`
+
+Owned by `SettlementStore`. The current uncapped policy writes one projection
+per day in the same transaction as the report and calendar progress. A day
+with no matched coverage retains null monetary amounts for the chart. Its
+parent key cascades on deletion. The report hash
+guards against stale estimates after an older writer replaces a provisional
+report. Existing capped projections stay readable under their original basis.
+Startup creates this empty table additively. All four backend transfers include it.
 
 | Field | Type / key | Meaning and use |
 | --- | --- | --- |
-| `start` | String(40), PK, FK to `oep_savings_cash_days.start` | Inclusive UTC day start. |
-| `actual_purchase` | Double | Actual import cost on the matching quarters. |
-| `actual_sale` | Double | Signed actual export income on the matching quarters. |
-| `actual_bonus` | Double | Actual bonus income on the matching quarters. |
-| `without_battery_purchase` | Double | Reconstructed import cost on the same quarters. |
-| `without_battery_sale` | Double | Signed reconstructed export income on the same quarters. |
-| `without_battery_bonus` | Double | Reconstructed bonus income on the same quarters. |
+| `start` | String(40), PK, FK to `oep_savings_days.start` | Inclusive UTC day start. |
+| `end` | String(40) | Exclusive UTC day end. |
+| `day` | String(40) | HA-local ISO date for chart grouping. |
+| `currency` | String(32) | Currency shared by both estimates. |
+| `report_hash` | String(64) | Digest of the exact parent report. |
+| `actual_cost` | Double, nullable | With-battery purchase less export income and uncapped bonus. |
+| `without_battery_cost` | Double, nullable | Reconstructed cost on the same quarters. |
+| `savings` | Double, nullable | Without-battery cost less with-battery cost. |
+| `coverage_seconds` | Double | Elapsed seconds accepted on both sides. |
+| `estimated_seconds` | Double | Matched seconds with reconstructed measurements or intra-quarter tariff splits. |
+| `actual_purchase` | Double, nullable | With-battery import cost on the matching quarters. |
+| `actual_sale` | Double, nullable | Signed with-battery export income. |
+| `actual_bonus` | Double, nullable | With-battery bonus before volume caps. |
+| `without_battery_purchase` | Double, nullable | Reconstructed import cost. |
+| `without_battery_sale` | Double, nullable | Signed reconstructed export income. |
+| `without_battery_bonus` | Double, nullable | Reconstructed bonus before volume caps. |
 
-The overview reads `cash.breakdown` and `cash.chart[].breakdown` from the same
-repeatable snapshot. A start-key join uses this projection or, for older
-reports, scenario columns in `oep_savings_days` when their coverage equals the
-cash index's coverage. A side is available only when all three components exist
-for every included day. Zero-coverage days and reports without a cash index
-never contribute. Aggregates cover the entire selection, independently of the
-bounded daily-detail response. Chart queries group by the cash index's HA-local
-`day` column.
+Amount columns share the cash index's time and currency. An overview selects the
+uncapped projection when that period contains valid uncapped rows. A period with
+only usable capped rows reads the capped index. The API exposes the selected
+policy and indicates when capped data also exist outside the selected basis.
 
 
 ## Indexes and query ownership
@@ -1745,10 +1754,9 @@ Forecast-quality reads snapshot the bounded daily-pointer set in one SQL stateme
 The `savings` document `physical-reference.json` is retained historical data only.
 Earlier versions stored independent battery stock and capacities here. New Savings
 processing neither reads nor advances a simulated battery trajectory. Legacy
-checkpoint documents transfer unchanged with the document archive. Current daily
-continuation uses only `oep_savings_days.payload.checkpoint.cash_counters`.
-Unknown usage remains unknown until a valid baseline or contractual reset exists.
-Exact zero bonus payments can still be calculated without inventing a budget.
+checkpoint documents transfer unchanged with the document archive. Capped cash
+reports may retain `oep_savings_days.payload.checkpoint.cash_counters` as
+historical evidence. The current daily estimate has no bonus counter dependency.
 
 ### Historical bonus counter documents
 

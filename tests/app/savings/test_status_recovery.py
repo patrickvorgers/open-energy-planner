@@ -112,9 +112,7 @@ def test_startup_location_recovery_after_capture_needs_no_completed_day(tmp_path
             assert runtime.issue == expected
             assert runtime.attention is True
             assert (
-                DailySavings(runtime).process(
-                    contract(), None, FixedClock.now(START.tzinfo), location[0]
-                )
+                DailySavings(runtime).process(contract(), FixedClock.now(START.tzinfo), location[0])
                 is None
             )
             assert runtime.issue is None

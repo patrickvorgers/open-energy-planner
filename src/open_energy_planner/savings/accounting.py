@@ -71,48 +71,20 @@ def opening_counter_key(identity, period, start, counters, seeds, meter_start):
     return key
 
 
-def advance_counters(contract, frame, exported, previous, seeds, location):
-    """Advance gross-export usage without prices or payment formulas when metering is known.
-
-    Unknown families stay unknown while independently known usage advances. Exact annual and
-    activation boundaries use the same uniform within-quarter split as billing.
-    This advances a detached copy, so a failed attempt cannot partly consume quota.
-    Exported energy and every counter value are gross kWh, independent of rates.
-    """
-    counters = dict(previous) if previous is not None else {}
-    edges = {
-        frame.start,
-        frame.end,
-        *BonusCompiler().boundaries(contract, frame.start, frame.end, location),
-    }
-    families = BonusCompiler().families(contract)
-    for left, right in pairwise(sorted(edge for edge in edges if frame.start <= edge <= frame.end)):
-        fraction = (right - left) / (frame.end - frame.start)
-        for identity, versions in families.items():
-            policy = versions[0]
-            if left < policy.effective_from or (
-                policy.contract_start is not None and left < policy.contract_start
-            ):
-                continue
-            try:
-                key = opening_counter_key(
-                    identity, policy.period_start(left), left, counters, seeds, frame.meter_start
-                )
-            except ValueError:
-                counters.pop(identity + "|" + policy.period_start(left).isoformat(), None)
-                continue
-            counters[key] += exported * fraction
-    return counters
-
-
-def bill(contract, frame, imported, exported, counters, seeds, market_rows, location):
+def bill(
+    contract, frame, imported, exported, counters, seeds, market_rows, location, *, uncapped=False
+):
     """Split at price, contract, annual reset and daylight edges. Preserve every used rule/price version.
 
     Quarter totals imply a uniform rate inside the recorded interval. Sub-quarter
     splits are labelled estimated by the caller, never claimed as sub-minute measurements.
     """
     edges = {frame.start, frame.end}
-    edges.update(BonusCompiler().boundaries(contract, frame.start, frame.end, location))
+    edges.update(
+        BonusCompiler().boundaries(
+            contract, frame.start, frame.end, location, include_resets=not uncapped
+        )
+    )
     for row in market_rows:
         edges.update(
             (
@@ -159,17 +131,26 @@ def bill(contract, frame, imported, exported, counters, seeds, market_rows, loca
         )
         purchase += imported * fraction * buy
         sale += exported * fraction * sell
-        bonus += bonus_payment(
-            contract,
-            left,
-            right,
-            price["price"],
-            exported * fraction,
-            counters,
-            seeds,
-            frame.meter_start,
-            location,
-        )
+        if uncapped:
+            rule = contract.bonus_at(left)
+            if rule is not None:
+                bonus += (
+                    exported
+                    * fraction
+                    * rule.extra_rate(price["price"], left + (right - left) / 2, location=location)
+                )
+        else:
+            bonus += bonus_payment(
+                contract,
+                left,
+                right,
+                price["price"],
+                exported * fraction,
+                counters,
+                seeds,
+                frame.meter_start,
+                location,
+            )
         evidence.append(
             {
                 "start": left.isoformat(),
@@ -224,57 +205,3 @@ def measured_cash_flows(frame, bindings):
         without_import = max(0.0, imported + difference)
         without_export = exported + max(0.0, -difference - imported)
     return {"actual": (imported, exported), "without_battery": (without_import, without_export)}
-
-
-def cash_account(
-    contract, frame, flows, previous, seeds, prices, location, *, actual=False, common_start=False
-):
-    """Bill detached measured/reconstructed flows while preserving independent bonus usage.
-
-    Unknown no-battery usage never borrows a diverged actual seed. A zero bonus
-    payment remains exact without establishing the missing usage. Missing prices
-    do not erase independently known gross export progress.
-    """
-    imported, exported = flows
-    known = actual or comparison_counters_ready(
-        contract, frame.start, previous, common_start=common_start
-    )
-    counters = dict(previous or {})
-    try:
-        result = bill(
-            contract, frame, imported, exported, counters, seeds if known else (), prices, location
-        )
-    except ValueError as error:
-        if not known and error.args == ("Bonus comparison baseline is missing",):
-            raise PendingSettlement(
-                "Without-battery bonus usage is unknown after missing measurements"
-            ) from None
-        raise
-    result.update(import_kwh=imported, export_kwh=exported)
-    return result, counters if counters or comparison_counters_ready(
-        contract, frame.start, counters
-    ) else None
-
-
-def comparison_counters_ready(contract, start, counters, *, common_start=False):
-    """Admit known usage, a true reset or the original common start.
-
-    Counter keys combine rule ID and original period start. Values are gross kWh.
-    ``common_start`` is valid only before the scenarios first diverge. It never
-    means the beginning of a selected date range or the provisional recovery floor.
-    """
-    for versions in BonusCompiler().families(contract).values():
-        policy = versions[0]
-        if start < policy.effective_from or (
-            policy.contract_start is not None and start < policy.contract_start
-        ):
-            continue
-        period = policy.period_start(start)
-        if not (
-            common_start
-            or period == start
-            or counters is not None
-            and policy.rule_id + "|" + period.isoformat() in counters
-        ):
-            return False
-    return True
