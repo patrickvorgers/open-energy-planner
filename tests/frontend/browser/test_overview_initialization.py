@@ -285,7 +285,9 @@ def test_source_name_refresh_bounds_both_views_and_retries_the_revision(
     )
     wait_for_product_reads(page)
     expect(page.locator("#overview-status")).to_contain_text("Connected")
-    expect(page.locator("#savings-status")).to_contain_text("Waiting for completed measurements")
+    expect(page.locator("#savings-status")).to_contain_text(
+        "No savings estimate is available for this period."
+    )
     expect(page.locator("#savings-status")).not_to_contain_text("could not be loaded")
     expect(page.locator("#savings-period .period-trigger")).to_contain_text(
         "10/1/2026 – 10/30/2026"

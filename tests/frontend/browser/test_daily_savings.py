@@ -24,7 +24,9 @@ def test_matched_cash_availability_keeps_zero_and_negative_values(app_page, savi
         "Not available" if saving is None else f"{abs(saving):.2f} EUR"
     )
     expect(page.locator("#savings-outcome")).to_have_text(
-        "Extra electricity cost" if saving is not None and saving < 0 else "Your battery saved"
+        "Estimated extra electricity cost"
+        if saving is not None and saving < 0
+        else "Estimated battery saving"
     )
 
 
