@@ -148,8 +148,13 @@ def test_optimizer_battery_plan_shares_the_window_and_groups_each_battery(app_pa
             const index = chart.data.datasets[dataset].data.findIndex(point => point.y > 0.1);
             const bar = chart.getDatasetMeta(dataset).data[index];
             const rect = element.getBoundingClientRect();
-            return {x: rect.x + bar.x, y: rect.y + (bar.y + bar.base) / 2};
+            const stack = chart.getSortedVisibleDatasetMetas()
+                .filter(meta => meta.type === 'bar' && chart.data.datasets[meta.index].data[index].y > 0.001)
+                .map(meta => ({base: meta.data[index].base, route: meta.label.split(': ').at(-1)}))
+                .sort((left, right) => right.base - left.base).map(segment => segment.route);
+            return {x: rect.x + bar.x, y: rect.y + (bar.y + bar.base) / 2, stack};
         }""")
+        assert export_point["stack"] == ["Own use", "Own use", "Grid export", "Grid export"]
         page.mouse.move(export_point["x"], export_point["y"])
         expect(tooltip).to_contain_text("Grid export")
         expect(tooltip).to_contain_text("Own use")

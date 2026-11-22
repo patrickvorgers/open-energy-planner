@@ -139,3 +139,24 @@ def test_battery_transfer_keeps_unattributed_energy_in_both_directions():
     [result] = battery_flow_attribution(problem, [flow])
     assert result["home"]["discharge"] == {"own_use": 0, "grid_export": 0, "other": 1}
     assert result["garage"]["charge"] == {"pv_dc": 0, "pv_ac": 0, "grid_import": 0, "other": 0.9}
+
+
+def test_attribution_accepts_the_plan_validators_energy_roundoff():
+    """A validated near-zero grid flow is clamped and a larger negative flow is unavailable."""
+    problem = {
+        "inverters": [{"inverter_id": "hybrid", "efficiency": 1}],
+        "pv_sources": [{"source_id": "roof", "inverter_id": "hybrid"}],
+        "batteries": [{"device_id": "home", "inverter_id": "hybrid", "dc_efficiency": 1}],
+    }
+    flow = {
+        "grid_import": -9e-8,
+        "grid_export": 0,
+        "batteries": [{"device_id": "home", "charge_kwh": 1, "discharge_kwh": 0}],
+        "solar": [{"source_id": "roof", "used_kwh": 1}],
+        "inverters": [{"inverter_id": "hybrid", "import_kwh": 0, "export_kwh": 0}],
+    }
+    rounded, unavailable = battery_flow_attribution(
+        problem, [flow, {**flow, "grid_import": -1.1e-7}]
+    )
+    assert rounded["home"]["charge"] == {"pv_dc": 1, "pv_ac": 0, "grid_import": 0, "other": 0}
+    assert unavailable == {}

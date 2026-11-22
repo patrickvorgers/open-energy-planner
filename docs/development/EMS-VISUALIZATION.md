@@ -34,8 +34,9 @@ It is created when opened and is omitted when the original plan has no batteries
 
 Charging sources stack below zero. Discharge destinations stack above zero.
 PV segments share the colors of the installation balance. Both grid directions
-use grid blue. Discharge to own use has a distinct dark ochre, while the battery
-SoC color identifies its line and bar edges.
+use grid blue. Discharge to own use has a distinct dark ochre. Matching routes
+stack together across batteries. The battery SoC color identifies its line and
+bar edges.
 
 The original display-plan API returns `battery_flow_attribution` from frozen
 flows, per native interval and battery. Each converter assigns local PV DC to

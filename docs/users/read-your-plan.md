@@ -56,7 +56,7 @@ The complete balance sums to zero before visual rounding or hiding series. Lines
 
 Open **Battery plan** under **Optimizer** to compare the batteries in the selected plan. Bars below zero show charging and bars above zero show discharging at the battery terminals. The lines show each battery's planned state of charge on the 0 to 100% scale. Batteries charging and discharging at the same time remain visible on opposite sides of zero.
 
-The chart starts collapsed and follows the Planning time selection. Use the legend to hide or show an individual battery. The tooltip shows power and the recorded state of charge at the start of the interval when that state is available. Plans without batteries omit the chart.
+The chart starts collapsed and follows the Planning time selection. Matching flow colors stack together when multiple batteries charge or discharge. Use the legend to hide or show an individual battery. The tooltip shows each battery's power and its recorded state of charge at the start of the interval when available. Plans without batteries omit the chart.
 
 The colors below zero show the source of planned charging. Local **PV DC** comes first, followed by **PV AC** left after serving the installation's total demand, then **Grid import**. The colors above zero show the planned destination. **Own use** covers the part of total installation demand supplied by the battery after PV. **Grid export** shows the battery's share of grid export. Blue identifies the grid in both directions. **Other** shows battery energy without an assigned source or destination.
 

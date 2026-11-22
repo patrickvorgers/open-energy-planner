@@ -2,12 +2,16 @@
 
 from math import isfinite
 
-ENERGY_ROUNDOFF_KWH = 1e-7
+from .validation import DEFAULT_VALIDATION_TOLERANCE
 
 
 def _nonnegative(value):
     """Accept finite physical energy and clamp negligible negative solver roundoff."""
-    if type(value) not in (float, int) or not isfinite(value) or value < -ENERGY_ROUNDOFF_KWH:
+    if (
+        type(value) not in (float, int)
+        or not isfinite(value)
+        or value < -DEFAULT_VALIDATION_TOLERANCE
+    ):
         raise ValueError("Invalid planned energy")
     return max(0.0, value)
 

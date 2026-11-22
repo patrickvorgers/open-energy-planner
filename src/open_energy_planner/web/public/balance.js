@@ -209,11 +209,11 @@ export function batteryPlanSeries(plan, labels) {
             const attributed = rows.map((row, intervalIndex) => batteryRouteValues(
                 row, plan.battery_flow_attribution?.[intervalIndex]?.[unit.device_id], key
             ));
-            return routes.map(([route, label, color]) => ({
+            return routes.map(([route, label, color], routeIndex) => ({
                 ...flowSeries(`${name}: ${label}`, color, intervals,
                     attributed.map(values => values === null ? null : sign * (values[route] ?? 0)),
                     key === "charge" ? "Consumption" : "Production"),
-                ...legend, ...barStyle
+                ...legend, ...barStyle, stackOrder: routeIndex + 1
             }));
         });
         return [...bars, {...state, ...legend}];
