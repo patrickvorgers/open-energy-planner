@@ -42,7 +42,9 @@ def test_all_planning_dates_expose_daily_energy(app_page):
         heading.hover()
         tooltip = page.locator("#" + identity + "-tooltip")
         expect(tooltip).to_be_visible()
-        expect(tooltip.locator(".chart-tooltip-title")).to_contain_text("Expected energy totals")
+        expect(tooltip.locator(".chart-tooltip-title")).to_have_text(
+            "Expected energy totals: 11/4/2026"
+        )
         expect(tooltip.locator(".chart-tooltip-total td:first-child")).to_have_text(
             ["Total expected production", "Total expected energy use"]
         )
@@ -98,7 +100,9 @@ def test_all_planning_dates_expose_daily_energy(app_page):
         heading = card.get_by_role("button", name="Expected energy totals for", exact=False).first
         heading.focus()
         tooltip = page.locator("#" + identity + "-tooltip")
-        expect(tooltip.locator(".chart-tooltip-title")).to_contain_text("Expected energy totals")
+        expect(tooltip.locator(".chart-tooltip-title")).to_have_text(
+            "Expected energy totals: 11/4/2026"
+        )
         expect(tooltip).to_contain_text("Partial day. Totals cover only the shown planned period.")
         expect(tooltip.locator(".chart-tooltip-period")).to_be_in_viewport()
         expect(tooltip.locator(".chart-tooltip-period")).to_contain_text("From ")
@@ -146,8 +150,7 @@ def test_switching_planning_dates_keeps_the_new_summary_open(app_page, identity)
         second.click()
     expect(tooltip).to_be_visible()
     expect(tooltip.locator(".chart-tooltip-title")).to_have_text(
-        "Expected energy totals: "
-        + second.get_attribute("aria-label").removeprefix("Expected energy totals for ")
+        "Expected energy totals: 11/5/2026"
     )
     expect(first).not_to_have_attribute("aria-describedby", identity + "-tooltip")
     expect(second).to_have_attribute("aria-describedby", identity + "-tooltip")
@@ -215,8 +218,7 @@ def test_focusing_an_offscreen_date_keeps_its_summary(app_page, identity):
     expect(tooltip).to_be_visible()
     expect(date).to_have_attribute("aria-describedby", identity + "-tooltip")
     expect(tooltip.locator(".chart-tooltip-title")).to_have_text(
-        "Expected energy totals: "
-        + date.get_attribute("aria-label").removeprefix("Expected energy totals for ")
+        "Expected energy totals: 11/5/2026"
     )
     base = tooltip.locator("tr").filter(has_text="Household base: AC").locator("td").nth(1)
     expect(base).to_have_text("-17.54")

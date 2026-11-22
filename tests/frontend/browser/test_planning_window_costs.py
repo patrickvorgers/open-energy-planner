@@ -89,16 +89,17 @@ def test_six_day_and_full_period_use_financial_module_and_preserve_original(app_
     page.screenshot(path=str(directory / f"planning-{viewport['width']}.png"))
     page.set_viewport_size(viewport)
     totals = []
-    for hours in (6, 24, 48):
+    for hours, end_label in (
+        (6, "11/4/2026, 6:00 AM"),
+        (24, "11/5/2026, 12:00 AM"),
+        (48, "11/6/2026, 12:00 AM"),
+    ):
         expected = period_response(page, url, identity, START, START + timedelta(hours=hours))
         page.locator(f'[data-hours="{0 if hours == 48 else hours}"]').click()
         assert_amounts(page, expected)
         totals.append(expected["scenarios"]["optimizer"]["costs"]["economic_cost"])
         for caption in page.locator(".scenario-period").all():
-            expect(caption).to_have_text(re.compile(r"^From .+ to .+\.$"))
-            expect(caption).not_to_contain_text("Expected, not measured")
-            expect(caption).not_to_contain_text("valuation basis")
-            expect(caption).not_to_contain_text("hours")
+            expect(caption).to_have_text(f"From 11/4/2026, 12:00 AM to {end_label}.")
         assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
         for host in ("ems-costs", "self-consumption-costs", "reference-costs"):
             page.locator(f"#{host} details").evaluate("element => element.open = true")

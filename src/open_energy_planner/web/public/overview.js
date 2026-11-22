@@ -262,7 +262,7 @@ function planningDayHeading(instance, series, tooltip, summary, heading, {date, 
             summary.owner = button; summary.pinned = false;
         }
         const bounds = button.getBoundingClientRect(), canvas = instance.canvas.getBoundingClientRect();
-        renderTooltip({chart: instance, tooltip: {opacity: 1, dataPoints: items, balanceItems, title: [`Expected energy totals: ${full}`],
+        renderTooltip({chart: instance, tooltip: {opacity: 1, dataPoints: items, balanceItems, title: [`Expected energy totals: ${dateLabel(date)}`],
             periodLabel: `From ${when(from)} to ${when(to)}.`, afterBody: notes, caretX: bounds.left + bounds.width / 2 - canvas.left, caretY: bounds.bottom - canvas.top}}, tooltip, true);
         tooltip.classList.add("chart-tooltip-day");
         button.setAttribute("aria-describedby", tooltip.id);
