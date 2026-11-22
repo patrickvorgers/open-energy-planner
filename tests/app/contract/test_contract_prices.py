@@ -416,7 +416,7 @@ def test_forecast_source_cannot_inject_an_unconfigured_bonus(tmp_path):
 
 @pytest.mark.parametrize("with_selection", [False, True])
 def test_48_hour_grid_keeps_quarter_controls_with_mixed_price_resolutions(tmp_path, with_selection):
-    """The 96+24 control grid keeps exact tariffs. Moving lead-bucket splits do not create a new effective price revision."""
+    """Keep exact tariffs across 192 quarters and a stable price revision as lead-bucket splits move."""
     intervals = tuple(
         Interval(start, duration, 999, 999, load_kwh=duration)
         for start, duration in planning_grid(NOW)

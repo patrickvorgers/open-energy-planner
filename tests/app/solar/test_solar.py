@@ -429,7 +429,7 @@ def test_basis_trims_only_future_tail_and_still_rejects_internal_solar_gaps():
 
 
 def test_sixteen_source_basis_indexes_forecast_rows_once_and_preserves_total_energy():
-    """Index 1920 source records once for 192 planning steps. Per-source DC totals retain the independent forecasts."""
+    """Index 3,072 forecasts from 16 sources once and preserve their DC energy over 192 quarters."""
     definition = plant(count=16)
     forecast = PVWattsPredictor().forecast(definition, SITE, weather(), START)
     scans = []
