@@ -50,11 +50,15 @@ def test_optimizer_battery_plan_shares_the_window_and_groups_each_battery(app_pa
     state = page.evaluate("""() => {
         const chart = Chart.getChart('battery-plan-chart');
         const optimizer = Chart.getChart('plan-chart');
+        const optimizerColor = name => optimizer.data.datasets.find(dataset => dataset.label === name).backgroundColor;
         return {soc: [chart.scales.soc.min, chart.scales.soc.max],
             range: [chart.scales.x.min, chart.scales.x.max],
             optimizerRange: [optimizer.scales.x.min, optimizer.scales.x.max],
+            chargeColor: optimizerColor("Battery charge: DC"),
+            dischargeColor: optimizerColor("Battery discharge: DC"),
+            pvColor: optimizerColor("Used solar: DC"),
             series: chart.data.datasets.map(dataset => ({
-                name: dataset.label, color: dataset.borderColor, stack: dataset.stack,
+                edge: dataset.borderColor, color: dataset.backgroundColor, stack: dataset.stack,
                 min: Math.min(...dataset.data.map(point => point.y)),
                 max: Math.max(...dataset.data.map(point => point.y)),
                 first: dataset.data[0].y,
@@ -68,9 +72,11 @@ def test_optimizer_battery_plan_shares_the_window_and_groups_each_battery(app_pa
         assert charge["min"] < 0 and charge["max"] == 0
         assert discharge["min"] == 0 and discharge["max"] > 0
         assert charge["stack"] == discharge["stack"] == "energy"
-        assert charge["color"] == discharge["color"] == soc["color"]
+        assert charge["color"] == state["chargeColor"]
+        assert discharge["color"] == state["dischargeColor"]
+        assert charge["edge"] == discharge["edge"] == soc["color"]
         assert soc["first"] == initial_soc
-    assert state["series"][0]["color"] != state["series"][3]["color"]
+    assert state["series"][0]["edge"] != state["series"][3]["edge"]
     assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
     capture = panel if width < 500 else page.locator(".optimizer-scenario")
     capture.screenshot(path=str(images / f"expanded-{width}.png"))
@@ -91,6 +97,15 @@ def test_optimizer_battery_plan_shares_the_window_and_groups_each_battery(app_pa
     expect(tooltip).to_contain_text("Example home battery: Charging")
     expect(tooltip).to_contain_text("Example garage battery: SoC at start")
     expect(tooltip).to_contain_text("PV DC:")
+    source_color = tooltip.get_by_text("PV DC:", exact=False).first.locator(".series-swatch")
+    assert source_color.evaluate(
+        """(element, color) => {
+            const comparison = document.createElement('span');
+            comparison.style.backgroundColor = color;
+            return comparison.style.backgroundColor === element.style.backgroundColor;
+        }""",
+        state["pvColor"],
+    )
     if width == 1440:
         tooltip.screenshot(path=str(images / "charging-sources.png"))
 

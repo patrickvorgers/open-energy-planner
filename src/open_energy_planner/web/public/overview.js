@@ -3,7 +3,7 @@ import {createSavingsView} from "./savings-view.js";
 import {updateCharts} from "./chart_theme.js";
 import {calendarDays, calendarTime, calendarDayStart} from "./chart_days.js";
 import {money, configuredRate, when, dateLabel, localDate, localInstant, nextDate, percentage, optionLabel, planName, useHomeAssistantTimezone, watchSourceNames} from "./display.js";
-import {batteryPlanSeries, energyBalances, householdForecastEnergy, quarterBalanceSeries, balancePeriodEnergy, QUARTER_MILLISECONDS} from "./balance.js";
+import {batteryPlanSeries, energyBalances, householdForecastEnergy, quarterBalanceSeries, balancePeriodEnergy, FLOW_COLORS, QUARTER_MILLISECONDS} from "./balance.js";
 import {bindSettingsActions, sessionResponse} from "./settings-actions.js";
 bindSettingsActions();
 const $ = (id) => document.getElementById(id);
@@ -59,7 +59,12 @@ const DEVICE_ROUNDING_TOLERANCE_KW = DEVICE_ROUNDING_KW * Number.EPSILON;
 const hiddenPriceSeries = new Set();
 const palette = ["#078b80", "#e49b38", "#5d70bc", "#d56788", "#399bc1", "#8a65ad"];
 const INTERVAL_BAR_FILL = 0.9;
-const CHARGING_SOURCE_LABELS = {pv_dc: "PV DC", pv_ac: "PV AC", grid: "Grid", other: "Other or unassigned"};
+const CHARGING_SOURCES = [
+    ["pv_dc", "PV DC", FLOW_COLORS.solar],
+    ["pv_ac", "PV AC", FLOW_COLORS.solarAC],
+    ["grid", "Grid", FLOW_COLORS.import],
+    ["other", "Other or unassigned", null]
+];
 const CHARGING_SOURCE_DISPLAY_MIN_KW = 0.0005;
 const TOOLTIP_VIEWPORT_MARGIN_PX = 12;
 const MILLISECONDS_PER_MINUTE = 60000;
@@ -178,13 +183,22 @@ function renderTooltip({chart: instance, tooltip}, node, balance = false, balanc
             swatch.classList.toggle("series-swatch-expected", item.dataset.deviceState === "expected");
             label.append(swatch, document.createTextNode(item.dataset.label));
             if (batteryPlan && item.raw?.chargingSources) {
-                const sources = Object.entries(CHARGING_SOURCE_LABELS)
-                    .filter(([source]) => item.raw.chargingSources[source] >= CHARGING_SOURCE_DISPLAY_MIN_KW)
-                    .map(([source, name]) => `${name}: ${number(item.raw.chargingSources[source])} kW`);
+                const sources = CHARGING_SOURCES.filter(([source]) => item.raw.chargingSources[source] >= CHARGING_SOURCE_DISPLAY_MIN_KW);
                 if (sources.length) {
-                    const detail = document.createElement("small");
+                    const detail = document.createElement("div");
                     detail.className = "charging-source-detail";
-                    detail.textContent = sources.join(", ");
+                    for (const [source, name, color] of sources) {
+                        const entry = document.createElement("span");
+                        if (color) {
+                            const mark = document.createElement("span");
+                            mark.className = "series-swatch";
+                            mark.style.backgroundColor = color;
+                            mark.setAttribute("aria-hidden", "true");
+                            entry.append(mark);
+                        }
+                        entry.append(`${name}: ${number(item.raw.chargingSources[source])} kW`);
+                        detail.append(entry);
+                    }
                     label.append(detail);
                 }
             }
@@ -451,7 +465,7 @@ function chart(id, series, {utcDays = false, calendarDates = false, unit = "", m
         }
         if (s.intervals) values.push(...s.intervals.map(({start, end, value, coveredStart, coveredEnd, chargingSources}) => ({x: (start + end) / 2, y: value, start, end, coveredStart, coveredEnd, chargingSources})));
         const color = s.color || palette[index % palette.length];
-        return {label: s.name, data: values, hidden: id === "price-chart" && hiddenPriceSeries.has(s.name), type: s.type || "line", stack: s.stack, yAxisID: s.axis || "y", unit: s.unit || unit, tooltipGroup: s.tooltipGroup, deviceState: s.deviceState, swatchColor: color, borderColor: color, backgroundColor: s.fillColor || deviceFill(color, s.deviceState), borderWidth: s.type === "bar" ? 0 : 2, borderDash: s.reference ? [6, 4] : [], segment: {borderDash: ({p0}) => p0.raw.priceKind === "forecast" ? FORECAST_PRICE_DASH : undefined}, pointRadius: 0, pointHitRadius: 10, spanGaps: false, order: s.axis === "soc" ? 0 : 1};
+        return {label: s.name, data: values, hidden: id === "price-chart" && hiddenPriceSeries.has(s.name), type: s.type || "line", stack: s.stack, yAxisID: s.axis || "y", unit: s.unit || unit, tooltipGroup: s.tooltipGroup, deviceState: s.deviceState, swatchColor: color, borderColor: s.outlineColor || color, backgroundColor: deviceFill(color, s.deviceState), borderWidth: s.outlineColor ? {top: 1, bottom: 1} : s.type === "bar" ? 0 : 2, borderSkipped: s.outlineColor ? false : undefined, borderDash: s.reference ? [6, 4] : [], segment: {borderDash: ({p0}) => p0.raw.priceKind === "forecast" ? FORECAST_PRICE_DASH : undefined}, pointRadius: 0, pointHitRadius: 10, spanGaps: false, order: s.axis === "soc" ? 0 : 1};
     });
     const result = new Chart(canvas, {
         type: "line", data: {datasets: planningLegend ? [] : datasets}, plugins: [intervalWidths, ...(id === "price-chart" ? [dailyPriceExtremes] : []), ...(calendarDates ? [] : [calendarDays]), {
@@ -558,7 +572,7 @@ function chart(id, series, {utcDays = false, calendarDates = false, unit = "", m
             for (const index of indexes) result.setDatasetVisibility(index, input.checked);
             applyRange();
         });
-        const swatch = document.createElement("span"); swatch.className = "series-swatch"; swatch.style.backgroundColor = datasets[indexes[0]].swatchColor; swatch.setAttribute("aria-hidden", "true");
+        const swatch = document.createElement("span"); swatch.className = "series-swatch"; swatch.style.backgroundColor = s.legendColor || datasets[indexes[0]].swatchColor; swatch.setAttribute("aria-hidden", "true");
         label.append(input, swatch, document.createTextNode(s.legendName || s.name)); legend.append(label);
         legendEntries.push({label, input, indexes, device: s.deviceState != null});
     }

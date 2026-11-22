@@ -32,6 +32,10 @@ bars and line share a legend control keyed by device ID. Missing values remain
 gaps. The chart follows the Planning time window and has its own power scale.
 It is created when opened and is omitted when the original plan has no batteries.
 
+Power bars follow the installation balance colors for charging and discharging.
+The endpoints of each stacked bar use the battery's SoC color. Charging source
+swatches use the same DC solar, AC solar and grid import colors as the balance.
+
 The original display-plan API derives charging attribution from frozen flows.
 Each inverter allocates local PV DC to its battery DC demand before allowing
 remaining PV to contribute to its recorded AC export. AC charging uses that

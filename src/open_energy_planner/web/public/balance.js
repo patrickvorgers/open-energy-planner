@@ -1,5 +1,5 @@
 // Presentation of immutable, independently validated physical flows. Never optimize or infer energy routes here.
-const FLOW_COLORS = Object.freeze({solar: "#23965e", solarAC: "#165c3c", import: "#2586c4", export: "#56bac7", discharge: "#d45464", charge: "#8560b5", load: "#d29323", losses: "#88949f"});
+export const FLOW_COLORS = Object.freeze({solar: "#23965e", solarAC: "#165c3c", import: "#2586c4", export: "#56bac7", discharge: "#d45464", charge: "#8560b5", load: "#d29323", losses: "#88949f"});
 const MILLISECONDS_PER_HOUR = 3600000;
 export const QUARTER_MILLISECONDS = MILLISECONDS_PER_HOUR / 4;
 const TIMESTAMP_ROUNDOFF_MILLISECONDS = 1;
@@ -193,13 +193,14 @@ export function batteryPlanSeries(plan, labels) {
     const states = socSeries(plan, intervals, units, labels);
     return units.flatMap((unit, index) => {
         const name = labels.get(unit.device_id) || `Battery ${index + 1}`;
-        const legend = {legendId: unit.device_id, legendName: name};
         const state = states[index];
+        const legend = {legendId: unit.device_id, legendName: name, legendColor: state.color};
+        const barStyle = {outlineColor: state.color};
         const rows = intervals.map((_, intervalIndex) =>
             plan.expected_flows?.[intervalIndex]?.batteries?.find((row) => row.device_id === unit.device_id));
         const charge = rows.map((row) => energy(row?.charge_kwh) ? -row.charge_kwh : null);
         const discharge = rows.map((row) => energy(row?.discharge_kwh) ? row.discharge_kwh : null);
-        const charging = flowSeries(`${name}: Charging`, state.color, intervals, charge, "Consumption");
+        const charging = flowSeries(`${name}: Charging`, FLOW_COLORS.charge, intervals, charge, "Consumption");
         charging.showChargingSources = true;
         charging.intervals.forEach((row, intervalIndex) => {
             const sources = plan.battery_charging_sources?.[intervalIndex]?.[unit.device_id];
@@ -208,10 +209,11 @@ export function batteryPlanSeries(plan, labels) {
                 row.chargingSources = Object.fromEntries(Object.entries(sources).map(([source, amount]) => [source, amount / hours]));
             }
         });
-        const fillColor = `${state.color}d4`;
-        return [ {...charging, ...legend, fillColor},
-            {...flowSeries(`${name}: Discharging`, state.color, intervals, discharge, "Production"), ...legend, fillColor},
-            {...state, ...legend} ];
+        return [
+            {...charging, ...legend, ...barStyle},
+            {...flowSeries(`${name}: Discharging`, FLOW_COLORS.discharge, intervals, discharge, "Production"), ...legend, ...barStyle},
+            {...state, ...legend}
+        ];
     });
 }
 
