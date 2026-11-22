@@ -188,7 +188,8 @@ flowchart TD
     accTitle: Planning round, independent validation and publication
     accDescr: Live inputs produce a coherent snapshot. A coordinator serializes planning rounds, a worker solves the problem, and independent validation and publication checks guard the plan.
     LIVE["Live planning inputs"] --> SNAPSHOT["live_inputs.py<br/>Build the problem and freeze its input snapshot"]
-    SNAPSHOT --> QUEUE["PlanningCoordinator<br/>Schedule rounds and coalesce updates"]
+    CLOCK["Live clock<br/>Quarter-hours and pending 5-minute requests"] --> SNAPSHOT
+    SNAPSHOT --> QUEUE["PlanningCoordinator<br/>Run one calculation at a time"]
     QUEUE --> SERVICE["PlanningService<br/>Calculate a candidate using the snapshot"]
     SERVICE --> SOLVE["optimization/adapters/process/<br/>Solve in the isolated native HiGHS worker"]
     SOLVE --> CHECK["installation/validation.py<br/>Recompute balances, limits and financial results"]
@@ -241,6 +242,8 @@ flowchart TD
     QUALITY -->|Chronological comparison evidence| PREFS["forecast_selection/<br/>Model preferences for future forecasts"]
     ARCHIVE --> SAVINGS["savings/<br/>Measured operation versus the reference"]
     ARCHIVE --> READ["Authenticated app APIs<br/>Settings, current state, archives and diagnostic status"]
+    ARCHIVE -->|Original battery and inverter flows| BATTERY["installation/charge_sources.py<br/>Allocate planned charging sources"]
+    BATTERY --> READ
     QUALITY --> READ
     SAVINGS --> READ
     READ --> UI["web/pages/ and web/public/<br/>Planning, Forecast Quality, Savings and settings"]

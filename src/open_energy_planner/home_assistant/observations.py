@@ -143,7 +143,7 @@ class SnapshotAssembler:
     def expiry(self, configuration, report, now):
         """Return the earliest required-source/report deadline or raise InputsUnavailable."""
         if report.config_revision != configuration.revision:
-            raise InputsUnavailable("configuration_changed")
+            raise InputsUnavailable("report_configuration_mismatch")
         if not 0 <= (now - report.captured_at).total_seconds() < MAX_OBSERVATION_AGE_SECONDS:
             raise InputsUnavailable("report_expired")
         readings = {reading.key: reading for reading in report.readings}

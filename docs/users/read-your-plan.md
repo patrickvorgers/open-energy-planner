@@ -8,6 +8,12 @@ The latest retained plan is the default. **Plan version** lets you inspect histo
 
 The selected plan's graph, prices and interval values appear first. Its power scale initially follows the original plan. When the two simulations arrive, their visible flows join one shared scale update. The two simulation graphs and their cost comparisons follow without waiting for the detailed evidence. A simulation read failure leaves the selected plan usable and shows a retry message. Choose **Refresh overview** to retry. A plan opened through a direct link stays selected during this retry.
 
+Routine input updates are used in the next planning round. An already valid
+calculation can finish while those updates arrive. OEP waits and retries if the
+current installation or strategy, the available device work, or a mismatched
+measurement report prevents it from publishing a valid plan. The notice
+identifies the condition.
+
 A valid older plan can remain in history after a later calculation fails. Its presence does not mean its commands are still applicable. Read the page's status and any source warning.
 
 Charts redraw when their data, visibility, scale or dimensions change. Loading simulations does not redraw unchanged price and forecast charts.
@@ -45,6 +51,16 @@ All three lines are solid. Positive power is import and negative power is export
 Above zero is supply to the modeled balance: used solar, grid import and battery discharge. Below zero is use: household demand, grid export, battery charge and conversion losses. These signs describe this chart's balance. They are not interchangeable with every device's command sign.
 
 The complete balance sums to zero before visual rounding or hiding series. Lines show SoC on the right axis. Bars show mean kW per quarter. Partial quarters identify their covered period in the tooltip.
+
+### Read the battery plan
+
+Open **Battery plan** under **Optimizer** to compare the batteries in the selected plan. Bars below zero show charging and bars above zero show discharging at the battery terminals. The lines show each battery's planned state of charge on the 0 to 100% scale. Batteries charging and discharging at the same time remain visible on opposite sides of zero.
+
+The chart starts collapsed and follows the Planning time selection. Use the legend to hide or show an individual battery. The tooltip shows power and the recorded state of charge at the start of the interval when that state is available. Plans without batteries omit the chart.
+
+The tooltip also breaks charging down by source. OEP attributes planned charging to local **PV DC** first, then **PV AC** from the shared AC bus, then **Grid**. When batteries share a source, it is divided in proportion to their charging demand. Any remaining charging power is shown as **Other or unassigned**.
+
+You can also read the source breakdown in kWh under **Understand this plan**. Open **Selected interval details**, select an interval, and open **Energy balance and source details**.
 
 ### Solar AC, Solar DC and conversion losses
 

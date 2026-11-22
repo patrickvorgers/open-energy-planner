@@ -413,7 +413,6 @@ class PlanningCoordinator:
         self.events = None
         self.latest = None
         self.active = None
-        self.last_calculation_started = None
         self.published = None
         self.task = None
         self.closed = False
@@ -471,12 +470,17 @@ class PlanningCoordinator:
             )
             self.events.availability("planning", health, detail)
 
+    @property
+    def busy(self):
+        """Report whether a submitted round is running or still being recorded."""
+        return self.task is not None and not self.task.done()
+
     def submit(self, snapshot: InputSnapshot):
         """Replace the latest requested snapshot and start a worker task only when needed."""
         if self.closed:
             raise RuntimeError("Planning coordinator is closed")
         self.latest = snapshot
-        if self.task is None or self.task.done():
+        if not self.busy:
             self.task = asyncio.create_task(self._run())
 
     def invalidate(self, reason):
@@ -493,12 +497,15 @@ class PlanningCoordinator:
         if (
             original.config_revision != current.config_revision
             or original.strategy != current.strategy
-            or original.appliance_revision != current.appliance_revision
+        ):
+            return "configuration_changed"
+        if (
+            original.appliance_revision != current.appliance_revision
             or original.ev_revision != current.ev_revision
             or original.thermal_revision != current.thermal_revision
             or type(original.problem) is not type(current.problem)
         ):
-            return "configuration_changed"
+            return "planning_work_changed"
         if document["input_snapshot_id"] != original.snapshot_id:
             return "candidate_input_mismatch"
         if not original.current_at(now) or not current.current_at(now):
@@ -548,7 +555,7 @@ class PlanningCoordinator:
             self.active = snapshot
             self._set_status("calculating")
             started = monotonic()
-            calculation_started = self.last_calculation_started = self.clock()
+            calculation_started = self.clock()
             outcome = None
             calculation_reason = "planning_error"
             superseded = False

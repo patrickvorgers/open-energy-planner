@@ -23,6 +23,30 @@ Available solar forecasts remain in the interval inspector and forecast chart.
 Balance charts use actually planned DC production after curtailment/clipping.
 Grid following is a regulation mode, not a fixed battery-power command.
 
+**Battery plan** is a collapsed disclosure inside **Optimizer**. It reads per-device
+`expected_flows.batteries` and original capacities and starting states from the
+selected plan. Separate signed charge and discharge bars share a power axis and
+use the same quarter projection as the installation balance. Each battery's SoC
+line uses its original state endpoints and the right-hand 0 to 100% axis. Its
+bars and line share a legend control keyed by device ID. Missing values remain
+gaps. The chart follows the Planning time window and has its own power scale.
+It is created when opened and is omitted when the original plan has no batteries.
+
+Power bars follow the installation balance colors for charging and discharging.
+The endpoints of each stacked bar use the battery's SoC color. Charging source
+swatches use the same DC solar, AC solar and grid import colors as the balance.
+
+The original display-plan API derives charging attribution from frozen flows.
+Each inverter allocates local PV DC to its battery DC demand before allowing
+remaining PV to contribute to its recorded AC export. AC charging uses that
+PV export before available grid import. Charging demands share a source
+proportionally, with inverter and battery DC conversion losses applied at their
+own boundaries. Attribution is expressed in kWh at each battery's terminals.
+Unsupported or unassigned energy remains explicit. Tooltip power averages the
+attribution over the same covered portion of a quarter as its charge bar.
+The keyboard-operated interval inspector lists the same source attribution in kWh
+for the selected original interval.
+
 ## Signed interval balances
 
 Interactive stacked balance bars always span UTC-aligned fifteen-minute blocks.
@@ -247,22 +271,28 @@ version-selection and stale-response guards remain in place.
 
 ## Scheduling ownership
 
-LiveInputs validates every report but requests ordinary planning on UTC quarter
-boundaries. A new forecast/price version or a material measured deviation may
-request an earlier round only after 300 seconds since the last submission.
+The app's live timer checks UTC clock boundaries independently of HA reports and
+browser polling. On each quarter-hour boundary it builds a fresh planning snapshot
+when inputs are usable. On the intermediate five-minute boundaries it does so only
+when a request is pending. For example, a new price or deviation at 00:01 is
+eligible at 00:05. Several updates produce one calculation with the newest
+available inputs. An empty 00:10 is skipped. At 00:15, one regular round also
+consumes any pending request.
+
 Material defaults are 1000 W grid-power error or 5 percentage points of battery
 capacity relative to the interpolated published trajectory. Expected SoC motion
-is therefore not a deviation. All thresholds are named constants in LiveInputs.
-Normal cadence derives from the central fine planning interval.
-
-Initial readiness, recovery and explicit configuration/resume/replan requests
-can run immediately. The first usable charging work for a new physical EV
-connection can also request a round immediately, once per connection. Hard
-input invalidation and publication safety checks remain immediate. During normal
-operation, quarter transitions, new source versions and deviations share the
-five-minute limit. Ordinary sensor captures and measurement freshness deadlines
-are never solve timers.
-Log each actual submission with its reason and previous submission timestamp.
+is therefore not a deviation. Forecast updates, appliance feedback, newly usable
+EV charging work and readiness recovery can also leave requests pending. A
+calculation in progress finishes. If it overlaps a due boundary, the latest
+inputs are considered at the next eligible boundary, even if the solver finishes
+in between. If the scheduler wakes after a missed quarter, or state access or
+preparation runs past the boundary minute, the request also stays pending. The
+first ready plan and explicit configuration, resume or replan actions can still
+start when idle. Hard input invalidation and publication safety checks remain
+immediate. Ordinary sensor captures and measurement freshness
+deadlines are never solve timers. Each submission logs its reason and elapsed
+time since the previous submission. The performance chart records actual start
+times, including worker and event-loop scheduling delays.
 
 Effective-price revision hashing coalesces adjacent segments with the same rates,
 source, published/forecast kind, native resolution and contract period. Moving

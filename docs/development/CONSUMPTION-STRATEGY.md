@@ -92,8 +92,9 @@ configuration `issue`. It does not read published or acknowledged plan archives.
 `PUT /v1/strategy` accepts `strategy` and `expected_strategy` for compare-and-set.
 Strategy saves do not alter the physical configuration revision, discard fresh
 measurements, reset reference simulation, or rewrite history/counters. They
-request an immediate complete replacement round. An in-flight candidate for
-the previous strategy cannot replace it.
+request a complete replacement round. When idle, the planner can start it
+immediately. With a calculation in progress, the replacement waits for the
+next eligible boundary. A candidate for the previous strategy cannot publish.
 
 An existing published plan retains only its normal validity until replacement.
 Failed calculation does not extend it. Home Assistant acknowledgement and command

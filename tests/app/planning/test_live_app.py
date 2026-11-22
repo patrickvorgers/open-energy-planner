@@ -541,7 +541,10 @@ def test_real_measurements_reach_solver_preserved_plan_and_known_fault_revokes_i
             assert state["plan_invalidated"] is True
             assert state["planning"]["reason"] == "required_measurement_unavailable"
             assert read_plan(tmp_path, archived) == original
-            await send(session, url, config, soc=25)
+            state = await send(session, url, config, soc=25)
+            assert state["plan"] is None
+            async with session.post(url + "/v1/replan") as response:
+                assert response.status == 200
             restored = await wait_ready(session, url)
             assert restored["plan"]["plan_id"] != plan["plan_id"]
             assert (
