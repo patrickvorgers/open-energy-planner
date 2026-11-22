@@ -72,10 +72,10 @@ subtracted from import cost. The saving is the without-battery net cost minus th
 with-battery net cost. Displayed amounts have two decimal places, so small rounding
 differences are possible.
 
-Component details appear only when their retained daily evidence covers exactly
-the same accepted measured time as the net comparison. If that cannot be proven,
-the component detail stays **Unavailable**. The matching net costs can still be
-known. Opening the breakdown does not recalculate or rewrite historical results.
+The breakdown uses the same accepted quarters as the net costs. Some older
+reports retained matching net costs but only kept component totals for a wider
+period. These component details stay **Unavailable** unless their coverage
+matches. Opening the breakdown does not recalculate or rewrite historical results.
 
 Open **How is this calculated?** for the basis and limitations. Values above the
 bars and dates below them follow the selected daily or monthly bins. Labels are

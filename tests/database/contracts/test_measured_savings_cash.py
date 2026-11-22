@@ -72,6 +72,7 @@ def test_cash_index_retains_matching_totals_and_does_not_mix_a_legacy_day(settle
     store.put_day(day, documents, (START.date() + timedelta(days=1)).isoformat())
     legacy = deepcopy(day)
     legacy.pop("cash")
+    legacy.pop("matched_components")
     legacy.update(
         day="2026-10-23",
         start="2026-10-23T00:00:00+00:00",
@@ -98,6 +99,66 @@ def test_cash_index_retains_matching_totals_and_does_not_mix_a_legacy_day(settle
     assert result["cash"]["chart"][0]["savings"] == 0
     assert result["cash"]["chart"][0]["breakdown"] == result["cash"]["breakdown"]
     assert "checkpoint" not in result["days"][0]
+
+
+def test_unknown_without_battery_bonus_preserves_the_exact_matched_breakdown(settlement):
+    """Without-battery export needs its own opening allowance, even though actual export is zero."""
+    runtime, store, documents, engine, _plans = settlement
+    with engine.begin() as connection:
+        connection.execute(SETTLEMENT_FRAMES.delete())
+    measured_bindings = bindings()
+    measured_bindings["terms"].append({"entity_id": "sensor.charge", "sign": -1})
+    first = frame(discharged_kwh=0.5)
+    second = frame(start=END, pv_kwh=3)
+    store.put_frames(
+        (
+            replace(first, channels={**first.channels, "sensor.charge": 0.0}),
+            replace(second, channels={**second.channels, "sensor.charge": 2.0}),
+        ),
+        {
+            "bindings": measured_bindings,
+            "seeds": [],
+            "location": None,
+            "market_identity": {"currency": "EUR", "market_area": "NL"},
+        },
+    )
+    date = START.date().isoformat()
+    start, end = day_window(date, "UTC")
+    day = DailySavings(runtime).calculate(
+        date,
+        "UTC",
+        contract(bonus=True),
+        None,
+        START + timedelta(days=2),
+        start,
+        {"cash_counters": {"actual": None, "without_battery": None}},
+    )
+    actual, without = (day["scenarios"][kind] for kind in ("actual", "without_battery"))
+    assert actual["coverage_seconds"] == 1800
+    assert actual["totals"]["purchase"] == pytest.approx(0.60)
+    assert without["coverage_seconds"] == 900
+    assert without["missing"][1]["start"] == END.isoformat()
+    assert without["missing"][1]["reason"].startswith("The export allowance without a battery")
+    store.put_day(day, documents, end.date().isoformat())
+    cash, _days, _count = store.daily_overview(start, end)
+    assert cash["coverage_seconds"] == 900
+    assert cash["savings"] == pytest.approx(0.15)
+    assert cash["breakdown"] == {
+        "actual": {"purchase": pytest.approx(0.30), "sale": 0, "bonus": 0},
+        "without_battery": {"purchase": pytest.approx(0.45), "sale": 0, "bonus": 0},
+    }
+    assert cash["chart"][0]["breakdown"] == cash["breakdown"]
+
+    # An earlier version can replay a provisional day without leaving stale matched components.
+    earlier_report = deepcopy(day)
+    earlier_report.pop("matched_components")
+    store.put_day(earlier_report, documents, end.date().isoformat())
+    older_cash, _days, _count = store.daily_overview(start, end)
+    assert older_cash["breakdown"]["actual"] is None
+    assert older_cash["breakdown"]["without_battery"] == cash["breakdown"]["without_battery"]
+    store.put_day(day, documents, end.date().isoformat())
+    replayed_cash, _days, _count = store.daily_overview(start, end)
+    assert replayed_cash == cash
 
 
 def test_finalized_cash_day_is_immutable_with_its_matching_index(settlement):
@@ -440,6 +501,7 @@ def test_cash_breakdown_never_substitutes_components_from_broader_or_unknown_tim
     day = DailySavings(runtime).calculate(
         START.date().isoformat(), "UTC", contract(), None, START + timedelta(days=2), START, None
     )
+    day.pop("matched_components")
     if missing_detail == "broader_time":
         day["scenarios"]["actual"]["coverage_seconds"] += 900
         day["scenarios"]["actual"]["totals"]["purchase"] = 99
@@ -466,7 +528,7 @@ def test_cash_breakdown_never_substitutes_components_from_broader_or_unknown_tim
 def test_cash_breakdown_aggregates_signed_income_across_a_long_range_without_legacy_days(
     settlement, monkeypatch
 ):
-    """Existing daily columns explain matched net totals across years without loading retained report payloads."""
+    """New and older rows explain matched net totals across years without loading report payloads."""
     runtime, store, documents, _engine, _plans = settlement
     day = DailySavings(runtime).calculate(
         START.date().isoformat(), "UTC", contract(), None, START + timedelta(days=2), START, None
@@ -480,6 +542,15 @@ def test_cash_breakdown_aggregates_signed_income_across_a_long_range_without_leg
         report["scenarios"]["without_battery"]["totals"].update(
             purchase=18, sale=-2, bonus=0, grid_cash=20
         )
+        if offset:
+            report["matched_components"] = {
+                "actual": {"purchase": 12, "sale": 3, "bonus": 1},
+                "without_battery": {"purchase": 18, "sale": -2, "bonus": 0},
+            }
+            report["scenarios"]["actual"]["coverage_seconds"] += 900
+            report["scenarios"]["actual"]["totals"]["purchase"] += 99
+        else:
+            report.pop("matched_components")
         report["cash"].update(actual_cost=8, without_battery_cost=20, savings=12)
         store.put_day(report, documents, end.date().isoformat())
     monkeypatch.setattr(store, "days", lambda *_args, **_kwargs: [])
@@ -513,6 +584,7 @@ def test_chart_breakdown_keeps_each_day_independent_and_rejects_incomplete_month
         start, end = day_window(date.isoformat(), "UTC")
         report.update(day=date.isoformat(), start=start.isoformat(), end=end.isoformat())
         if offset:
+            report.pop("matched_components")
             report["scenarios"]["actual"]["totals"].update(purchase=2, sale=0.2, grid_cash=1.8)
             report["scenarios"]["without_battery"]["totals"].update(
                 purchase=3, sale=0.3, grid_cash=2.7

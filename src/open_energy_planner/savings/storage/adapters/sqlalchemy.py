@@ -7,10 +7,15 @@ from datetime import datetime, timedelta
 from sqlalchemy import and_, case, func, select
 from sqlalchemy.exc import SQLAlchemyError
 
-from open_energy_planner.savings.model import CASH_POLICY_VERSION, MAX_BATCH_INTERVALS
+from open_energy_planner.savings.model import (
+    CASH_COMPONENTS,
+    CASH_POLICY_VERSION,
+    MAX_BATCH_INTERVALS,
+)
 from open_energy_planner.storage.adapters.lifecycle.evidence import activation_history
 from open_energy_planner.storage.adapters.lifecycle.schema import (
     PUBLISHED_PRICES,
+    SAVINGS_CASH_COMPONENTS,
     SAVINGS_CASH_DAYS,
     SAVINGS_DAYS,
     SETTLEMENT_EVALUATIONS,
@@ -175,6 +180,17 @@ class SettlementStore:
                     **report["cash"],
                 }
                 connection.execute(SAVINGS_CASH_DAYS.insert().values(**cash_values))
+                if (matched := report.get("matched_components")) is not None:
+                    connection.execute(
+                        SAVINGS_CASH_COMPONENTS.insert().values(
+                            start=key,
+                            **{
+                                f"{kind}_{component}": value
+                                for kind, components in matched.items()
+                                for component, value in components.items()
+                            },
+                        )
+                    )
             documents.write(
                 "daily-progress.json", {"next": next_day, "timezone": report["timezone"]}
             )
@@ -287,22 +303,28 @@ class SettlementStore:
         return summary
 
     def cash_breakdown(self, start, end, connection, *, calendar_bin=None):
-        """Read retained cost components only when every included day's scenario covers exactly its matched cash time.
+        """Sum cost components from the same matched time as the headline and each chart bin.
 
-        Matched quarters are a subset of each scenario's accepted quarters. Equal
-        daily coverage proves that its retained components describe the same time.
-        Never substitute a broader actual total for the matched comparison.
-        An optional SQL calendar expression groups the same evidence for chart
-        tooltips in one query, independently of bounded daily report payloads.
+        Older reports may use their scenario totals only when equal daily
+        coverage proves that every accepted quarter also matched. Aggregate
+        the normalized projections without loading bounded report payloads.
         """
         table = SAVINGS_CASH_DAYS
-        kinds, components = ("actual", "without_battery"), ("purchase", "sale", "bonus")
-        available = {
-            kind: and_(
-                SAVINGS_DAYS.c[f"{kind}_coverage_seconds"] == table.c.coverage_seconds,
-                *(SAVINGS_DAYS.c[f"{kind}_{component}"].is_not(None) for component in components),
+        kinds = ("actual", "without_battery")
+        daily = SAVINGS_DAYS.c
+        matched = SAVINGS_CASH_COMPONENTS.c
+        amounts = {
+            f"{kind}_{component}": func.coalesce(
+                matched[f"{kind}_{component}"],
+                case(
+                    (
+                        daily[f"{kind}_coverage_seconds"] == table.c.coverage_seconds,
+                        daily[f"{kind}_{component}"],
+                    )
+                ),
             )
             for kind in kinds
+            for component in CASH_COMPONENTS
         }
         query = (
             select(
@@ -310,19 +332,27 @@ class SettlementStore:
                 *(
                     func.sum(
                         case(
-                            (available[kind], 1),
+                            (
+                                and_(
+                                    *(
+                                        amounts[f"{kind}_{component}"].is_not(None)
+                                        for component in CASH_COMPONENTS
+                                    )
+                                ),
+                                1,
+                            ),
                             else_=0,
                         )
                     ).label(f"{kind}_matching_days")
                     for kind in kinds
                 ),
-                *(
-                    func.sum(SAVINGS_DAYS.c[f"{kind}_{component}"]).label(f"{kind}_{component}")
-                    for kind in kinds
-                    for component in components
-                ),
+                *(func.sum(amount).label(name) for name, amount in amounts.items()),
             )
-            .select_from(table.join(SAVINGS_DAYS, table.c.start == SAVINGS_DAYS.c.start))
+            .select_from(
+                table.join(SAVINGS_DAYS, table.c.start == daily.start).outerjoin(
+                    SAVINGS_CASH_COMPONENTS, table.c.start == matched.start
+                )
+            )
             .where(
                 table.c.start >= stamp(start),
                 table.c.end <= stamp(end),
@@ -334,10 +364,8 @@ class SettlementStore:
         breakdowns = {}
         for values in connection.execute(query).mappings():
             breakdown = {
-                kind: {component: values[f"{kind}_{component}"] for component in components}
-                if values["days"]
-                and values[f"{kind}_matching_days"] == values["days"]
-                and all(values[f"{kind}_{component}"] is not None for component in components)
+                kind: {component: values[f"{kind}_{component}"] for component in CASH_COMPONENTS}
+                if values["days"] and values[f"{kind}_matching_days"] == values["days"]
                 else None
                 for kind in kinds
             }

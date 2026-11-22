@@ -23,12 +23,13 @@ from .accounting import (
     measured_cash_flows,
 )
 from .model import (
+    CASH_COMPONENTS,
     CASH_POLICY_VERSION,
     MISSING_MEASUREMENTS,
     PendingSettlement,
     parse_frame,
 )
-from .runtime import capture_start, settlement_issue, version
+from .runtime import PENDING_SETTLEMENT_MESSAGES, capture_start, settlement_issue, version
 from .storage.adapters.sqlalchemy import TOTAL_KEYS, stamp
 
 RECOVERY_CALENDAR_DAYS = 3
@@ -258,6 +259,7 @@ class DailySavings:
             "coverage_seconds": 0.0,
             "estimated_seconds": 0.0,
         }
+        matched_components = {kind: dict.fromkeys(CASH_COMPONENTS, 0.0) for kind in SCENARIOS}
         energy = {
             key: {"kwh": None, "coverage_seconds": 0.0}
             for key in ("grid_import", "grid_export", "household", "solar_ac")
@@ -277,7 +279,7 @@ class DailySavings:
                     for scenario in scenarios.values():
                         missing(scenario, cursor, frame.start, MISSING_MEASUREMENTS)
                     counters = {kind: None for kind in SCENARIOS}
-                accepted, flows = {}, {}
+                accepted, flows, missing_reasons = {}, {}, {}
                 context = row["context"]
                 try:
                     bindings = context["bindings"]
@@ -331,7 +333,7 @@ class DailySavings:
                     try:
                         flows.update(measured_cash_flows(frame, bindings))
                     except (ValueError, KeyError, TypeError) as error:
-                        self._problem(error)
+                        missing_reasons["without_battery"] = self._problem(error)
                     seeds = (
                         parse_counters({"seeds": context["seeds"]}, now).seeds
                         if context["seeds"]
@@ -388,7 +390,7 @@ class DailySavings:
                                 tariff["source_version"] for tariff in accepted[kind]["tariffs"]
                             )
                         except (ValueError, KeyError, TypeError) as error:
-                            self._problem(error)
+                            missing_reasons[kind] = self._problem(error)
                             try:
                                 known = kind == "actual" or comparison_counters_ready(
                                     contract,
@@ -410,7 +412,8 @@ class DailySavings:
                             except (ValueError, KeyError, TypeError):
                                 counters[kind] = None
                 except (ValueError, KeyError, TypeError) as error:
-                    self._problem(error)
+                    reason = self._problem(error)
+                    missing_reasons = dict.fromkeys(SCENARIOS, reason)
                     counters = {kind: None for kind in SCENARIOS}
                 estimated = frame.quality != "recorded" or any(
                     len(result["tariffs"]) > 1 for result in accepted.values()
@@ -419,8 +422,18 @@ class DailySavings:
                     if kind in accepted:
                         include(scenario, accepted[kind], frame, estimated)
                     else:
-                        missing(scenario, frame.start, frame.end, MISSING_ACCOUNT)
+                        missing(
+                            scenario,
+                            frame.start,
+                            frame.end,
+                            missing_reasons.get(kind, MISSING_ACCOUNT),
+                        )
                 if all(kind in accepted for kind in SCENARIOS):
+                    for kind, components in matched_components.items():
+                        for component in components:
+                            components[component] = fsum(
+                                (components[component], accepted[kind][component])
+                            )
                     actual_cost = accepted["actual"]["grid_cash"]
                     without_cost = accepted["without_battery"]["grid_cash"]
                     for key, value in (
@@ -466,14 +479,17 @@ class DailySavings:
             "counter_seed_evidence": seed_evidence,
             "scenarios": scenarios,
             "cash": paired,
+            "matched_components": matched_components if paired["coverage_seconds"] else None,
             "checkpoint": {"end": end.isoformat(), "cash_counters": counters},
         }
 
     def _problem(self, error):
-        """Expose only fixed admitted causes, preserving the first financial failure in a daily batch."""
+        """Return owned interval guidance and preserve the first failure for runtime status."""
+        issue = settlement_issue(error)
         if self.runtime.issue is None:
-            self.runtime.issue = settlement_issue(error)
+            self.runtime.issue = issue
             self.runtime.attention = not isinstance(error, PendingSettlement)
+        return PENDING_SETTLEMENT_MESSAGES.get(issue, MISSING_ACCOUNT)
 
 
 def add_energy(totals, frame, bindings):

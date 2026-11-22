@@ -184,6 +184,7 @@ def test_old_archive_startup_adds_context_tables_and_incoming_indexes_without_lo
     from open_energy_planner.storage.adapters.lifecycle.schema import (
         ACTIVATION_CONTEXTS,
         ARCHIVE_INCOMING_INDEXES,
+        SAVINGS_CASH_COMPONENTS,
         SAVINGS_CASH_DAYS,
         SAVINGS_DAYS,
     )
@@ -194,6 +195,7 @@ def test_old_archive_startup_adds_context_tables_and_incoming_indexes_without_lo
     with engine.begin() as connection:
         ACTIVATION_CONTEXTS.drop(connection)
         PLAN_CONTEXTS.drop(connection)
+        SAVINGS_CASH_COMPONENTS.drop(connection)
         SAVINGS_CASH_DAYS.drop(connection)
         SAVINGS_DAYS.drop(connection)
         for index in ARCHIVE_INCOMING_INDEXES:
@@ -205,7 +207,9 @@ def test_old_archive_startup_adds_context_tables_and_incoming_indexes_without_lo
             index.drop(connection)
     reopened = SqlPlanRepository(".", engine=engine)
     assert reopened.get_plan("original-plan") == original
-    assert SAVINGS_CASH_DAYS.name in inspect(engine).get_table_names()
+    assert {SAVINGS_CASH_DAYS.name, SAVINGS_CASH_COMPONENTS.name} <= set(
+        inspect(engine).get_table_names()
+    )
     for index in ARCHIVE_INCOMING_INDEXES:
         assert index.name in {
             item["name"] for item in inspect(engine).get_indexes(index.table.name)

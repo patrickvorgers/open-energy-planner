@@ -18,6 +18,7 @@ MAX_SETTLEMENT_ID_LENGTH = 128
 ENERGY_TOLERANCE_KWH = 1e-7
 POLICY_VERSION = "self-consumption-v1"
 CASH_POLICY_VERSION = "measured-battery-cash-v1"
+CASH_COMPONENTS = ("purchase", "sale", "bonus")
 MISSING_MEASUREMENTS = "Required measurements are missing. Missing energy is not treated as zero."
 
 

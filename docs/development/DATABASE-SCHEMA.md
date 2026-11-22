@@ -1263,7 +1263,9 @@ economic-cost or old comparison totals. Existing finalized reports remain unchan
 New report JSON contains `actual` and `without_battery` scenarios with complete,
 partial or unavailable status, accepted/estimated seconds and coalesced missing UTC
 ranges. `cash` contains only matching-interval actual cost, without-battery cost,
-saving and coverage. Monetary values use the report currency. `energy` retains
+saving and coverage. `matched_components` retains each side's purchase, sale and
+bonus totals on those same intervals, or null when no intervals match. Monetary
+values use the report currency. `energy` retains
 measured gross import/export, household and AC solar kWh with independent coverage.
 Contract/counter versions, published price versions, accounting policy, evaluation
 time, recovery deadline and optional daily-plan ID remain in the permanent report.
@@ -1301,18 +1303,33 @@ SQL and share a repeatable snapshot with bounded parent details. Charts use dail
 bins up to 366 elapsed days and monthly bins for longer ranges. The start primary
 key supports inclusive-start/exclusive-end period reads without loading raw quarters.
 
-The same repeatable snapshot provides the read-only `cash.breakdown` API object
-and each daily or monthly `cash.chart[].breakdown`. The per-bin objects use the
-same exact-coverage rule, grouped by the cash index's HA-local `day` column in
-one bounded aggregate query. No additional stored columns or indexes are needed.
-A start-key join to `oep_savings_days` sums existing actual/without-battery
-purchase, sale and bonus columns over days with positive matching cash coverage.
-Each side is available only when every included day's scenario coverage equals
-its cash coverage and all three components are present. Otherwise that side is
-null while matching net costs remain unchanged. Zero-coverage days and legacy
-reports without a cash index never contribute. The aggregate covers the entire
-selection, independently of the bounded daily-detail response. No table, column,
-index, finalized payload or accounting policy changes.
+### `oep_savings_cash_components`
+
+Owned by `SettlementStore`. One projection per daily cash index with matched
+component evidence. The report, cash index, components and progress commit
+together. Shared schema creation adds the table without rewriting old rows. All
+four backend transfers include it. Deleting a provisional cash index cascades to
+its component row, including when an older writer replaces that index. Finalized
+reports are immutable.
+
+| Field | Type / key | Meaning and use |
+| --- | --- | --- |
+| `start` | String(40), PK, FK to `oep_savings_cash_days.start` | Inclusive UTC day start. |
+| `actual_purchase` | Double | Actual import cost on the matching quarters. |
+| `actual_sale` | Double | Signed actual export income on the matching quarters. |
+| `actual_bonus` | Double | Actual bonus income on the matching quarters. |
+| `without_battery_purchase` | Double | Reconstructed import cost on the same quarters. |
+| `without_battery_sale` | Double | Signed reconstructed export income on the same quarters. |
+| `without_battery_bonus` | Double | Reconstructed bonus income on the same quarters. |
+
+The overview reads `cash.breakdown` and `cash.chart[].breakdown` from the same
+repeatable snapshot. A start-key join uses this projection or, for older
+reports, scenario columns in `oep_savings_days` when their coverage equals the
+cash index's coverage. A side is available only when all three components exist
+for every included day. Zero-coverage days and reports without a cash index
+never contribute. Aggregates cover the entire selection, independently of the
+bounded daily-detail response. Chart queries group by the cash index's HA-local
+`day` column.
 
 
 ## Indexes and query ownership

@@ -133,8 +133,8 @@ updated. Missing raw evidence remains explicitly missing at closure.
 
 `oep_savings_days` retains the compact report, original policy, recovery/finalization
 metadata, meter totals and original evidence. New reports contain actual and
-without-battery cash breakdowns, a `cash` comparison on matching quarters and a
-checkpoint with independent `cash_counters`. There is no reference stock,
+without-battery cash breakdowns, a `cash` comparison and `matched_components` on
+matching quarters, and a checkpoint with independent `cash_counters`. There is no reference stock,
 inventory trajectory or self-consumption continuation in new reports.
 
 `oep_savings_cash_days` is a portable indexed projection of matching cash totals.
@@ -145,18 +145,15 @@ legacy economic/reference columns into the new cash basis.
 
 The overview also returns `cash.breakdown.actual` and
 `cash.breakdown.without_battery`, each containing `purchase`, `sale` and `bonus`,
-or null when comparable component evidence is incomplete. One bounded SQL
-aggregate joins the matched index to existing normalized day columns in the same
-read snapshot. Only days with positive matched coverage contribute. Every such
-day must have all components and scenario coverage equal to matched coverage.
-Matched quarters are a subset of each scenario's accepted quarters, so equal
-coverage proves the same time. A broader actual scenario cannot explain a
-narrower matched net total. The query covers the entire selected range without
-loading raw quarters or bounded daily payloads. Finalized evidence and the
-existing monetary comparison remain unchanged. Each `cash.chart` bin also returns
-its own `breakdown` with the same component contract and exact-coverage checks.
-A second grouped SQL aggregate provides all daily or monthly breakdowns in one
-query, independent of bin count. It never loads raw quarters or day payloads.
+or null when comparable component evidence is incomplete. Daily settlement
+adds each component only when both scenarios accept the quarter, and projects
+the totals into `oep_savings_cash_components` in the same transaction. Older
+reports can use normalized scenario totals when their coverage equals the
+matched coverage and all components exist. Finalized reports remain immutable.
+An indexed SQL aggregate covers the entire selected range, and a second grouped
+aggregate returns each daily or monthly `cash.chart` bin's `breakdown` using the
+same rule. Both use the same read snapshot without loading raw quarters or
+bounded daily payloads.
 
 Finalized legacy reports and their tables are retained without reinterpretation
 or destructive migration. `GET /v1/evaluations` and explicit revision reads retain

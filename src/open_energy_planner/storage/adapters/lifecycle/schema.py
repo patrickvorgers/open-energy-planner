@@ -340,6 +340,21 @@ SAVINGS_CASH_DAYS = archive_table(
     Column("coverage_seconds", Double, nullable=False),
     Column("estimated_seconds", Double, nullable=False),
 )
+SAVINGS_CASH_COMPONENTS = archive_table(
+    "oep_savings_cash_components",
+    Column(
+        "start",
+        String(TIMESTAMP_LENGTH),
+        ForeignKey(SAVINGS_CASH_DAYS.c.start, ondelete="CASCADE"),
+        primary_key=True,
+    ),
+    Column("actual_purchase", Double, nullable=False),
+    Column("actual_sale", Double, nullable=False),
+    Column("actual_bonus", Double, nullable=False),
+    Column("without_battery_purchase", Double, nullable=False),
+    Column("without_battery_sale", Double, nullable=False),
+    Column("without_battery_bonus", Double, nullable=False),
+)
 PUBLISHED_PRICES = archive_table(
     "oep_published_prices",
     Column("area", String(AREA_LENGTH), primary_key=True),
