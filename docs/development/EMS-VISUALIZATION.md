@@ -261,11 +261,11 @@ is therefore not a deviation. Forecast updates, appliance feedback, newly usable
 EV charging work and readiness recovery can also leave requests pending. A
 calculation in progress finishes. If it overlaps a due boundary, the latest
 inputs are considered at the next eligible boundary, even if the solver finishes
-in between. If state access or preparation takes the scheduler past the boundary
-minute, the request also stays pending. The first ready plan and explicit
-configuration, resume or replan actions can still start when idle. Hard input
-invalidation and publication safety
-checks remain immediate. Ordinary sensor captures and measurement freshness
+in between. If the scheduler wakes after a missed quarter, or state access or
+preparation runs past the boundary minute, the request also stays pending. The
+first ready plan and explicit configuration, resume or replan actions can still
+start when idle. Hard input invalidation and publication safety checks remain
+immediate. Ordinary sensor captures and measurement freshness
 deadlines are never solve timers. Each submission logs its reason and elapsed
 time since the previous submission. The performance chart records actual start
 times, including worker and event-loop scheduling delays.

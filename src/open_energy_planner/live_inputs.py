@@ -31,6 +31,12 @@ THERMAL_DEVIATION_C = 2
 _LOGGER = logging.getLogger(__name__)
 
 
+def _clock_boundary(now, minutes):
+    """Return the most recent UTC clock boundary at the given minute spacing."""
+    now = now.astimezone(UTC)
+    return now.replace(minute=now.minute // minutes * minutes, second=0, microsecond=0)
+
+
 class ObservationState(Protocol):
     """Define persistence operations required for current-input invalidation and source changes."""
 
@@ -133,21 +139,16 @@ class LiveInputs:
     async def run(self, lock, *, sleep=asyncio.sleep):
         """Drive the live schedule independently of API traffic and provider polling."""
         interval = timedelta(minutes=REPLAN_BOUNDARY_MINUTES)
-        boundary = self.clock().astimezone(UTC)
+        boundary = self.clock()
         while True:
-            now = max(boundary, self.clock().astimezone(UTC))
             boundary = (
-                now.replace(
-                    minute=now.minute // REPLAN_BOUNDARY_MINUTES * REPLAN_BOUNDARY_MINUTES,
-                    second=0,
-                    microsecond=0,
-                )
-                + interval
+                _clock_boundary(max(boundary, self.clock()), REPLAN_BOUNDARY_MINUTES) + interval
             )
-            while (delay := (boundary - self.clock()).total_seconds()) > 0:
-                await sleep(delay)
-            if boundary.minute % FINE_INTERVAL_MINUTES == 0:
+            while (now := self.clock()) < boundary:
+                await sleep((boundary - now).total_seconds())
+            if _clock_boundary(now, FINE_INTERVAL_MINUTES) >= boundary:
                 self.replan_requested = True
+            boundary = _clock_boundary(now, REPLAN_BOUNDARY_MINUTES)
             if not self.replan_requested or self.planner.busy:
                 continue
             async with lock:

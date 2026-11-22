@@ -732,11 +732,11 @@ def test_live_clock_runs_quarters_and_keeps_pending_updates_through_busy_boundar
             clock[0] = NOW + timedelta(seconds=seconds)
             live.receive(parse_report(report_body(now=clock[0]), config, clock[0]))
 
-        async def tick(seconds):
+        async def tick(seconds, next_delay=300):
             """Release one scheduled boundary and wait for the subsequent timer registration."""
             clock[0] = NOW + timedelta(seconds=seconds)
             await ticks.put(None)
-            assert await asyncio.wait_for(sleeps.get(), 2) == 300
+            assert await asyncio.wait_for(sleeps.get(), 2) == next_delay
 
         try:
             assert await asyncio.wait_for(sleeps.get(), 2) == 298
@@ -782,6 +782,14 @@ def test_live_clock_runs_quarters_and_keeps_pending_updates_through_busy_boundar
             receive(1199)
             await tick(1200)
             assert len(starts) == 3
+            # A wake scheduled for 00:25 arrives after the missed 00:30 quarter.
+            receive(1859)
+            await tick(1860, next_delay=240)
+            assert len(starts) == 3
+            receive(2099)
+            await tick(2100)
+            await planner.wait()
+            assert starts[-1][0] == NOW + timedelta(minutes=35)
         finally:
             release.set()
             schedule.cancel()
