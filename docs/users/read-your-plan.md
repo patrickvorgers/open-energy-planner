@@ -8,6 +8,12 @@ The latest retained plan is the default. **Plan version** lets you inspect histo
 
 The selected plan's graph, prices and interval values appear first. Its power scale initially follows the original plan. When the two simulations arrive, their visible flows join one shared scale update. The two simulation graphs and their cost comparisons follow without waiting for the detailed evidence. A simulation read failure leaves the selected plan usable and shows a retry message. Choose **Refresh overview** to retry. A plan opened through a direct link stays selected during this retry.
 
+Routine input updates are used in the next planning round. An already valid
+calculation can finish while those updates arrive. OEP waits and retries if the
+current installation or strategy, the available device work, or a mismatched
+measurement report prevents it from publishing a valid plan. The notice
+identifies the condition.
+
 A valid older plan can remain in history after a later calculation fails. Its presence does not mean its commands are still applicable. Read the page's status and any source warning.
 
 Charts redraw when their data, visibility, scale or dimensions change. Loading simulations does not redraw unchanged price and forecast charts.

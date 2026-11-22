@@ -124,12 +124,31 @@ class ApplianceService:
 
     @property
     def revision(self):
-        """Identify all task/attempt changes that can invalidate an in-flight optimization."""
+        """Version the appliance state and observations exposed by the appliance API."""
+        return self._revision(include_observation_progress=True)
+
+    @property
+    def planning_revision(self):
+        """Version task and program changes without counting progress in the same observed run."""
+        return self._revision(include_observation_progress=False)
+
+    def _revision(self, *, include_observation_progress):
+        """Keep observation progress out of frozen planning identity."""
         return digest(
             [
                 {
                     entity: {
-                        key: value
+                        key: (
+                            {
+                                field: detail
+                                for field, detail in value.items()
+                                if field not in ("observed_until", "energy_kwh")
+                            }
+                            if key == "observed_run"
+                            and not include_observation_progress
+                            and isinstance(value, dict)
+                            else value
+                        )
                         for key, value in settings.items()
                         if key
                         not in (
@@ -1035,7 +1054,7 @@ class ApplianceService:
                 entities.add(entity)
                 task_windows.append((observed, observed.fixed_start, observed.deadline))
         if not works and not entities and not self.consumers.selected:
-            return replace(snapshot, appliance_revision=self.revision)
+            return replace(snapshot, appliance_revision=self.planning_revision)
         horizon_seconds = sum(step.duration_h for step in problem.intervals) * 3600
         remaining_edges = (
             MAX_REFINED_PLAN_INTERVALS
@@ -1146,7 +1165,7 @@ class ApplianceService:
             )
         ):
             self.issue = "Appliance forecasts not ready. Retaining household forecast"
-            return replace(snapshot, appliance_revision=self.revision)
+            return replace(snapshot, appliance_revision=self.planning_revision)
 
         def covered_series(forecast):
             """Require fresh complete evidence even for components removed from the future load."""
@@ -1321,13 +1340,13 @@ class ApplianceService:
             validate_components(refined, components)
         except (ValueError, KeyError):
             self.issue = "Appliance forecast boundary unavailable. Retaining household forecast"
-            return replace(snapshot, appliance_revision=self.revision)
+            return replace(snapshot, appliance_revision=self.planning_revision)
         self.issue = None
         # appliance_evidence copies baseline inputs. Keep the original demand archive references.
         return replace(
             snapshot,
             problem=refined,
-            appliance_revision=self.revision,
+            appliance_revision=self.planning_revision,
             appliance_evidence=tuple(deepcopy(baseline_parts)),
             load_components=tuple(components),
         )

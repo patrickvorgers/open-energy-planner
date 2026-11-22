@@ -16,6 +16,21 @@ from tests.frontend.browser.helpers import TOKEN, discover, open_primary_navigat
     "reason,title,explanation",
     [
         (
+            "configuration_changed",
+            "Waiting for inputs for the updated settings",
+            "installation configuration or planning strategy changed",
+        ),
+        (
+            "report_configuration_mismatch",
+            "Waiting for a matching measurement report",
+            "measurement report refers to a different installation configuration",
+        ),
+        (
+            "planning_work_changed",
+            "Waiting for a plan with current device work",
+            "appliance, charging or heating work no longer matches",
+        ),
+        (
             "battery_dispatch_unavailable",
             "Waiting to recheck battery limits",
             "latest battery measurements",
@@ -55,7 +70,8 @@ def test_publication_notice_explains_retry_and_only_clears_after_publication(
         )
     else:
         expect(popup).to_contain_text("automatically")
-        expect(popup).to_contain_text("usually temporary")
+        if reason in ("battery_dispatch_unavailable", "thermal_dispatch_window_elapsed"):
+            expect(popup).to_contain_text("usually temporary")
     assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
     popup.screenshot(path=f"results/ci/planning-notice-{reason}-{page.viewport_size['width']}.png")
     result.update(notification_document("calculating", None, since, block_reason=reason))

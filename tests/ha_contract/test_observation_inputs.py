@@ -301,6 +301,14 @@ def test_battery_free_snapshot_is_accepted_by_the_production_worker():
     asyncio.run(scenario())
 
 
+def test_report_configuration_mismatch_names_the_measurement_report():
+    """A report from another configuration waits for a matching report."""
+    config = configuration()
+    report = parse_report(report_body(config), config, NOW)
+    with pytest.raises(InputsUnavailable, match="report_configuration_mismatch"):
+        SnapshotAssembler().expiry(config, replace(report, config_revision="earlier"), NOW)
+
+
 def test_optional_fault_does_not_block_but_required_fault_does():
     """Report optional then required source faults. Preserve readiness only while all required measurements remain usable."""
     config = configuration(optional=True)

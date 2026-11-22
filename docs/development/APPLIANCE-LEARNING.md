@@ -317,6 +317,12 @@ remaining phases. The existing component composition removes at most the matchin
 expected energy inside the remaining execution window. Other expected use stays
 in the forecast. No second household or appliance contribution is added.
 
+A newer observation of the same run updates its measured energy and coverage
+without changing the planning revision. A valid in-flight result can still
+publish. A different start, run state, profile or task can invalidate work
+when it changes the planning revision. The appliance API retains its separate
+revision for observation state and concurrent edits.
+
 Missing or stale measurements retain ordinary forecasts and block duplicate
 starts. Exhausting the expected profile does not confirm physical completion.
 A complete quiet-bracketed run closes measured evidence. Fresh quiet measurements
