@@ -36,13 +36,18 @@ def test_all_planning_dates_expose_daily_energy(app_page):
     snapshots = scenario_snapshots(page, url)
     for identity in ("plan-chart", "self-consumption-chart", "reference-chart"):
         card = page.locator("#" + identity).locator("..")
-        heading = card.get_by_role("button", name="Energy totals for", exact=False).first
+        heading = card.get_by_role("button", name="Expected energy totals for", exact=False).first
         expect(heading).to_be_visible()
         card.evaluate("element => element.scrollIntoView({block:'center'})")
         heading.hover()
         tooltip = page.locator("#" + identity + "-tooltip")
         expect(tooltip).to_be_visible()
-        expect(tooltip).to_contain_text("Energy totals")
+        expect(tooltip.locator(".chart-tooltip-title")).to_have_text(
+            "Expected energy totals: 11/4/2026"
+        )
+        expect(tooltip.locator(".chart-tooltip-total td:first-child")).to_have_text(
+            ["Total expected production", "Total expected energy use"]
+        )
         expect(tooltip).to_contain_text("kWh")
         expect(tooltip).not_to_contain_text("SoC")
         expect(tooltip).to_contain_text("Totals cover this complete calendar day.")
@@ -92,10 +97,15 @@ def test_all_planning_dates_expose_daily_energy(app_page):
     for identity in snapshots:
         card = page.locator("#" + identity).locator("..")
         card.evaluate("element => element.scrollIntoView({block:'center'})")
-        heading = card.get_by_role("button", name="Energy totals for", exact=False).first
+        heading = card.get_by_role("button", name="Expected energy totals for", exact=False).first
         heading.focus()
         tooltip = page.locator("#" + identity + "-tooltip")
+        expect(tooltip.locator(".chart-tooltip-title")).to_have_text(
+            "Expected energy totals: 11/4/2026"
+        )
         expect(tooltip).to_contain_text("Partial day. Totals cover only the shown planned period.")
+        expect(tooltip.locator(".chart-tooltip-period")).to_be_in_viewport()
+        expect(tooltip.locator(".chart-tooltip-period")).to_contain_text("From ")
         base = tooltip.locator("tr").filter(has_text="Household base: AC").locator("td").nth(1)
         expect(base).to_have_text("-1.26")
         totals = tooltip.locator(".chart-tooltip-total .chart-tooltip-value").all_text_contents()
@@ -106,7 +116,7 @@ def test_all_planning_dates_expose_daily_energy(app_page):
         heading.press("Escape")
         legend = page.locator("#" + identity + "-legend")
         legend.get_by_role("checkbox", name="Grid import: AC", exact=True).uncheck()
-        heading = card.get_by_role("button", name="Energy totals for", exact=False).first
+        heading = card.get_by_role("button", name="Expected energy totals for", exact=False).first
         heading.focus()
         expect(tooltip.locator("tr").filter(has_text="Grid import: AC")).to_have_count(0)
         expect(tooltip.locator(".chart-tooltip-total .chart-tooltip-value")).to_have_text(totals)
@@ -129,7 +139,7 @@ def test_switching_planning_dates_keeps_the_new_summary_open(app_page, identity)
     snapshot = snapshots[identity]
     card = page.locator("#" + identity).locator("..")
     card.evaluate("element => element.scrollIntoView({block:'center'})")
-    dates = card.get_by_role("button", name="Energy totals for", exact=False)
+    dates = card.get_by_role("button", name="Expected energy totals for", exact=False)
     first, second = dates.nth(0), dates.nth(1)
     tooltip = page.locator("#" + identity + "-tooltip")
     first.focus()
@@ -140,7 +150,7 @@ def test_switching_planning_dates_keeps_the_new_summary_open(app_page, identity)
         second.click()
     expect(tooltip).to_be_visible()
     expect(tooltip.locator(".chart-tooltip-title")).to_have_text(
-        "Energy totals: " + second.get_attribute("aria-label").removeprefix("Energy totals for ")
+        "Expected energy totals: 11/5/2026"
     )
     expect(first).not_to_have_attribute("aria-describedby", identity + "-tooltip")
     expect(second).to_have_attribute("aria-describedby", identity + "-tooltip")
@@ -191,7 +201,7 @@ def test_focusing_an_offscreen_date_keeps_its_summary(app_page, identity):
     page.get_by_role("button", name="Connect", exact=True).click()
     expect(page.locator("#overview-status")).to_contain_text("Connected")
     card = page.locator("#" + identity).locator("..")
-    date = card.get_by_role("button", name="Energy totals for", exact=False).nth(1)
+    date = card.get_by_role("button", name="Expected energy totals for", exact=False).nth(1)
     page.evaluate("window.scrollTo(0, document.documentElement.scrollHeight)")
     page.wait_for_function(
         """() => scrollY >= document.documentElement.scrollHeight - innerHeight - 1"""
@@ -208,7 +218,7 @@ def test_focusing_an_offscreen_date_keeps_its_summary(app_page, identity):
     expect(tooltip).to_be_visible()
     expect(date).to_have_attribute("aria-describedby", identity + "-tooltip")
     expect(tooltip.locator(".chart-tooltip-title")).to_have_text(
-        "Energy totals: " + date.get_attribute("aria-label").removeprefix("Energy totals for ")
+        "Expected energy totals: 11/5/2026"
     )
     base = tooltip.locator("tr").filter(has_text="Household base: AC").locator("td").nth(1)
     expect(base).to_have_text("-17.54")

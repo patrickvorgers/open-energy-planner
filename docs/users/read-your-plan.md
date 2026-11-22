@@ -99,13 +99,14 @@ remain DC inputs. Solver decisions, costs and original archived plans are unchan
 The series together should balance around zero before hidden series and the
 0.1-kW appliance display rounding.
 
-Pop-ups show positive **Total production** and negative **Total consumption** values, independently summed from every original flow, including hidden or filtered legend items. Totals include grid, solar, battery, device and conversion flows rather than household demand alone. Missing flow evidence makes its total unavailable. Interval totals use kW and daily totals use kWh.
+Interval pop-ups show positive **Total production** and negative **Total consumption** values, independently summed from every original flow, including hidden or filtered legend items. Totals include grid, solar, battery, device and conversion flows rather than household demand alone. Missing flow evidence makes its total unavailable. Interval totals use kW and daily totals use kWh.
 
 Bars show mean kW for their covered quarter. Battery lines use the separate SoC percentage axis. Tap or hover for the exact interval. A partial quarter has its actual covered duration rather than a fabricated full-quarter energy amount.
 
 Use **Next 6 hours**, **Next 24 hours** or **Full period**. Day bands and date labels identify calendar boundaries in the installation timezone. The legend sits below the full-width chart, with aligned columns on wider screens and compact wrapping on phones. Toggle a series to inspect the others. Hidden or missing data must not be interpreted as a measured zero.
 
-Hover over a date above any of the three scenario charts to see its energy totals.
+Hover over a date above any of the three scenario charts to see **Expected energy totals**.
+**Total expected production** and **Total expected energy use** sum the scenario flows for the shown period.
 You can also focus the date with the keyboard or tap it on a phone. Press Escape
 or tap the date again to close the summary. Each visible energy flow is integrated
 over its actual duration and shown in kWh. Supply remains positive and use
@@ -117,8 +118,8 @@ an unavailable total rather than a fabricated zero.
 The summary follows the selected chart range. A partial day explicitly states
 that its totals cover only the shown planned period and gives the exact start
 and end. Calendar days use the installation timezone, including 23-hour and
-25-hour days when the clocks change. These are scenario forecasts, not measured
-daily production or consumption.
+25-hour days when the clocks change. Today's summary adds up only the planned
+intervals shown for today. Earlier measured energy is excluded.
 
 [Open the mobile chart example](../assets/planning-mobile.png) to see the stacked cost cards and legend below the same synthetic two-day plan. Open any guide figure at full size when its labels are too small on your screen.
 
