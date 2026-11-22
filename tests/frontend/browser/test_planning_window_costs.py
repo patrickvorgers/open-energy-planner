@@ -95,7 +95,9 @@ def test_six_day_and_full_period_use_financial_module_and_preserve_original(app_
         assert_amounts(page, expected)
         totals.append(expected["scenarios"]["optimizer"]["costs"]["economic_cost"])
         for caption in page.locator(".scenario-period").all():
-            expect(caption).to_have_text(re.compile(r"^From .+ to .+: Expected, not measured\."))
+            expect(caption).to_have_text(re.compile(r"^From .+ to .+\.$"))
+            expect(caption).not_to_contain_text("Expected, not measured")
+            expect(caption).not_to_contain_text("valuation basis")
             expect(caption).not_to_contain_text("hours")
         assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
         for host in ("ems-costs", "self-consumption-costs", "reference-costs"):

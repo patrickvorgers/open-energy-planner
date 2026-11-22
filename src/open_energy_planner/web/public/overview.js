@@ -138,6 +138,12 @@ function renderTooltip({chart: instance, tooltip}, node, balance = false, balanc
     const interval = balance && items.find(item => item.raw.start != null);
     const title = document.createElement("p"); title.className = "chart-tooltip-title";
     title.textContent = interval ? `From ${when(interval.raw.start)} to ${when(interval.raw.end)}` : tooltip.title.join(" - "); node.append(title);
+    if (tooltip.periodLabel) {
+        const period = document.createElement("p");
+        period.className = "chart-tooltip-period";
+        period.textContent = tooltip.periodLabel;
+        node.append(period);
+    }
     if (interval) {
         // Flow bars use midpoints. Attach only recorded start states, never interpolate a missing SoC.
         instance.data.datasets.forEach((dataset, index) => {
@@ -176,6 +182,9 @@ function renderTooltip({chart: instance, tooltip}, node, balance = false, balanc
             const line = document.createElement("tr"), label = document.createElement("td"), value = document.createElement("td"), unit = document.createElement("td");
             line.className = "chart-tooltip-total";
             label.textContent = `Total ${name.toLowerCase()}`;
+            if (tooltip.balanceItems) {
+                label.textContent = name === "Consumption" ? "Total expected energy use" : "Total expected production";
+            }
             value.className = "chart-tooltip-value"; value.textContent = valueText(total, flows[0].dataset.unit);
             unit.className = "chart-tooltip-unit"; unit.textContent = flows[0].dataset.unit;
             line.append(label, value, unit); table.append(line);
@@ -221,7 +230,7 @@ function positionDayTooltip(tooltip, button) {
 function planningDayHeading(instance, series, tooltip, summary, heading, {date, start, end, full}) {
     const button = document.createElement("button");
     button.type = "button"; button.className = "chart-day-summary";
-    button.setAttribute("aria-label", `Energy totals for ${full}`);
+    button.setAttribute("aria-label", `Expected energy totals for ${full}`);
     button.append(...heading.childNodes); heading.append(button); heading.removeAttribute("title");
     let hovered = false, focused = false, dismissed = false;
     /** A late blur from the previous date must not dismiss its successor's content. */
@@ -246,16 +255,15 @@ function planningDayHeading(instance, series, tooltip, summary, heading, {date, 
         }]);
         const items = balanceItems.filter(item => instance.isDatasetVisible(item.datasetIndex));
         const partial = from > calendarDayStart(date) || to < calendarDayStart(nextDate(date));
-        const notes = [partial ? "Partial day. Totals cover only the shown planned period." : "Totals cover this complete calendar day.",
-            `From ${when(from)} to ${when(to)}.`, "Supply is positive. Use is negative."];
+        const notes = [partial ? "Partial day. Totals cover only the shown planned period." : "Totals cover this complete calendar day."];
         if (balanceItems.some(item => item.parsed.y == null)) notes.push("A dash means that energy is unavailable because interval evidence is missing or inconsistent.");
         if (summary.owner !== button) {
             summary.owner?.removeAttribute("aria-describedby");
             summary.owner = button; summary.pinned = false;
         }
         const bounds = button.getBoundingClientRect(), canvas = instance.canvas.getBoundingClientRect();
-        renderTooltip({chart: instance, tooltip: {opacity: 1, dataPoints: items, balanceItems, title: [`Energy totals: ${full}`],
-            afterBody: notes, caretX: bounds.left + bounds.width / 2 - canvas.left, caretY: bounds.bottom - canvas.top}}, tooltip, true);
+        renderTooltip({chart: instance, tooltip: {opacity: 1, dataPoints: items, balanceItems, title: [`Expected energy totals: ${full}`],
+            periodLabel: `From ${when(from)} to ${when(to)}.`, afterBody: notes, caretX: bounds.left + bounds.width / 2 - canvas.left, caretY: bounds.bottom - canvas.top}}, tooltip, true);
         tooltip.classList.add("chart-tooltip-day");
         button.setAttribute("aria-describedby", tooltip.id);
         positionDayTooltip(tooltip, button);
@@ -609,8 +617,8 @@ function renderPeriodCosts(period, scenarios, currency, message, plan = null) {
             basis: valuation && !corrected ? "Original contract: A corrected no-battery valuation is unavailable." : ""
         });
     }
-    const basis = !valuation ? "Battery value uses the original plan's valuation basis." : fullPeriod ? "Optimizer and self-consumption use the latest successful contract valuation. Without battery retains original contract rates." : "Original contract rates for this selected period. The full original plan valuation is shown separately.";
-    for (const caption of document.querySelectorAll(".scenario-period")) caption.textContent = message || (period ? `From ${when(period.start)} to ${when(period.end)}: Expected, not measured. ${basis}` : "No planned intervals in this period. Select an earlier plan or wait for a new plan.");
+    const basis = !valuation ? "" : fullPeriod ? "Optimizer and self-consumption use the latest successful contract valuation. Without battery retains original contract rates." : "Original contract rates for this selected period. The full original plan valuation is shown separately.";
+    for (const caption of document.querySelectorAll(".scenario-period")) caption.textContent = message || (period ? `From ${when(period.start)} to ${when(period.end)}.${basis ? ` ${basis}` : ""}` : "No planned intervals in this period. Select an earlier plan or wait for a new plan.");
 }
 /** Request financial slices from their owning module. Late responses cannot replace another plan or range. */
 async function showPeriodCosts(start, end) {

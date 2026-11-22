@@ -123,7 +123,9 @@ def test_scenario_headers_lead_with_cost_then_baseline_benefit(
     ).to_have_count(0)
     periods = page.locator(".scenario-period").all_text_contents()
     assert len(periods) == 3 and len(set(periods)) == 1
-    assert "original plan's valuation basis" in periods[0]
+    assert periods[0].startswith("From ")
+    assert "Expected, not measured" not in periods[0]
+    assert "valuation basis" not in periods[0]
     before = page.locator("#ems-costs > dl").text_content()
     for hours in (6, 24, 0):
         page.locator(f'[data-hours="{hours}"]').click()
