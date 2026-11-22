@@ -23,8 +23,8 @@ from open_energy_planner.storage.adapters.lifecycle.sqlalchemy import SqlPlanRep
 START = datetime(2026, 11, 4, tzinfo=UTC)
 
 
-@lru_cache(maxsize=1)
-def _validated_example():
+@lru_cache(maxsize=2)
+def _validated_example(two_batteries=False):
     """Solve and independently validate the fixed teaching example once per process.
 
     A 4-kW midday solar curve, morning/evening household peaks and higher evening
@@ -76,23 +76,30 @@ def _validated_example():
                 0,
             )
         )
+    batteries = (BatteryState("battery", "hybrid", Battery(10, 4, 1, 3000, 3000, 0.95, 0.95)),)
+    if two_batteries:
+        batteries = (
+            BatteryState("battery", "hybrid", Battery(10, 4, 1, 1500, 1500, 0.95, 0.95)),
+            BatteryState("battery-2", "hybrid", Battery(8, 5, 1, 1500, 1500, 0.95, 0.95)),
+        )
     problem = InstallationProblem(
         tuple(intervals),
         (SolarInverter("hybrid", 5000, 0.96, True),),
-        (BatteryState("battery", "hybrid", Battery(10, 4, 1, 3000, 3000, 0.95, 0.95)),),
+        batteries,
         (PVUnit("roof", "hybrid", False),),
         6000,
         6000,
-        terminal_valuations=(
+        terminal_valuations=tuple(
             TerminalValuation(
-                "battery",
+                unit.device_id,
                 1,
-                9,
+                unit.battery.capacity_kwh - 1,
                 0.20,
                 START + timedelta(hours=48),
                 START + timedelta(hours=72),
                 "post_horizon_prices",
-            ),
+            )
+            for unit in batteries
         ),
     )
     snapshot = InputSnapshot(
@@ -110,17 +117,20 @@ def _validated_example():
     assert result.plan is not None, result.status
     costs = validate(problem, result.plan)
     document = plan_document(snapshot, result, costs, START)
+    names = {"battery": "Example home battery", "roof": "Example south roof"}
+    if two_batteries:
+        names["battery-2"] = "Example garage battery"
     document.update(
         currency="EUR",
         market_area="NL",
-        comparison_names={"battery": "Example home battery", "roof": "Example south roof"},
+        comparison_names=names,
     )
     return document, schedule
 
 
-def seed(directory):
+def seed(directory, *, two_batteries=False):
     """Initialize an independent store with its own mutable copy of the validated example."""
-    document, schedule = _validated_example()
+    document, schedule = _validated_example(two_batteries)
     repository = SqlPlanRepository(directory)
     try:
         repository.state["plan"] = deepcopy(document)

@@ -120,10 +120,10 @@ def app_site(request, savings_now):
             from tests.frontend.browser.solar_balance_fixture import seed as seed_solar
 
             seed_solar(Path(directory))
-        if getattr(request, "param", None) == "documentation":
+        if getattr(request, "param", None) in ("documentation", "battery_planning"):
             from tests.frontend.browser.documentation_fixture import seed
 
-            seed(Path(directory))
+            seed(Path(directory), two_batteries=request.param == "battery_planning")
         if getattr(request, "param", None) == "unoptimized_loads":
             from tests.frontend.browser.flexible_reference_fixture import seed as seed_flexible
 

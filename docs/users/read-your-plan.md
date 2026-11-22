@@ -46,6 +46,14 @@ Above zero is supply to the modeled balance: used solar, grid import and battery
 
 The complete balance sums to zero before visual rounding or hiding series. Lines show SoC on the right axis. Bars show mean kW per quarter. Partial quarters identify their covered period in the tooltip.
 
+### Read the battery plan
+
+Open **Battery plan** under **Optimizer** to compare the batteries in the selected plan. Bars below zero show charging and bars above zero show discharging at the battery terminals. The lines show each battery's planned state of charge on the 0 to 100% scale. Batteries charging and discharging at the same time remain visible on opposite sides of zero.
+
+The chart starts collapsed and follows the Planning time selection. Use the legend to hide or show an individual battery. The tooltip shows power and the recorded state of charge at the start of the interval when that state is available. Plans without batteries omit the chart.
+
+The tooltip also breaks charging down by source. The plan assigns local **PV DC** first, then **PV AC** from the shared AC bus, then **Grid**. When batteries share a source, it is divided in proportion to their charging demand. This is a breakdown of planned flows. Any remaining charging power is shown as **Other or unassigned**.
+
 ### Solar AC, Solar DC and conversion losses
 
 The three scenario charts use the same measurement boundaries. Each solar series

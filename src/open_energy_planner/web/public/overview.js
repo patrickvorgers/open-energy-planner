@@ -3,7 +3,7 @@ import {createSavingsView} from "./savings-view.js";
 import {updateCharts} from "./chart_theme.js";
 import {calendarDays, calendarTime, calendarDayStart} from "./chart_days.js";
 import {money, configuredRate, when, dateLabel, localDate, localInstant, nextDate, percentage, optionLabel, planName, useHomeAssistantTimezone, watchSourceNames} from "./display.js";
-import {energyBalances, householdForecastEnergy, quarterBalanceSeries, balancePeriodEnergy, QUARTER_MILLISECONDS} from "./balance.js";
+import {batteryPlanSeries, energyBalances, householdForecastEnergy, quarterBalanceSeries, balancePeriodEnergy, QUARTER_MILLISECONDS} from "./balance.js";
 import {bindSettingsActions, sessionResponse} from "./settings-actions.js";
 bindSettingsActions();
 const $ = (id) => document.getElementById(id);
@@ -50,6 +50,8 @@ function row(parent, values) {
     parent.append(tr);
 }
 const charts = new Map();
+const batteryPlanPanel = $("battery-plan-panel");
+let pendingBatterySeries = null;
 const syncChartLegends = new WeakMap();
 const DEVICE_ROUNDING_KW = 0.1;
 // Absorb only machine-precision addition error at the display threshold.
@@ -57,6 +59,8 @@ const DEVICE_ROUNDING_TOLERANCE_KW = DEVICE_ROUNDING_KW * Number.EPSILON;
 const hiddenPriceSeries = new Set();
 const palette = ["#078b80", "#e49b38", "#5d70bc", "#d56788", "#399bc1", "#8a65ad"];
 const INTERVAL_BAR_FILL = 0.9;
+const CHARGING_SOURCE_LABELS = {pv_dc: "PV DC", pv_ac: "PV AC", grid: "Grid", other: "Other or unassigned"};
+const CHARGING_SOURCE_DISPLAY_MIN_KW = 0.0005;
 const TOOLTIP_VIEWPORT_MARGIN_PX = 12;
 const MILLISECONDS_PER_MINUTE = 60000;
 const MILLISECONDS_PER_HOUR = 60 * MILLISECONDS_PER_MINUTE;
@@ -113,13 +117,14 @@ function evidenceCards(parent, cards) {
 function balanceNotes(bar, id, axisTime) {
     const notes = bar.coveredStart !== bar.start || bar.coveredEnd !== bar.end
         ? [`Partial quarter: Mean power covers ${axisTime(bar.coveredStart)} to ${axisTime(bar.coveredEnd)} only.`] : [];
-    if (!["reference-chart", "self-consumption-chart"].includes(id)) {
+    if (id === "plan-chart") {
         notes.push(...new Set(inspectSteps.filter(step => step.end > bar.coveredStart && step.start < bar.coveredEnd).flatMap(step => step.commands || [])));
     }
     return notes;
 }
 /** Keep labels, right-aligned numbers and units in distinct columns without interpreting provider text as HTML. */
 function renderTooltip({chart: instance, tooltip}, node, balance = false, balanceTime = null) {
+    const batteryPlan = instance.canvas.id === "battery-plan-chart";
     node.classList.remove("chart-tooltip-day"); node.style.maxHeight = "";
     node.hidden = !tooltip.opacity || Boolean(instance.canvas.closest("[hidden]"));
     if (node.hidden) return;
@@ -153,13 +158,14 @@ function renderTooltip({chart: instance, tooltip}, node, balance = false, balanc
         });
     }
     // Totals retain original flows even when the legend or display threshold hides a series.
-    const totalItems = interval ? instance.data.datasets.filter(dataset => dataset.type === "bar").map(dataset => {
+    const totalItems = interval && !batteryPlan ? instance.data.datasets.filter(dataset => dataset.type === "bar").map(dataset => {
         const point = dataset.data.find(point => point.start === interval.raw.start && point.end === interval.raw.end);
         return {dataset, parsed: {y: point?.y}};
     }) : tooltip.balanceItems || [];
-    const groups = balance ? ["Production", "Consumption", "Battery state"].map(name => [name, items.filter(item => item.dataset.tooltipGroup === name)]).filter(([name, items]) => items.length || totalItems.some(item => item.dataset.tooltipGroup === name)) : [[null, items]];
-    const sections = document.createElement("div"); sections.className = balance ? "balance-tooltip-groups" : "";
-    node.classList.toggle("chart-tooltip-balance", balance);
+    const groupedBalance = balance && !batteryPlan;
+    const groups = groupedBalance ? ["Production", "Consumption", "Battery state"].map(name => [name, items.filter(item => item.dataset.tooltipGroup === name)]).filter(([name, items]) => items.length || totalItems.some(item => item.dataset.tooltipGroup === name)) : [[null, items]];
+    const sections = document.createElement("div"); sections.className = groupedBalance ? "balance-tooltip-groups" : "";
+    node.classList.toggle("chart-tooltip-balance", groupedBalance);
     for (const [name, items] of groups) {
         const section = document.createElement("section"), table = document.createElement("table");
         if (name) {
@@ -171,6 +177,17 @@ function renderTooltip({chart: instance, tooltip}, node, balance = false, balanc
             const swatch = document.createElement("span"); swatch.className = "series-swatch"; swatch.style.backgroundColor = item.dataset.swatchColor || item.dataset.backgroundColor;
             swatch.classList.toggle("series-swatch-expected", item.dataset.deviceState === "expected");
             label.append(swatch, document.createTextNode(item.dataset.label));
+            if (batteryPlan && item.raw?.chargingSources) {
+                const sources = Object.entries(CHARGING_SOURCE_LABELS)
+                    .filter(([source]) => item.raw.chargingSources[source] >= CHARGING_SOURCE_DISPLAY_MIN_KW)
+                    .map(([source, name]) => `${name}: ${number(item.raw.chargingSources[source])} kW`);
+                if (sources.length) {
+                    const detail = document.createElement("small");
+                    detail.className = "charging-source-detail";
+                    detail.textContent = sources.join(", ");
+                    label.append(detail);
+                }
+            }
             value.className = "chart-tooltip-value";
             value.textContent = valueText(item.parsed.y, item.dataset.unit);
             unit.className = "chart-tooltip-unit"; unit.textContent = item.dataset.unit;
@@ -367,6 +384,7 @@ async function loadDailyPrices(instance) {
  */
 function chart(id, series, {utcDays = false, calendarDates = false, unit = "", minimum = null, balance = false, preserveVisibility = false, deferRange = false} = {}) {
     let balanceTime = null, priceHoverTime = null;
+    const batteryPlan = id === "battery-plan-chart";
     if (balance) series = quarterBalanceSeries(series);
     charts.get(id)?.destroy();
     $(`${id}-tooltip`)?.remove();
@@ -431,9 +449,9 @@ function chart(id, series, {utcDays = false, calendarDates = false, unit = "", m
             if (values.length) values.push({x: segment[0][0], y: null});
             values.push(...segment.map(([x, y, priceKind]) => ({x, y, priceKind})));
         }
-        if (s.intervals) values.push(...s.intervals.map(({start, end, value, coveredStart, coveredEnd}) => ({x: (start + end) / 2, y: value, start, end, coveredStart, coveredEnd})));
+        if (s.intervals) values.push(...s.intervals.map(({start, end, value, coveredStart, coveredEnd, chargingSources}) => ({x: (start + end) / 2, y: value, start, end, coveredStart, coveredEnd, chargingSources})));
         const color = s.color || palette[index % palette.length];
-        return {label: s.name, data: values, hidden: id === "price-chart" && hiddenPriceSeries.has(s.name), type: s.type || "line", stack: s.stack, yAxisID: s.axis || "y", unit: s.unit || unit, tooltipGroup: s.tooltipGroup, deviceState: s.deviceState, swatchColor: color, borderColor: color, backgroundColor: deviceFill(color, s.deviceState), borderWidth: s.type === "bar" ? 0 : 2, borderDash: s.reference ? [6, 4] : [], segment: {borderDash: ({p0}) => p0.raw.priceKind === "forecast" ? FORECAST_PRICE_DASH : undefined}, pointRadius: 0, pointHitRadius: 10, spanGaps: false, order: s.axis === "soc" ? 0 : 1};
+        return {label: s.name, data: values, hidden: id === "price-chart" && hiddenPriceSeries.has(s.name), type: s.type || "line", stack: s.stack, yAxisID: s.axis || "y", unit: s.unit || unit, tooltipGroup: s.tooltipGroup, deviceState: s.deviceState, swatchColor: color, borderColor: color, backgroundColor: s.fillColor || deviceFill(color, s.deviceState), borderWidth: s.type === "bar" ? 0 : 2, borderDash: s.reference ? [6, 4] : [], segment: {borderDash: ({p0}) => p0.raw.priceKind === "forecast" ? FORECAST_PRICE_DASH : undefined}, pointRadius: 0, pointHitRadius: 10, spanGaps: false, order: s.axis === "soc" ? 0 : 1};
     });
     const result = new Chart(canvas, {
         type: "line", data: {datasets: planningLegend ? [] : datasets}, plugins: [intervalWidths, ...(id === "price-chart" ? [dailyPriceExtremes] : []), ...(calendarDates ? [] : [calendarDays]), {
@@ -446,11 +464,11 @@ function chart(id, series, {utcDays = false, calendarDates = false, unit = "", m
                 if (id === "price-chart") priceHoverTime = instance.scales.x.getValueForPixel(event.x);
                 if (balance) {
                     const hits = instance.getElementsAtEventForMode(event, "nearest", {axis: "xy", intersect: true}, false);
-                    balanceTime = hits.some(hit => instance.data.datasets[hit.datasetIndex].tooltipGroup === "Battery state")
+                    balanceTime = !batteryPlan && hits.some(hit => instance.data.datasets[hit.datasetIndex].tooltipGroup === "Battery state")
                         ? null : instance.scales.x.getValueForPixel(event.x);
                 }
             },
-            plugins: {calendarDays: {utc: utcDays, onHeading: balance ? (instance, heading, day) => { hideTooltip(); planningDayHeading(instance, series, tooltip, daySummary, heading, day); } : null}, valueAxisHeadroom: {group: null}, legend: {display: false}, tooltip: {enabled: false, external: (context) => {
+            plugins: {calendarDays: {utc: utcDays, onHeading: planningLegend ? (instance, heading, day) => { hideTooltip(); planningDayHeading(instance, series, tooltip, daySummary, heading, day); } : null}, valueAxisHeadroom: {group: null}, legend: {display: false}, tooltip: {enabled: false, external: (context) => {
                 hideTooltip();
                 const time = balanceTime; balanceTime = null;
                 renderTooltip(context, tooltip, balance, time);
@@ -492,7 +510,7 @@ function chart(id, series, {utcDays = false, calendarDates = false, unit = "", m
                 y: {min: minimum ?? undefined, suggestedMin: balance ? 0 : undefined, stacked: balance, beginAtZero: id === "price-chart", title: {display: Boolean(unit), text: unit}, grid: {color: (context) => context.tick.value === 0 ? "#455d70" : "#edf1f5", lineWidth: (context) => context.tick.value === 0 ? 2 : 1}, ticks: {maxTicksLimit: 6, callback: (value) => unit === "W" ? number(value) : valueText(value, unit)}},
                 ...(series.some((entry) => entry.axis === "soc") ? {soc: {position: "right", min: 0, max: 100, stacked: false, title: {display: true, text: "SoC (%)"}, ticks: {callback: (value) => percentage(value, false)}, grid: {drawOnChartArea: false}}} : {})},
             onClick: (_event, elements) => {
-                if (["forecast-chart", "reference-chart", "self-consumption-chart"].includes(id) || id === "price-chart" && !priceInputPlanId || !elements.length) return;
+                if (batteryPlan || ["forecast-chart", "reference-chart", "self-consumption-chart"].includes(id) || id === "price-chart" && !priceInputPlanId || !elements.length) return;
                 const time = datasets[elements[0].datasetIndex].data[elements[0].index].x;
                 const index = inspectSteps.findIndex((step) => step.start <= time && time < step.end);
                 if (index >= 0) { $("inspect-time").value = index; inspect(); $("plan-evidence-panel").open = true; $("interval-evidence-panel").open = true; $("evidence-time").scrollIntoView({block: "nearest"}); }
@@ -797,6 +815,31 @@ function renderScenarioCosts(id, costs, currency, benefit, showBenefit, {valuati
     }
 }
 
+/** Draw the selected plan's battery chart once the disclosure is open and measurable. */
+function drawBatteryPlan(deferRange = false) {
+    if (!batteryPlanPanel.open || !pendingBatterySeries) return;
+    chart("battery-plan-chart", pendingBatterySeries, {unit: "kW", balance: true, preserveVisibility: true, deferRange});
+    pendingBatterySeries = null;
+}
+
+/** Remove figures and legend choices before showing a different plan or a plan without batteries. */
+function clearBatteryPlan() {
+    pendingBatterySeries = null;
+    batteryPlanPanel.hidden = true;
+    batteryPlanPanel.open = false;
+    charts.get("battery-plan-chart")?.destroy();
+    charts.delete("battery-plan-chart");
+    $("battery-plan-chart-legend").replaceChildren();
+}
+
+batteryPlanPanel.addEventListener("toggle", () => {
+    if (batteryPlanPanel.open) drawBatteryPlan();
+    else {
+        const tooltip = $("battery-plan-chart-tooltip");
+        if (tooltip) tooltip.hidden = true;
+    }
+});
+
 /** Clear supplementary values as soon as a different original plan is displayed. */
 function clearPlanComparisons() {
     evidenceRequest = null;
@@ -933,6 +976,7 @@ async function showPlan(signal, background = false) {
         $("overview-status").textContent = id ? "Loading selected plan…" : CONNECTED_MESSAGE;
         $("plan-description").textContent = id ? "Loading selected plan…" : "No plan selected.";
         inspectSteps = [];
+        clearBatteryPlan();
         for (const chartId of ["plan-chart", "reference-chart", "self-consumption-chart", "energy-chart", "forecast-chart", "price-chart"]) {
             if (chartId === "price-chart" && !clearPrices) continue;
             if (charts.has(chartId)) chart(chartId, [], {deferRange: true});
@@ -1063,6 +1107,11 @@ async function showPlan(signal, background = false) {
         });
         const balance = balances[0];
         chart("plan-chart", balance.series, {unit: "kW", balance: true, preserveVisibility: samePlan, deferRange: true});
+        pendingBatterySeries = batteryPlanSeries(plan, batteryLabels);
+        if (pendingBatterySeries.length) {
+            batteryPlanPanel.hidden = false;
+            drawBatteryPlan(true);
+        } else clearBatteryPlan();
         if (balance.missing) {
             const warning = document.createElement("p"); warning.className = "balance-warning";
             warning.textContent = `${balance.missing} interval(s) have missing or inconsistent physical evidence. Their balance bars are unavailable. No losses or flows are invented.`;

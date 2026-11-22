@@ -23,6 +23,24 @@ Available solar forecasts remain in the interval inspector and forecast chart.
 Balance charts use actually planned DC production after curtailment/clipping.
 Grid following is a regulation mode, not a fixed battery-power command.
 
+**Battery plan** is a collapsed disclosure inside **Optimizer**. It reads per-device
+`expected_flows.batteries` and original capacities and starting states from the
+selected plan. Separate signed charge and discharge bars share a power axis and
+use the same quarter projection as the installation balance. Each battery's SoC
+line uses its original state endpoints and the right-hand 0 to 100% axis. Its
+bars and line share a legend control keyed by device ID. Missing values remain
+gaps. The chart follows the Planning time window and has its own power scale.
+It is created when opened and is omitted when the original plan has no batteries.
+
+The original display-plan API derives charging attribution from frozen flows.
+Each inverter allocates local PV DC to its battery DC demand before allowing
+remaining PV to contribute to its recorded AC export. AC charging uses that
+PV export before available grid import. Charging demands share a source
+proportionally, with inverter and battery DC conversion losses applied at their
+own boundaries. Attribution is expressed in kWh at each battery's terminals.
+Unsupported or unassigned energy remains explicit. Tooltip power averages the
+attribution over the same covered portion of a quarter as its charge bar.
+
 ## Signed interval balances
 
 Interactive stacked balance bars always span UTC-aligned fifteen-minute blocks.
