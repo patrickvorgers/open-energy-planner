@@ -492,7 +492,7 @@ def assess_forecasts(
             }
 
             def hourly_values(forecast, instants=instants, field_name=field_name):
-                """Integrate the actual mixed-resolution service projection into matched measured hours."""
+                """Integrate the service forecast into matched measured hours."""
                 values = {instant: 0.0 for instant in instants}
                 for energy in forecast.energies:
                     instant = energy.start.replace(minute=0, second=0, microsecond=0)

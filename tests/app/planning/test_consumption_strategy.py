@@ -232,7 +232,7 @@ def test_real_worker_publishes_frozen_strategy_and_separate_kwh_evidence():
             0, abs=2e-7
         )
         assert document["independent_costs"]["objective"] == pytest.approx(0, abs=2e-7)
-        assert len(document["steps"]) == 120
+        assert len(document["steps"]) == 192
 
     asyncio.run(scenario())
 

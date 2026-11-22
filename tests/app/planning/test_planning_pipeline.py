@@ -38,7 +38,7 @@ def service(solver=None, clock=None):
 
 
 def test_frozen_snapshot_has_stable_hash_and_no_mutable_collections():
-    """Attempt input and exported-record mutation. Require frozen originals, stable hashes and the fixed 120-step horizon."""
+    """Attempt input and exported-record mutation. Require frozen originals, stable hashes and the fixed 192-quarter horizon."""
     snapshot = capture(NOW)
     with pytest.raises(FrozenInstanceError):
         snapshot.problem.batteries[0].battery.initial_kwh = 0.5
@@ -46,7 +46,7 @@ def test_frozen_snapshot_has_stable_hash_and_no_mutable_collections():
     record = snapshot.record()
     record["problem"]["batteries"][0]["battery"]["initial_kwh"] = 0.5
     assert snapshot.digest == before
-    assert len(snapshot.problem.intervals) == 120
+    assert len(snapshot.problem.intervals) == 192
     assert sum(interval.duration_h for interval in snapshot.problem.intervals) == 48
 
 
@@ -493,7 +493,7 @@ def test_publication_success_is_logged_only_after_acknowledgement(caplog):
         assert coordinator.status == "ready"
         messages = [message for message in caplog.messages if "Plan published" in message]
         assert len(messages) == 1
-        assert "Validated forecast intervals: 120" in messages[0]
+        assert "Validated forecast intervals: 192" in messages[0]
 
     with caplog.at_level(logging.INFO, logger="open_energy_planner.planning"):
         asyncio.run(scenario())

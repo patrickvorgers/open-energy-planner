@@ -3,8 +3,7 @@
 ## Ownership
 
 Provider adapters retain original price intervals, issue/receipt metadata, units,
-source versions and native resolution. They do not apply the planner's coarser
-control policy. The combined price timeline selects published prices first,
+source versions and native resolution. The combined price timeline selects published prices first,
 then the preferred usable forecast for each lead bucket, with fallback to
 another usable source. It projects these selected rates onto UTC quarters.
 
@@ -24,19 +23,10 @@ clipped edges.
 
 ## Control grid
 
-The normal forecast basis starts on the current UTC quarter. Its end remains
-exactly 48 elapsed hours later. The fine section lasts at least 24 hours and
-continues to the first whole UTC hour at or after that threshold. Coarse control
-blocks begin on whole hours. The final block is clipped to the original horizon.
-Explicit unaligned synthetic starts preserve their supplied instant and clip
-transition/final edges without extending the horizon.
-
-| UTC start | Fine section | Fine groups | Remaining groups | Final group |
-| --- | --- | --- | --- | --- |
-| 10:00 | 24h | 96 | 24 full hours | 1h |
-| 10:15 | 24h45m | 99 | 23 full hours and one quarter | 15m |
-| 10:30 | 24h30m | 98 | 23 full hours and one half hour | 30m |
-| 10:45 | 24h15m | 97 | 23 full hours and three quarters | 45m |
+The normal forecast basis starts on the current UTC quarter and covers exactly
+48 elapsed hours in 192 quarter-hour control intervals. A plan starting at
+10:15 UTC ends at 10:15 UTC two days later. Explicit synthetic starts retain
+their supplied instant and advance in 15-minute steps for the same elapsed horizon.
 
 Demand and solar forecasts use this same grid. UTC elapsed durations preserve
 continuity across daylight-saving changes. Display times use Home Assistant's
@@ -46,7 +36,7 @@ initial time and uses only common available price, demand and solar coverage.
 Cached forecasts can therefore shorten the operational plan. This existing
 coverage fallback never extrapolates an extra tail or extends the 48-hour grid.
 
-## Exact billing inside coarse controls
+## Exact billing within each quarter
 
 The contract basis retains quarter-hour tariff evidence and splits genuine
 contract, bonus, reset and paid-window boundaries exactly. Every resulting
@@ -57,11 +47,11 @@ state transitions, price charges, eligible bonus energy and caps remain evaluate
 on their exact segments. Forecast energy is proportionally allocated at its
 original interval mean rate, preserving total kWh without inventing finer detail.
 
-This is deliberately not an average hourly tariff. Four different quarter prices
-may coexist under one hourly power decision. Bonus eligibility and import/export
-constraints must not disappear through averaging. The number of billing rows is
-not the number of independent control decisions. Original price lines and the
-interval inspector retain exact stored boundaries. Balance bars alone project
+Each quarter can have a different power decision. Within that quarter, every
+billing segment contributes its own tariff and bonus eligibility. Import and export
+limits apply to each segment, including when a device event or forecast change
+creates an internal boundary. Original price lines and the interval inspector
+retain exact stored boundaries. Balance bars project
 the recorded flows onto fixed quarters using duration-weighted mean power.
 Their tooltip identifies partial horizon coverage. This presentation does not
 round accounting edges or change charges, eligible energy or volume caps.
@@ -69,7 +59,8 @@ round accounting edges or change charges, eligible energy or volume caps.
 ## Verification
 
 Regression tests cover every quarter-aligned start, both European DST changes,
-exact 48h coverage, final partial hours, shared demand/solar grids, negative hourly
+exact 48h coverage, clipped first intervals, shared demand/solar grids, negative hourly
 price repetition, raw provenance, published-price priority, missing coverage,
-contract-year boundaries and 192 billing quarters with 123 controls for a :15 start.
+contract-year boundaries and bonus windows within a quarter. A day-two solver
+scenario charges in one negative-priced quarter at exactly the grid import limit.
 Existing solver regressions retain independent financial and physical oracles.

@@ -18,7 +18,7 @@ SYNTHETIC_INVERTER_EFFICIENCY = 1
 def capture(
     now: datetime | None = None, initial_kwh: float = 0, first_load_kwh: float = 0
 ) -> InputSnapshot:
-    """Build a 48-hour snapshot with repeatable values on the shared clock-hour grid.
+    """Build a 48-hour snapshot with repeatable values on the shared quarter-hour grid.
 
     The first buy/sell opportunities and optional initial load exercise real solver
     behaviour. The ideal 1 kWh battery and unity-efficiency AC converter have

@@ -181,20 +181,17 @@ def test_financial_dispatch_resumes_above_restored_reserve():
     assert plan.costs.cash_cost == pytest.approx(-12)
 
 
-def test_blocked_recovery_covers_the_full_mixed_resolution_horizon():
-    """With zero connection headroom, all 120 deficit optima remain one kWh. Planning still completes within its solve budget."""
+def test_blocked_recovery_covers_the_full_quarter_hour_horizon():
+    """With zero connection headroom, all 192 deficit optima remain one kWh. Planning still completes within its solve budget."""
     base = problem(grid=0)
     intervals = tuple(
-        Interval(START + timedelta(minutes=15 * index), 0.25, 1, 0) for index in range(96)
-    )
-    intervals += tuple(
-        Interval(START + timedelta(hours=24 + index), 1, 1, 0) for index in range(24)
+        Interval(START + timedelta(minutes=15 * index), 0.25, 1, 0) for index in range(192)
     )
     value = replace(base, intervals=intervals)
     result = HighsSolver().solve(value)
     assert result.status == Status.OPTIMAL, result
     validate(value, result.plan)
-    assert len(result.plan.flows) == 120
+    assert len(result.plan.flows) == 192
     assert all(flow_item.batteries[0].end_kwh == 0 for flow_item in result.plan.flows)
     assert result.solve_seconds < 10
 

@@ -413,14 +413,13 @@ def test_rounding_noise_does_not_raise_a_runtime_problem(tmp_path):
     }
 
 
-def test_no_history_always_has_startup_prediction_on_the_120_step_horizon():
-    """3650 kWh/year gives 10 kWh per normal day, split into 96 quarters and 24 hours over 48 hours."""
+def test_no_history_always_has_startup_prediction_on_the_quarter_hour_horizon():
+    """3650 kWh/year gives 10 kWh per normal day, split into 192 quarters over 48 hours."""
     forecast = predict(config(), (), START, WeekdayProfile.fit(config(), ()))
     assert forecast.model == "startup-v2"
     assert forecast.quality == "provisional"
-    assert len(forecast.steps) == 120
-    assert all(step.duration_h == 0.25 for step in forecast.steps[:96])
-    assert all(step.duration_h == 1 for step in forecast.steps[96:])
+    assert len(forecast.steps) == 192
+    assert all(step.duration_h == 0.25 for step in forecast.steps)
     assert sum(step.kwh for step in forecast.steps[:96]) == pytest.approx(10)
     assert sum(step.kwh for step in forecast.steps[96:]) == pytest.approx(10)
 
@@ -576,7 +575,7 @@ def test_live_demand_reuses_the_stored_issue_across_quarters(tmp_path):
     path = "forecast-" + original.version + ".json"
     archive = store.documents.read(path)
     assert len(original.steps) == 72 * 4
-    assert len(runtime.document(now)["forecast"]["steps"]) == 120
+    assert len(runtime.document(now)["forecast"]["steps"]) == 192
     for offset in (15, 30, 45, 60, 75, 90):
         later = now + timedelta(minutes=offset)
         assert runtime.job(later) is None

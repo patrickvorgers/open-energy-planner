@@ -20,6 +20,7 @@ from open_energy_planner.installation.validation import validate
 from open_energy_planner.optimization.adapters.highs import HighsSolver
 from open_energy_planner.optimization.domain import Battery, Interval
 from open_energy_planner.optimization.export_bonus import ExportBonus
+from open_energy_planner.planning_policy import planning_grid
 from open_energy_planner.prices.model import PriceKind, PricePoint, PriceSeries, combine
 from open_energy_planner.prices.service import PriceService
 from open_energy_planner.prices.storage.adapters.store import PriceStore
@@ -347,26 +348,6 @@ def test_partial_step_and_shortened_price_horizon_preserve_energy_rates(tmp_path
     assert result.valid_until == NOW + timedelta(minutes=10)
 
 
-def test_heterogeneous_prices_inside_coarse_step_are_not_silently_averaged(tmp_path):
-    """Keep distinct quarter tariffs within one half-hour control group instead of averaging costs."""
-    source = input_source(tmp_path, future=Future((Interval(NOW, 0.5, 999, 999),)))
-    result = source.current(configuration(), NOW)
-    assert [step.buy_price for step in result.problem.intervals] == [0.242, 0.605]
-    assert len({step.control_group for step in result.problem.intervals}) == 1
-    assert len(result.tariff_evidence) == 2
-
-
-def test_equal_rates_with_multiple_evidence_segments_keep_one_control_step(tmp_path):
-    """Keep a half-hour control step when both quarter tariffs are equal, retaining two billing-source segments."""
-    source = input_source(
-        tmp_path, series=price_series((0.1, 0.1)), future=Future((Interval(NOW, 0.5, 999, 999),))
-    )
-    result = source.current(configuration(), NOW)
-    assert len(result.problem.intervals) == 2
-    assert len({step.control_group for step in result.problem.intervals}) == 1
-    assert len(result.tariff_evidence) == 2
-
-
 def test_price_and_contract_boundary_inside_current_quarter_blocks_approximation(tmp_path):
     """Split a seven-minute contract boundary for billing while preserving the original quarter's control group."""
     rules = contract(buy="market")
@@ -434,28 +415,19 @@ def test_forecast_source_cannot_inject_an_unconfigured_bonus(tmp_path):
 
 
 @pytest.mark.parametrize("with_selection", [False, True])
-def test_mixed_48_hour_grid_retains_all_120_control_steps(tmp_path, with_selection):
+def test_48_hour_grid_keeps_quarter_controls_with_mixed_price_resolutions(tmp_path, with_selection):
     """The 96+24 control grid keeps exact tariffs. Moving lead-bucket splits do not create a new effective price revision."""
-    intervals, points = [], []
-    cursor = NOW
-    for index in range(120):
-        duration = 0.25 if index < 96 else 1
-        end = cursor + timedelta(hours=duration)
-        intervals.append(Interval(cursor, duration, 999, 999, load_kwh=duration))
-        points.append(
-            PricePoint(
-                cursor,
-                end,
-                0.1 if index < 96 else 0.2,
-                PriceKind.PUBLISHED if index < 96 else PriceKind.FORECAST,
-                15 if index < 96 else 60,
-            )
-        )
-        cursor = end
+    intervals = tuple(
+        Interval(start, duration, 999, 999, load_kwh=duration)
+        for start, duration in planning_grid(NOW)
+    )
+    published = price_series((0.1,) * 96)
+    forecast = price_series((0.2,) * 48, minutes=60, kind=PriceKind.FORECAST)
+    points = published.points + forecast.points[24:]
     source = input_source(
         tmp_path,
-        series=replace(price_series(), points=tuple(points)),
-        future=Future(tuple(intervals)),
+        series=replace(published, points=points),
+        future=Future(intervals),
     )
     prices = source.prices()
     if with_selection:
@@ -472,12 +444,13 @@ def test_mixed_48_hour_grid_retains_all_120_control_steps(tmp_path, with_selecti
         )
     result = source.current(configuration(), NOW)
     assert len(result.problem.intervals) == 192
-    assert len({step.control_group for step in result.problem.intervals}) == 120
+    assert len({step.control_group for step in result.problem.intervals}) == 192
     assert sum(step.duration_h for step in result.problem.intervals) == 48
     assert sum(step.load_kwh for step in result.problem.intervals) == 48
     assert result.problem.intervals[95].buy_price == 0.242
     assert result.problem.intervals[96].buy_price == 0.363
     assert result.tariff_evidence[96].price_kind == "forecast"
+    assert result.tariff_evidence[96].native_resolution_minutes == 60
     later = source.current(configuration(), NOW + timedelta(minutes=5))
     assert later.price_version == result.price_version
     assert later.tariff_evidence[0].start != result.tariff_evidence[0].start
@@ -548,15 +521,8 @@ def test_price_rules_cannot_expire_or_leave_a_gap_after_the_first_start(fault):
         replace(current, periods=periods)
 
 
-def test_quarter_prices_keep_clock_hour_control_groups_and_exact_48_hour_energy(tmp_path):
-    """A :15 start keeps 99 quarters, 23 full hours and a final quarter. Billing retains all 192 quarters.
-
-    Every hour has one control group despite four billing rows. Forty-eight
-    one-kW hours remain 48 kWh after refinement. Native hourly price evidence
-    stays hourly in provenance and no hourly control begins at :15 or :45.
-    """
-    from open_energy_planner.planning_policy import planning_grid
-
+def test_hourly_prices_preserve_quarter_controls_for_an_unaligned_hour_start(tmp_path):
+    """A :15 start keeps all 192 quarter controls and 48 kWh under native hourly prices."""
     start = NOW + timedelta(minutes=15)
     future = Future(
         tuple(
@@ -571,15 +537,32 @@ def test_quarter_prices_keep_clock_hour_control_groups_and_exact_48_hour_energy(
     assert sum(step.duration_h for step in steps) == 48
     assert sum(step.load_kwh for step in steps) == 48
     assert steps[-1].start + timedelta(hours=steps[-1].duration_h) == start + timedelta(hours=48)
-    groups = {}
-    for step in steps:
-        groups.setdefault(step.control_group, []).append(step)
-    controls = list(groups.values())
-    assert len(controls) == 123
-    assert all(len(group) == 1 for group in controls[:99])
-    assert all(len(group) == 4 and group[0].start.minute == 0 for group in controls[99:-1])
-    assert len(controls[-1]) == 1
+    assert len({step.control_group for step in steps}) == 192
+    assert all(step.duration_h == 0.25 for step in steps)
     assert all(evidence.native_resolution_minutes == 60 for evidence in result.tariff_evidence)
+
+
+@pytest.mark.planner_scenario
+def test_second_day_battery_uses_one_cheap_quarter_at_the_grid_import_limit(tmp_path):
+    """At 1 kW, exactly 0.25 kWh fits in one negative-priced quarter on day two."""
+    late_quarter = 101
+    battery = Battery(1, 0, charge_limit_w=4000, discharge_limit_w=0)
+    future = Future(
+        tuple(Interval(start, duration, 0, 0) for start, duration in planning_grid(NOW)),
+        battery=battery,
+    )
+    future.problem = replace(future.problem, grid_import_limit_w=1000)
+    rates = [0.4] * 192
+    rates[late_quarter] = -0.2
+    source = input_source(
+        tmp_path, rules=contract(buy="market", sell="0"), series=price_series(rates), future=future
+    )
+    prepared = source.current(configuration(), NOW).problem
+    result = HighsSolver().solve(prepared)
+    costs = validate(prepared, result.plan)
+    assert costs.import_cost == pytest.approx(-0.05)
+    assert result.plan.flows[late_quarter].grid_import == pytest.approx(0.25)
+    assert sum(flow.grid_import for flow in result.plan.flows) == pytest.approx(0.25)
 
 
 def test_price_preview_uses_exact_paid_window_and_price_condition_without_volume():

@@ -183,8 +183,8 @@ forecast interval. Finer billing does not claim a finer measured forecast.
 
 Equal terminal battery charge/discharge power is enforced across all billing
 segments of one original control interval. Commands merge those segments back
-into the same original decision. The 48-hour horizon therefore still has 96
-quarters plus 24 hourly commands, even with more than 192 billing segments.
+into the same original decision. The full 48-hour horizon has 192 quarter-hour commands. Exact boundaries within
+quarters can produce more than 192 billing segments.
 There is no averaged tariff and no extra within-step arbitrage. The current [installation planner](INSTALLATION-PLANNING.md) composes multiple PV sources, batteries and converters. Bonus billing stays at the aggregate grid boundary.
 
 Per-plan input preserves rule and counter versions, meter evidence, the HA
@@ -207,7 +207,7 @@ amounts. There is no claim of exhaustive coverage of continuous powers.
 
 `tests/app/contract/test_contract_bonuses.py` covers time/price gates, DST, real local solar
 events, dated versions, measured baselines, immutable persistence and exact
-120-command projection. `tests/app/contract/test_bonus_app.py` exercises authenticated local
+192-command projection. `tests/app/contract/test_bonus_app.py` exercises authenticated local
 HTTP configuration through real solving/publication. The actual HA suite checks
 native sensor selection, energy normalization and forwarding HA's location.
 Deliberately forged credits, counters, identity, revenue and NaN must be rejected.

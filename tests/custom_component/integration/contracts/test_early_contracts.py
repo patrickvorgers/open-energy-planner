@@ -226,7 +226,8 @@ def test_app_demand_setup_reads_recorder_and_keeps_startup_without_history(monke
         async with _recorder_demand_forecast(monkeypatch) as (hass, entry, root, demand):
             steps = demand["forecast"]["steps"]
             first = datetime.fromisoformat(steps[0]["start"])
-            assert len(steps) == {0: 120, 15: 123, 30: 122, 45: 121}[first.minute]
+            assert first.minute % 15 == 0 and first.second == 0
+            assert len(steps) == 192
             assert sum(step["duration_h"] for step in steps) == 48
             assert demand["forecast"]["steps"][0]["kwh"] == pytest.approx(0.1)
             assert demand["configuration"]["timezone"] == hass.config.time_zone

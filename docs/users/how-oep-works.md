@@ -108,7 +108,7 @@ Both battery scenarios compare their expected benefit with the same without-batt
 
 ## Keep time and uncertainty in view
 
-The target planning horizon is 48 hours when the required inputs cover it. Missing coverage can shorten it. Stationary control uses quarter-hour decisions for the first day and hourly groups for the second. The charts present their interval balances as quarter-hour bars. A finer price settlement boundary does not imply an extra physical switching decision.
+The target planning horizon is 48 hours when the required inputs cover it. Missing coverage can shorten it. The optimizer chooses a power setting for each quarter-hour across both days. The charts show energy balances in quarter-hour bars. Tariff and bonus changes within a quarter still apply at their exact times.
 
 Home Assistant supplies the installation timezone. Calendar days can contain 23 or 25 hours around daylight-saving changes. Original timestamps, input versions and forecasts stay with each saved plan.
 

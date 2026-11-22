@@ -119,7 +119,7 @@ Worked Dutch examples cover Zonneplan, NextEnergy and Budget Energie bonus struc
 
 ## Read the plan, then decide how to act
 
-The target horizon is 48 hours when inputs cover it. Planning compares the optimizer with ordinary battery self-consumption and a without-battery baseline under the same original inputs. It accounts for configured losses, wear and remaining stored-energy value. Separate **Savings** and **Forecast quality** views answer different questions using retained evidence.
+The target horizon is 48 hours in quarter-hour decisions when inputs cover it. Planning compares the optimizer with ordinary battery self-consumption and a without-battery baseline under the same original inputs. It accounts for configured losses, wear and remaining stored-energy value. Separate **Savings** and **Forecast quality** views answer different questions using retained evidence.
 
 The calculation app runs separately from Home Assistant. The integration exchanges measurements and publishes virtual advice. Your automation/controller implements physical actions. An accepted command proves receipt, not execution. Missing measurements remain unknown and expired commands become unavailable.
 

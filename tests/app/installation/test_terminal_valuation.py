@@ -26,20 +26,21 @@ def valued(inputs):
 
 
 def test_selected_overlap_and_extended_prices_reach_valuation_without_provider_logic(tmp_path):
-    """The price adapter selects 0.1 commands and a later 0.4 valuation. 120 control groups remain unchanged and original inputs stay frozen."""
+    """Select 0.1 for 192 quarter controls and 0.4 for later valuation. Preserve the frozen original."""
     from open_energy_planner.prices.selection import ForecastSelection
 
     future = Future()
     base = problem(prices=(0.1,), loads=(1,), pv=(0,))
-    intervals = []
-    start = NOW
-    for index in range(120):
-        duration = 0.25 if index < 96 else 1
-        intervals.append(
-            replace(base.intervals[0], start=start, duration_h=duration, load_kwh=duration)
+    intervals = tuple(
+        replace(
+            base.intervals[0],
+            start=NOW + timedelta(minutes=15 * index),
+            duration_h=0.25,
+            load_kwh=0.25,
         )
-        start += timedelta(hours=duration)
-    future.problem = replace(base, intervals=tuple(intervals))
+        for index in range(192)
+    )
+    future.problem = replace(base, intervals=intervals)
     primary_series = replace(
         price_series((0.1,) * 48, minutes=60, kind=PriceKind.FORECAST), source_id="primary"
     )
@@ -58,7 +59,7 @@ def test_selected_overlap_and_extended_prices_reach_valuation_without_provider_l
     (curve,) = original.problem.terminal_valuations
     assert curve.rate == pytest.approx(0.4)
     assert curve.price_basis == "post_horizon_prices"
-    assert len({interval.control_group for interval in original.problem.intervals}) == 120
+    assert len({interval.control_group for interval in original.problem.intervals}) == 192
     assert all(interval.buy_price == 0.1 for interval in original.problem.intervals)
     assert all(
         tariff_evidence.source_id == "alternative" for tariff_evidence in curve.tariff_evidence
@@ -346,24 +347,22 @@ def test_future_tariff_coverage_rejects_gaps_empty_reverse_or_excess_windows(
         derive(inputs, (tariff,))
 
 
-def test_full_mixed_resolution_horizon_uses_only_last_day_and_keeps_120_steps():
-    """The first 96 expensive quarters must not raise the last 24 cheap hours' 0.2 inventory rate."""
+def test_full_quarter_hour_horizon_uses_only_last_day_for_valuation():
+    """Only the second day of quarters contributes to the 0.2 inventory rate."""
     base = problem(prices=(1,), loads=(1,), pv=(0,))
-    steps = []
-    for index in range(120):
-        offset, duration = (index / 4, 0.25) if index < 96 else (index - 72, 1)
-        steps.append(
-            replace(
-                base.intervals[0],
-                start=NOW + timedelta(hours=offset),
-                duration_h=duration,
-                load_kwh=duration,
-                buy_price=1 if index < 96 else 0.2,
-            )
+    steps = tuple(
+        replace(
+            base.intervals[0],
+            start=NOW + timedelta(minutes=15 * index),
+            duration_h=0.25,
+            load_kwh=0.25,
+            buy_price=1 if index < 96 else 0.2,
         )
-    inputs = replace(base, intervals=tuple(steps))
+        for index in range(192)
+    )
+    inputs = replace(base, intervals=steps)
     (valuation,) = derive(inputs)
-    assert len(inputs.intervals) == 120
+    assert len(inputs.intervals) == 192
     assert valuation.window_start == NOW + timedelta(hours=24)
     assert valuation.window_end == NOW + timedelta(hours=48)
     assert valuation.rate == pytest.approx(0.2)

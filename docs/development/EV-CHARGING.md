@@ -297,8 +297,8 @@ EV charge. Equal-departure cars maximize combined useful kWh without a separate
 fairness preference. The configured consumption/cost strategy follows. All stages
 share the existing solver budget. An unproved primary stage publishes no new plan.
 
-EV starts use UTC quarters throughout the horizon, independently of coarser
-stationary control groups. Arrival/departure clip edge windows. Full variable-power
+EV starts use UTC quarters throughout the horizon. Billing subdivisions within
+quarters preserve their stationary-device control groups. Arrival/departure clip edge windows. Full variable-power
 windows use continuous AC-watt setpoints. The existing whole-watt stationary
 battery contract is unchanged. HA displays watts without decimals, while the
 automation receives calculation precision. Physical charger rounding remains in

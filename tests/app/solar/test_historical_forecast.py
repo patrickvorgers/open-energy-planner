@@ -421,7 +421,7 @@ def test_historical_projection_requires_coverage_but_keeps_explicit_zeros(missin
             learned_forecast(plant(), SITE, supplied, NOW, {"pv0": ZeroProductionModel()})
     else:
         forecast = learned_forecast(plant(), SITE, supplied, NOW, {"pv0": ZeroProductionModel()})
-        assert len(forecast.energies) == 120
+        assert len(forecast.energies) == 192
         assert sum(row.duration_h for row in forecast.energies) == 48
         assert {row.start.replace(minute=0) for row in forecast.energies} == {
             NOW + timedelta(hours=index) for index in range(48)

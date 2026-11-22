@@ -1,4 +1,4 @@
-"""Mixed-resolution horizon plus independent known optima and refinement checks."""
+"""Independent known optima for the legacy mixed grid and the quarter-hour horizon."""
 
 from dataclasses import replace
 from datetime import timedelta
@@ -14,7 +14,7 @@ from tests.app.solver_regression.horizon_cases import (
 )
 
 
-def test_confirmed_time_grid_is_48_hours_with_120_decisions():
+def test_legacy_mixed_grid_fixtures_cover_48_hours():
     """Inspect every horizon fixture. Require 96 quarter-hours plus 24 hours with contiguous 48-hour coverage."""
     for case in HORIZON_CASES:
         intervals = case.problem.intervals
@@ -42,8 +42,8 @@ def test_horizon_known_optimum(case, solver):
 
 @pytest.mark.planner_scenario
 @pytest.mark.parametrize("case", HORIZON_CASES, ids=lambda case_item: case_item.name)
-def test_hourly_tail_preserves_known_economics_when_profile_is_constant_inside_hour(case, solver):
-    """Refine hourly tail slots to quarters. Require unchanged economics because their profiles are constant."""
+def test_quarter_hour_horizon_preserves_known_economics_for_constant_profiles(case, solver):
+    """Require the independent optimum across all 192 quarters for constant-within-hour profiles."""
     refined = replace(case, problem=quarter_hour_problem(case.problem))
     assert len(refined.problem.intervals) == 192
     result = solver.solve(refined.problem)

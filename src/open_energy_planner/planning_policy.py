@@ -2,23 +2,17 @@
 
 from datetime import UTC, datetime, timedelta
 
-from open_energy_planner.core.units import SECONDS_PER_HOUR
+from open_energy_planner.core.units import MINUTES_PER_HOUR
 
 PLANNING_HORIZON_HOURS = 48
-FINE_RESOLUTION_HOURS = 24
 FINE_INTERVAL_MINUTES = 15
-COARSE_INTERVAL_MINUTES = 60
 TERMINAL_VALUATION_HOURS = 24
 COMMAND_GRACE_MINUTES = 5
 PRICE_COVERAGE_HOURS = PLANNING_HORIZON_HOURS + TERMINAL_VALUATION_HOURS
 
 
 def planning_grid(now: datetime, *, align: bool = True) -> tuple[tuple[datetime, float], ...]:
-    """Keep an exact elapsed horizon and switch to coarse steps on a UTC clock hour.
-
-    Normal forecasts start on the current quarter. Keep fine steps for at least
-    24 hours, through the next whole hour. Clip the last coarse step to the
-    horizon rather than extending it. Explicit synthetic starts remain exact.
+    """Cover the elapsed planning horizon in UTC quarters.
 
     Args:
         now: Timezone-aware planning instant.
@@ -39,19 +33,10 @@ def planning_grid(now: datetime, *, align: bool = True) -> tuple[tuple[datetime,
             second=0,
             microsecond=0,
         )
-    end = start + timedelta(hours=PLANNING_HORIZON_HOURS)
-    switch = start + timedelta(hours=FINE_RESOLUTION_HOURS)
-    clock_hour = switch.replace(minute=0, second=0, microsecond=0)
-    switch = min(end, clock_hour + timedelta(hours=1) if switch > clock_hour else clock_hour)
-    intervals = []
-    cursor = start
-    while cursor < end:
-        fine = cursor < switch
-        duration = timedelta(minutes=FINE_INTERVAL_MINUTES if fine else COARSE_INTERVAL_MINUTES)
-        until = min(cursor + duration, switch if fine else end)
-        intervals.append((cursor, (until - cursor).total_seconds() / SECONDS_PER_HOUR))
-        cursor = until
-    return tuple(intervals)
+    return tuple(
+        (start + timedelta(minutes=offset), FINE_INTERVAL_MINUTES / MINUTES_PER_HOUR)
+        for offset in range(0, PLANNING_HORIZON_HOURS * MINUTES_PER_HOUR, FINE_INTERVAL_MINUTES)
+    )
 
 
 def command_deadline(now):

@@ -11,7 +11,7 @@ Apply named-value ownership to active Python production code and frontend policy
 ## One horizon owner
 
 `PLANNING_HORIZON_HOURS = 48` is the single executable-horizon setting in code.
-The first 24 hours use 15-minute steps. The remainder uses 60-minute steps.
+The whole horizon uses 15-minute control steps.
 Dependent step counts, source timelines, command-input validation, optional
 terminal price coverage and weather requests derive from that policy. A separate
 named provider access limit, such as EnergyPriceForecast's free 48-hour maximum,
@@ -20,10 +20,10 @@ data outside a provider's available coverage. The normal shortened-horizon and
 fallback rules still apply.
 
 `tests/app/planning/test_planning_policy.py` changes only the horizon assignment in an isolated
-Python process. It independently expects 132 steps and 84 price hours for a
+Python process. It independently expects 240 steps and 84 price hours for a
 60-hour plan, checks the actual demand/solar/synthetic consumers and price defaults,
 and verifies bonus-window validation changes with it. The default DST case still
-expects exactly 96 quarters and 24 hours.
+expects exactly 192 quarters.
 
 ## Persistence boundary
 
