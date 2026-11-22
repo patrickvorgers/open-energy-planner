@@ -84,7 +84,7 @@ def explain_planning_problem(reason: str, _detail: str | None = None) -> NoticeT
         return NoticeText(
             "Waiting for inputs for the updated settings",
             "The installation configuration or planning strategy changed during calculation. "
-            "OEP automatically retries with the current configuration.",
+            "Planning retries automatically with the current configuration.",
             "View planning",
             "/overview",
             "info",
@@ -93,7 +93,7 @@ def explain_planning_problem(reason: str, _detail: str | None = None) -> NoticeT
         return NoticeText(
             "Waiting for a matching measurement report",
             "The latest measurement report refers to a different installation configuration. "
-            "OEP automatically checks incoming reports and retries when one matches.",
+            "Planning retries automatically when a matching report arrives.",
             "View planning",
             "/overview",
             "info",
@@ -102,7 +102,7 @@ def explain_planning_problem(reason: str, _detail: str | None = None) -> NoticeT
         return NoticeText(
             "Waiting for a plan with current device work",
             "The appliance, charging or heating work no longer matches the calculation. "
-            "OEP automatically retries with the current planning inputs.",
+            "Planning retries automatically with the current inputs.",
             "View planning",
             "/overview",
             "info",
