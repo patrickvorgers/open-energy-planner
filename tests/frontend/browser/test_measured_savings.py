@@ -306,6 +306,14 @@ def test_negative_savings_and_failed_refresh_never_show_stale_money(app_page):
     expect(page.locator("#savings-chart")).to_have_attribute("tabindex", "-1")
     assert page.locator("#savings-chart").evaluate("canvas => canvas.onkeydown") is None
 
+    failed = False
+    data["cash"] = {"coverage_seconds": 0, "chart": []}
+    page.get_by_role("button", name="Refresh overview", exact=True).click()
+    expect(page.locator("#savings-status")).to_have_text(
+        "No savings estimate is available for this period."
+    )
+    expect(page.locator("#savings-bonus-basis")).not_to_be_visible()
+
 
 @pytest.mark.parametrize("app_site", ["savings"], indirect=True)
 def test_no_completed_savings_day_disables_selection_until_a_day_completes(app_page):

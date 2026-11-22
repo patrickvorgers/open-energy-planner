@@ -107,7 +107,7 @@ export function createSavingsView(host, api) {
             }
             renderBreakdown(cash, currency);
             const complete = known && cash.coverage_seconds === cash.expected_seconds;
-            find("savings-status").textContent = complete ? "All measured time in this period is included." : known ? "Partial period: Both costs include only the same available measured time. Missing intervals are excluded." : "Waiting for completed measurements and published electricity prices for this period.";
+            find("savings-status").textContent = complete ? "All measured time in this period is included." : known ? "Partial period: Both costs include only the same available measured time. Missing intervals are excluded." : "No savings estimate is available for this period.";
             if (known && cash.estimated_seconds > 0) find("savings-status").textContent += " Includes reconstructed measurements.";
             if (data.issue) find("savings-status").textContent += " " + data.issue;
             draw(cash?.chart || [], currency, start, end, cash?.aggregation);
