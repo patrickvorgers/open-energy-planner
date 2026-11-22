@@ -8,11 +8,6 @@ from zoneinfo import ZoneInfo
 
 from aiohttp import web
 
-from open_energy_planner.contracts.bonus_statistics import (
-    MAX_STATISTICS_REPORT_BYTES,
-    parse_statistics,
-)
-from open_energy_planner.history.wire import parse_history
 from open_energy_planner.home_assistant.names import display_plan, energy_source_names
 from open_energy_planner.installation.battery_flows import battery_flow_attribution
 from open_energy_planner.runtime.diagnostics.http import phase
@@ -243,7 +238,6 @@ def register(
             installation.current,
             solar.configuration,
             demand.configuration,
-            counters.current.seeds if counters.current else (),
             location(),
         )
 
@@ -289,85 +283,16 @@ def register(
             async with lock:
                 if arguments[1:] != capture_bindings()[1:]:
                     raise web.HTTPConflict(text="Settlement request changed")
-                seeds, site = arguments[-2:]
+                site = arguments[-1]
             if expected is None:
                 raise web.HTTPConflict(text="No settlement capture is pending")
             try:
                 cancelled = await complete_write(
-                    runtime.receive, expected, body, datetime.now(UTC), seeds, site
+                    runtime.receive, expected, body, datetime.now(UTC), site
                 )
                 if cancelled:
                     raise cancelled
             except (ValueError, TypeError, KeyError) as error:
-                raise web.HTTPBadRequest(
-                    text=request_error_message(
-                        error,
-                        logger=logging.getLogger(__name__),
-                        operation="Settlement history",
-                        safe_messages=PUBLIC_VALIDATION_MESSAGES,
-                        fallback="Settlement history could not be accepted. Refresh the requested history and inspect application diagnostics.",
-                    )
-                ) from None
-        return web.json_response({"accepted": True})
-
-    def bonus_history_request():
-        """Expose the worker's immutable historical request only while its contract/counter versions match."""
-        pending = runtime.bonus.pending
-        if (
-            pending is None
-            or contracts.current is None
-            or pending.contract_version != contracts.current.version
-            or pending.counter_version != (counters.current.version if counters.current else None)
-        ):
-            return None
-        return {"version": pending.version, **pending.document()}
-
-    async def receive_bonus_history(request):
-        """Accept bounded native history for an old period, without mutating current confirmations.
-
-        The version binds the historical source members, frame boundary, contract
-        and current counter revision. Validation and persistence run off-loop under
-        the same mutation lock as financial replay. Missing hours stay missing.
-        """
-        try:
-            body = await request.clone(client_max_size=MAX_STATISTICS_REPORT_BYTES).json()
-        except (ValueError, TypeError):
-            raise web.HTTPBadRequest(text="Historical bonus body must be JSON") from None
-        async with mutation_lock:
-            pending = runtime.bonus.pending
-            expected = bonus_history_request()
-            if (
-                expected is None
-                or not isinstance(body, dict)
-                or body.get("request_version") != expected["version"]
-            ):
-                raise web.HTTPConflict(text="Historical bonus request changed")
-            if set(body) == {"request_version", "error"} and body["error"] in (
-                "recorder_unavailable",
-                "history_unavailable",
-                "unsupported_statistics",
-                "history_missing",
-            ):
-                runtime.bonus.issue = "Historical bonus history unavailable: " + body["error"]
-                return web.json_response({"accepted": False})
-            try:
-                if pending.statistics_sum:
-                    cancelled = await complete_write(
-                        runtime.bonus.receive_statistics,
-                        pending,
-                        parse_statistics(body, pending),
-                        counters.current,
-                        datetime.now(UTC),
-                    )
-                else:
-                    history = parse_history(body)
-                    cancelled = await complete_write(
-                        runtime.bonus.receive, pending, history, datetime.now(UTC)
-                    )
-                if cancelled:
-                    raise cancelled
-            except (ValueError, TypeError, KeyError, OverflowError) as error:
-                runtime.bonus.issue = "Historical bonus history is incomplete or invalid"
                 raise web.HTTPBadRequest(
                     text=request_error_message(
                         error,
@@ -616,7 +541,7 @@ def register(
                     contract, book, site = contracts.current, counters.current, location()
                 async with mutation_lock:
                     cancelled = await complete_write(
-                        daily.process, contract, book, datetime.now(UTC), site
+                        daily.process, contract, datetime.now(UTC), site
                     )
                     if cancelled:
                         raise cancelled
@@ -744,8 +669,7 @@ def register(
 
     app.cleanup_ctx.append(lifecycle)
     app.router.add_post("/v1/settlement", receive)
-    app.router.add_post("/v1/settlement/bonus-history", receive_bonus_history)
     app.router.add_get("/v1/savings", overview)
     app.router.add_get("/v1/evaluations", evaluations)
     app.router.add_get("/v1/plans/{plan_id}/comparison", expected)
-    return capture_request, runtime, bonus_history_request
+    return capture_request, runtime

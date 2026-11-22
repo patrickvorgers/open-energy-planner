@@ -64,7 +64,7 @@ Specifications contain both agreed contracts and sections explicitly marked as p
 | [Battery inventory valuation](TERMINAL-VALUATION.md) | Bounded useful-energy value beyond the command horizon |
 | [Reserve recovery](RESERVE-RECOVERY.md) | Mandatory recovery precedence and below-reserve measurements |
 | [Plan evidence](PLAN-EVIDENCE.md) | Archived inputs, original comparisons and explanation limits |
-| [Settlement and savings](SAVINGS.md) | Metered intervals, continuous reference, corrections and evidence quality |
+| [Settlement and savings](SAVINGS.md) | Metered intervals, cash comparison, corrections and evidence quality |
 
 For task-level reading, use [forecasts](../users/forecasts.md), [contract setup](../users/contract.md), [Planning](../users/read-your-plan.md) and [Savings](../users/savings.md).
 

@@ -17,8 +17,8 @@ configuration, normalized prices, forecasts, model coefficients and solar daily
 weather/history blocks. Typed store classes retain their validation and immutable
 version rules. The shared SQL document adapter owns persistence. Version plus active
 pointer commits atomically, and in-memory configuration advances only after commit.
-The [savings service](SAVINGS.md) supplies continuous reference/savings,
-settlement ingestion and a responsive history visualization through the same engine.
+The [savings service](SAVINGS.md) uses the same engine for settlement ingestion,
+measured cash estimates and the Savings history view.
 Final production and backup/restore acceptance remain separate release gates.
 
 Database connection settings, administration/pairing credentials, certificates,

@@ -55,7 +55,7 @@ def test_settlement_transfers_with_every_archive_table(settlement, tmp_path):
     docs.write("recovery.json", {"end": END.isoformat()})
     daily = DailySavings(runtime)
     report = daily.calculate(
-        "2026-10-22", "UTC", contract(buy="market"), None, END + timedelta(days=1), START, None
+        "2026-10-22", "UTC", contract(buy="market"), END + timedelta(days=1), START
     )
     runtime.store.put_day(report, docs, "2026-10-23")
     start, end = day_window("2026-10-22", "UTC")
@@ -91,55 +91,11 @@ def test_settlement_transfers_with_every_archive_table(settlement, tmp_path):
                 ),
             )
         corrected = DailySavings(restored).calculate(
-            "2026-10-22", "UTC", contract(buy="market"), None, END + timedelta(days=2), START, None
+            "2026-10-22", "UTC", contract(buy="market"), END + timedelta(days=2), START
         )
         restored.store.put_day(corrected, restored.documents, "2026-10-23")
         assert DailySavings(restored).overview(start, end)["cash"]["actual_cost"] == pytest.approx(
             0.8
         )
-    finally:
-        target.dispose()
-
-
-def test_later_budget_confirmation_survives_backend_transfer(settlement, tmp_path):
-    """A later 1-kWh confirmation at the unchanged export meter reconstructs both old quarters without changing evidence."""
-    from open_energy_planner.contracts.bonus import CounterBook, CounterSeed
-    from open_energy_planner.storage.adapters.lifecycle.migration import migrate_archive
-
-    runtime, store, _docs, engine, _plans = settlement
-    selected = contract(bonus=True)
-    original = store.frames()
-    seed = CounterSeed(
-        "bonus", selected.bonuses[0].period_start(START), 1, 10, "sensor.export", END
-    )
-    confirmed = CounterBook(END, (seed,))
-    report = DailySavings(runtime).calculate(
-        "2026-10-22", "UTC", selected, confirmed, END + timedelta(days=1), START, None
-    )
-    store.put_day(report, runtime.documents, "2026-10-23")
-    start, end = day_window("2026-10-22", "UTC")
-    result = DailySavings(runtime).overview(start, end)
-    assert runtime.issue is None
-    assert result["cash"]["coverage_seconds"] == 1800
-    assert store.frames() == original
-    assert confirmed.seeds == (seed,)
-    # An automatic historical seed lives separately from the manual planning confirmation.
-    runtime.bonus.archive.save(confirmed)
-    from open_energy_planner.storage.counters import CounterStore
-
-    current = CounterStore(SqlDocuments(engine, "bonus-counters"))
-    current.save(CounterBook(END, (replace(seed, used_kwh=9),)))
-    target = archive_engine(tmp_path / "bonus-history-target")
-    try:
-        migrate_archive(engine, target, overwrite_target=True)
-        moved = SavingsRuntime(
-            SettlementStore(target),
-            SqlDocuments(target, "savings"),
-            SqlPlanRepository(tmp_path / "bonus-history-target", engine=target),
-        )
-        assert moved.bonus.archive.current == confirmed
-        assert CounterStore(SqlDocuments(target, "bonus-counters")).current.seeds[0].used_kwh == 9
-        assert SettlementStore(target).frames() == original
-        assert DailySavings(moved).overview(start, end) == result
     finally:
         target.dispose()

@@ -115,7 +115,7 @@ def test_final_daily_totals_survive_expiring_temporary_quarters(settlement):
     """A sealed partial day's .60 measured cost remains exact after both raw frames have expired."""
     runtime, store, docs, _engine, plans = settlement
     report = DailySavings(runtime).calculate(
-        "2026-10-22", "UTC", contract(), None, END + timedelta(days=4), START, None
+        "2026-10-22", "UTC", contract(), END + timedelta(days=4), START
     )
     report["finalized_at"] = (END + timedelta(days=4)).isoformat()
     store.put_day(report, docs, "2026-10-23")
@@ -186,6 +186,7 @@ def test_old_archive_startup_adds_context_tables_and_incoming_indexes_without_lo
         ARCHIVE_INCOMING_INDEXES,
         SAVINGS_CASH_DAYS,
         SAVINGS_DAYS,
+        SAVINGS_UNCAPPED_DAYS,
     )
     from open_energy_planner.storage.adapters.lifecycle.sqlalchemy import SqlPlanRepository
 
@@ -195,6 +196,7 @@ def test_old_archive_startup_adds_context_tables_and_incoming_indexes_without_lo
         ACTIVATION_CONTEXTS.drop(connection)
         PLAN_CONTEXTS.drop(connection)
         SAVINGS_CASH_DAYS.drop(connection)
+        SAVINGS_UNCAPPED_DAYS.drop(connection)
         SAVINGS_DAYS.drop(connection)
         for index in ARCHIVE_INCOMING_INDEXES:
             column = next(iter(index.columns))
@@ -205,7 +207,10 @@ def test_old_archive_startup_adds_context_tables_and_incoming_indexes_without_lo
             index.drop(connection)
     reopened = SqlPlanRepository(".", engine=engine)
     assert reopened.get_plan("original-plan") == original
-    assert SAVINGS_CASH_DAYS.name in inspect(engine).get_table_names()
+    assert {
+        SAVINGS_CASH_DAYS.name,
+        SAVINGS_UNCAPPED_DAYS.name,
+    } <= set(inspect(engine).get_table_names())
     for index in ARCHIVE_INCOMING_INDEXES:
         assert index.name in {
             item["name"] for item in inspect(engine).get_indexes(index.table.name)
@@ -222,7 +227,7 @@ def test_cached_final_day_end_cannot_authorize_expiring_later_unfinalized_frames
 
     runtime, store, docs, engine, plans = settlement
     report = DailySavings(runtime).calculate(
-        "2026-10-22", "UTC", contract(), None, END + timedelta(days=4), START, None
+        "2026-10-22", "UTC", contract(), END + timedelta(days=4), START
     )
     report["finalized_at"] = (END + timedelta(days=4)).isoformat()
     store.put_day(report, docs, "2026-10-23")

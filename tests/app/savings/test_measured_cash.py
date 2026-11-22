@@ -1,11 +1,76 @@
 """Independent AC cash arithmetic needs neither forecast dispatch nor historical battery stock."""
 
 from dataclasses import replace
+from datetime import timedelta
+from decimal import Decimal
 
 import pytest
 
-from open_energy_planner.savings.accounting import cash_account, measured_cash_flows
-from tests.app.savings.support.scenarios import bindings, contract, frame, prices
+from open_energy_planner.contracts.bonus import CounterSeed
+from open_energy_planner.contracts.calculation.condition import (
+    ComparisonCondition,
+    ComparisonOperator,
+)
+from open_energy_planner.contracts.calculation.formula import Formula
+from open_energy_planner.contracts.export_meter import export_identity, seed_reading
+from open_energy_planner.savings.accounting import bill, bonus_payment, measured_cash_flows
+from tests.app.savings.support.scenarios import START, bindings, contract, frame, prices
+
+
+@pytest.mark.parametrize(("market", "uncapped", "capped"), [(0.2, 0.4, 0.1), (-0.2, 0, 0)])
+def test_savings_ignores_only_the_volume_cap_at_real_bonus_edges(market, uncapped, capped):
+    """Five of fifteen minutes qualify at twice the positive market price, with a quarter-kWh cap."""
+    schedule = contract(bonus=True)
+    rule = replace(
+        schedule.bonuses[0],
+        cap_kwh=0.25,
+        window="clock",
+        start_time="10:00",
+        end_time="10:05",
+        rate_formula=Formula("2 * market"),
+        price_condition=ComparisonCondition(
+            Formula("market"), ComparisonOperator.GREATER_THAN, Decimal(0)
+        ),
+    )
+    schedule = replace(schedule, bonuses=(rule,))
+    published = [{**prices()[0], "price": market}]
+    report = bill(schedule, frame(), 0, 3, None, (), published, None, uncapped=True)
+    assert report["bonus"] == pytest.approx(uncapped)
+    assert len(report["tariffs"]) == 2
+    usage = {rule.rule_id + "|" + rule.period_start(START).isoformat(): 0.0}
+    original = bill(schedule, frame(), 0, 3, usage, (), published, None)
+    assert original["bonus"] == pytest.approx(capped)
+
+
+def test_capped_billing_uses_all_confirmed_export_meter_members():
+    """The recorded usage leaves .70 kWh under the 2-kWh cap, paying .07 on the next kWh."""
+    schedule = contract(bonus=True)
+    sources = ("sensor.export_a", "sensor.export_b")
+    seed = CounterSeed(
+        "bonus",
+        schedule.bonuses[0].period_start(START),
+        1,
+        300,
+        export_identity(sources),
+        START,
+        ((sources[0], 100), (sources[1], 200)),
+    )
+    counters = {}
+    paid = bonus_payment(
+        schedule,
+        START,
+        START + timedelta(minutes=15),
+        0.1,
+        1,
+        counters,
+        (seed,),
+        {sources[0]: 100.2, sources[1]: 200.1, "sensor.import": 99999},
+        None,
+    )
+    assert paid == pytest.approx(0.07)
+    assert list(counters.values()) == pytest.approx([2.3])
+    with pytest.raises(ValueError, match="reset"):
+        seed_reading(seed, {sources[0]: 99, sources[1]: 202})
 
 
 def test_discharge_reconstructs_without_battery_from_measured_flows_without_soc():
@@ -13,11 +78,9 @@ def test_discharge_reconstructs_without_battery_from_measured_flows_without_soc(
     measured = replace(frame(discharged_kwh=2), battery_start={}, battery_end={})
     flows = measured_cash_flows(measured, bindings())
     assert flows == {"actual": (1, 0), "without_battery": (3, 0)}
-    actual, _ = cash_account(
-        contract(), measured, flows["actual"], None, (), prices(), None, actual=True
-    )
-    without, _ = cash_account(
-        contract(), measured, flows["without_battery"], None, (), prices(), None
+    actual = bill(contract(), measured, *flows["actual"], None, (), prices(), None, uncapped=True)
+    without = bill(
+        contract(), measured, *flows["without_battery"], None, (), prices(), None, uncapped=True
     )
     assert actual["grid_cash"] == pytest.approx(0.30)
     assert without["grid_cash"] - actual["grid_cash"] == pytest.approx(0.60)
@@ -31,11 +94,9 @@ def test_charging_counts_when_bought_and_can_make_a_negative_daily_saving():
     selected["terms"].append({"entity_id": "sensor.charge", "sign": -1})
     flows = measured_cash_flows(measured, selected)
     assert flows["without_battery"] == (1, 0)
-    actual, _ = cash_account(
-        contract(), measured, flows["actual"], None, (), prices(), None, actual=True
-    )
-    without, _ = cash_account(
-        contract(), measured, flows["without_battery"], None, (), prices(), None
+    actual = bill(contract(), measured, *flows["actual"], None, (), prices(), None, uncapped=True)
+    without = bill(
+        contract(), measured, *flows["without_battery"], None, (), prices(), None, uncapped=True
     )
     assert without["grid_cash"] - actual["grid_cash"] == pytest.approx(-0.60)
 
@@ -67,24 +128,23 @@ def test_missing_meter_is_not_substituted_by_zero():
         measured_cash_flows(measured, bindings())
 
 
-def test_zero_bonus_payment_is_exact_while_unknown_allowance_stays_unknown():
-    """An import-only .30 bill cannot depend on the unknown remaining export allowance."""
-    result, counters = cash_account(contract(bonus=True), frame(), (1, 0), None, (), prices(), None)
-    assert result["grid_cash"] == pytest.approx(0.30)
-    assert result["bonus"] == 0
-    assert counters is None
-
-
 @pytest.mark.parametrize("price, expected", [("-0.30", -0.60), ("0", 0)])
 def test_signed_and_zero_prices_keep_independent_cash_oracles(price, expected):
     """Two discharged kWh avoid buying at the signed rate. Negative buying prices reverse the saving."""
     measured = frame(discharged_kwh=2)
     flows = measured_cash_flows(measured, bindings())
-    actual, _ = cash_account(
-        contract(buy=price), measured, flows["actual"], None, (), prices(), None, actual=True
+    actual = bill(
+        contract(buy=price), measured, *flows["actual"], None, (), prices(), None, uncapped=True
     )
-    without, _ = cash_account(
-        contract(buy=price), measured, flows["without_battery"], None, (), prices(), None
+    without = bill(
+        contract(buy=price),
+        measured,
+        *flows["without_battery"],
+        None,
+        (),
+        prices(),
+        None,
+        uncapped=True,
     )
     assert without["grid_cash"] - actual["grid_cash"] == pytest.approx(expected)
 

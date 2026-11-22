@@ -140,7 +140,6 @@ def test_interleaved_requests_keep_each_plans_original_bindings(tmp_path):
             SimpleNamespace(batteries=()),
             SimpleNamespace(sources=()),
             SimpleNamespace(terms=()),
-            (),
             None,
         )
         assert runtime.request(*arguments)["bindings"] == {"source": "original-a"}

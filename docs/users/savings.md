@@ -72,10 +72,13 @@ subtracted from import cost. The saving is the without-battery net cost minus th
 with-battery net cost. Displayed amounts have two decimal places, so small rounding
 differences are possible.
 
-Component details appear only when their retained daily evidence covers exactly
-the same accepted measured time as the net comparison. If that cannot be proven,
-the component detail stays **Unavailable**. The matching net costs can still be
-known. Opening the breakdown does not recalculate or rewrite historical results.
+The current estimate uses the applicable bonus rate, price conditions and
+eligible hours for both columns. It ignores the maximum export volume eligible
+for bonuses. The estimated bonus can exceed the supplier's payment when the
+contract's cap is reached.
+
+The breakdown uses the same accepted quarters as the net costs. Opening it
+reads the stored estimate for the selected period.
 
 Open **How is this calculated?** for the basis and limitations. Values above the
 bars and dates below them follow the selected daily or monthly bins. Labels are
@@ -106,11 +109,8 @@ There is no continuous simulated battery stock that a gap could invalidate.
 Recorded AC meters, published prices and applicable contract rules are still
 necessary. A DC solar meter behind a hybrid inverter cannot establish the
 measured AC alternative. Such intervals remain unavailable for the comparison
-instead of using a simulated conversion. Capped export bonuses retain independent actual and without-battery
-usage. A later actual meter reading cannot establish an unknown reconstructed
-allowance. Where export or the bonus rate is zero, the exact zero payment remains
-usable without inventing the missing usage. A positive payment may still need
-earlier export evidence or a genuine contractual reset.
+instead of using a simulated conversion. Each quarter with valid measurements
+and tariffs can be priced independently of prior bonus usage.
 
 Savings states whether the selected period is complete or partial. It also
 identifies reconstructed measurements. Measured zero savings remain zero. No
@@ -125,11 +125,10 @@ becomes provisional. Three complete local days remain available for missing
 measurements, published prices and corrections. Monday closes at Friday 00:00.
 Summer and winter clock changes do not shorten that recovery window.
 
-Finalized daily results are immutable. Older finalized results retain their
-original calculation policy and are not relabelled or mixed into the measured
-cash comparison. Their archived evidence remains retained. Provisional days with
-the required measurements can be evaluated using the new policy. Expired detail
-cannot be reconstructed from an old total or a current battery reading.
+Savings displays estimates calculated on the current basis. Finalized results
+from older calculations remain archived outside that comparison. Provisional
+days with the required quarter measurements are evaluated on the current
+basis. Expired detail cannot be reconstructed from an old total.
 
 Changing the installation timezone after daily history exists pauses processing
 until the original Home Assistant timezone is restored. Missing Contract or

@@ -311,7 +311,9 @@ def test_live_bootstrap_builds_complete_plan_from_settings_forecasts_prices_and_
             SqlDocuments(archive.engine, "savings").write(
                 "physical-reference.json", stale_reference
             )
-        start = now.replace(minute=now.minute // 15 * 15, second=0, microsecond=0)
+        start = now.replace(minute=now.minute // 15 * 15, second=0, microsecond=0) - timedelta(
+            minutes=15
+        )
         price = PriceSeries(
             "fixture",
             "NL",
@@ -327,7 +329,8 @@ def test_live_bootstrap_builds_complete_plan_from_settings_forecasts_prices_and_
                     PriceKind.PUBLISHED,
                     15,
                 )
-                for index in range(192)
+                # Include one elapsed quarter and leave room for a boundary during setup.
+                for index in range(194)
             ),
         )
         store = make_store(tmp_path, PriceStore)

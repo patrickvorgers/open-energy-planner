@@ -137,14 +137,14 @@ Original plans remain frozen and separate cost revaluation follows the existing
 contract-revision policy.
 
 
-## Missing continuous reference evidence
+## Planning reference evidence
 
-The battery self-consumption forecast continues its own historical stock and bonus
-counters. It cannot reset to actual SoC merely to fill a chart. If recent settlement
-is missing, the plan response retains the precise reason and the UI shows it in
-place of an empty zero-looking balance. The no-battery reference remains independent.
-Original plan versions retain their original reference availability and expectations.
-Recovery produces a complete reference in a new plan, without rewriting old advice.
+New battery self-consumption forecasts use the plan's measured starting stock and
+recorded opening bonus budgets. Missing required inputs leave the reference
+unavailable with an explicit reason. A later plan can use newly available evidence.
+Archived plans retain the reference availability and expectations they originally
+recorded. The separate [Savings view](SAVINGS.md) estimates historical bonuses
+without the export volume cap.
 
 A laboratory-specific import defect caused the simulator's seeded `sum` to use the
 absolute counter origin while native Recorder statistics used an independent origin.

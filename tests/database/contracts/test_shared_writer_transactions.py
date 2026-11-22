@@ -17,7 +17,7 @@ from open_energy_planner.savings.daily import DailySavings
 from open_energy_planner.storage.adapters.activities import ActivityStore
 from open_energy_planner.storage.adapters.documents import SqlDocuments
 from open_energy_planner.storage.adapters.lifecycle import transactions
-from open_energy_planner.storage.adapters.lifecycle.schema import PAIRS, SAVINGS_CASH_DAYS
+from open_energy_planner.storage.adapters.lifecycle.schema import PAIRS, SAVINGS_UNCAPPED_DAYS
 from open_energy_planner.storage.writes import complete_write
 from tests.app.savings.support.scenarios import END, START, contract, frame
 from tests.database.support.writer_guard import observe_guard
@@ -57,7 +57,7 @@ def test_domain_writer_and_contract_save_share_one_complete_guard(
     selection.load("NL")
     selector = ForecastSelection(selection, "NL", "primary", "alternative")
     result = DailySavings(runtime).calculate(
-        START.date().isoformat(), "UTC", contract(), None, START + timedelta(days=2), START, None
+        START.date().isoformat(), "UTC", contract(), START + timedelta(days=2), START
     )
     new_frame = frame(start=END + timedelta(minutes=15))
     started, release = Event(), Event()
@@ -158,7 +158,7 @@ def test_domain_writer_and_contract_save_share_one_complete_guard(
         assert (saved_day is not None) is not rollback
         assert documents_savings.exists("daily-progress.json") is not rollback
         with engine.connect() as connection:
-            assert bool(connection.execute(select(SAVINGS_CASH_DAYS)).first()) is not rollback
+            assert bool(connection.execute(select(SAVINGS_UNCAPPED_DAYS)).first()) is not rollback
         if saved_day:
             assert saved_day["cash"]["savings"] == 0
     else:

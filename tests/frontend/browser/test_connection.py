@@ -59,7 +59,9 @@ def test_savings_overview_authentication_empty_coverage_and_mobile_layout(app_pa
     open_primary_navigation(page)
     page.get_by_role("link", name="Savings", exact=True).click()
     expect(page.locator("#savings-total")).to_have_text("Not available")
-    expect(page.locator("#savings-status")).to_contain_text("Waiting for completed measurements")
+    expect(page.locator("#savings-status")).to_contain_text(
+        "No savings estimate is available for this period."
+    )
     expect(page.locator("#savings-actual")).to_have_text("Unavailable")
     expect(page.locator("#savings-without")).to_have_text("Unavailable")
     page.evaluate("document.fonts.ready")

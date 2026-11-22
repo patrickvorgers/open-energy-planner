@@ -530,7 +530,7 @@ before the worker exits and the database engine is disposed.
 | --- | --- | --- |
 | `contracts` | `ContractStore`: effective-dated purchase/sale formula and bonus rule books. | Immutable `<version>.json`. `current.json` selects a book. |
 | `bonus-counters` | `CounterStore`: confirmed historical counter seeds, period context and optional origin evidence. | Immutable `<version>.json` books and `<seed-digest>.origin.json` provenance. `current.json` selects a book. Scenario continuation is in settlement state. |
-| `savings-bonus-counters` | `CounterStore` via `HistoricalBonuses`: automatically derived historical bonus seeds and optional origin evidence. Confirmed planning books remain in `bonus-counters`. | Immutable `<version>.json` books and `<seed-digest>.origin.json` provenance. `current.json` selects a book of at most 64 seeds. |
+| `savings-bonus-counters` | Historical documents from the retired measured Savings bonus worker. Current planning books use `bonus-counters`. | Archived `<version>.json` books, optional `<seed-digest>.origin.json` provenance and `current.json`. |
 | `installation` | `InstallationStore`: Energy-bound virtual devices, limits, relations and settings. `BatteryCalibration`: measured periodic full-charge progress. | Immutable `<version>.json`. `current.json` selects settings. Mutable bounded `battery-calibration.json` stores schema 1 and per-device progress. |
 | `demand` | Consumption settings, issued forecasts and current daily fits. | `configuration-<version>.json`, `forecast-<version>.json`, `active-training-<learner-hash>.json`. `current.json` selects configuration. |
 | `weather` | Shared live forecast runs, observed weather and historical training temperatures. | Live manifests, provider receipts, hourly value blocks and mutable `temperature-day-<query-hash>-<YYYY-MM-DD>.json` records. |
@@ -1256,32 +1256,31 @@ Null costs mean unavailable, while a measured/evaluated zero is stored as zero.
 | `self_consumption_comparison_seconds` | Double | Pairwise accepted self-consumption/without-battery duration, or zero. |
 
 The scenario columns above preserve the original historical archive contract.
-New `measured-battery-cash-v1` reports populate actual and without-battery cash
+The two measured battery cash policies populate actual and without-battery cash
 components and accepted seconds. They do not populate reference, wear, inventory,
 economic-cost or old comparison totals. Existing finalized reports remain unchanged.
 
 New report JSON contains `actual` and `without_battery` scenarios with complete,
 partial or unavailable status, accepted/estimated seconds and coalesced missing UTC
 ranges. `cash` contains only matching-interval actual cost, without-battery cost,
-saving and coverage. Monetary values use the report currency. `energy` retains
+saving and coverage. `matched_components` retains each side's purchase, sale and
+bonus totals on those same intervals, or null when no intervals match. Monetary
+values use the report currency. `energy` retains
 measured gross import/export, household and AC solar kWh with independent coverage.
-Contract/counter versions, published price versions, accounting policy, evaluation
+Contract version, published price versions, accounting policy, evaluation
 time, recovery deadline and optional daily-plan ID remain in the permanent report.
 
-`checkpoint` contains the exclusive UTC `end` and `cash_counters`, with independent
-actual/without-battery rule-period usage in kWh. Null means unknown continuation.
-It contains no simulated battery stock. The public daily response omits checkpoints.
-`counter_seed_evidence` retains opening records keyed by content hash. Older
-physical/inventory checkpoint fields remain readable historical JSON only.
+`checkpoint` contains the exclusive UTC `end`. The current uncapped policy
+requires no counter continuation. Older capped reports may contain
+`checkpoint.cash_counters`, a counter version and `counter_seed_evidence`.
+The public daily response omits checkpoints.
 
 ### `oep_savings_cash_days`
 
-Owned by `SettlementStore`. One matched cash index per new-policy daily report.
-The parent report, this index and daily progress commit in the same transaction.
-Finalized parent immutability protects both. Legacy reports are never relabelled or
-indexed as this policy. Shared schema creation adds the empty table to existing
-archives without rewriting old results. All four backend transfers include it.
-Deleting a mutable parent requires deleting its child first. No cascade is declared.
+Retired index of capped daily reports. The shared archive schema still registers
+it for data retention and cross-backend transfers. Savings reads the current
+uncapped projection. The existing foreign key requires deleting its child
+before deleting the parent. No cascade is declared.
 
 | Field | Type / key | Meaning and use |
 | --- | --- | --- |
@@ -1296,23 +1295,39 @@ Deleting a mutable parent requires deleting its child first. No cascade is decla
 | `coverage_seconds` | Double | Matching elapsed seconds. Zero means no accepted comparison. |
 | `estimated_seconds` | Double | Matching seconds using reconstructed measurements or split tariffs. |
 
-Null money means unavailable. A known zero remains zero. Range reads aggregate in
-SQL and share a repeatable snapshot with bounded parent details. Charts use daily
-bins up to 366 elapsed days and monthly bins for longer ranges. The start primary
-key supports inclusive-start/exclusive-end period reads without loading raw quarters.
+Null money means unavailable. A known zero remains zero. These rows retain
+their original measured coverage.
 
-The same repeatable snapshot provides the read-only `cash.breakdown` API object
-and each daily or monthly `cash.chart[].breakdown`. The per-bin objects use the
-same exact-coverage rule, grouped by the cash index's HA-local `day` column in
-one bounded aggregate query. No additional stored columns or indexes are needed.
-A start-key join to `oep_savings_days` sums existing actual/without-battery
-purchase, sale and bonus columns over days with positive matching cash coverage.
-Each side is available only when every included day's scenario coverage equals
-its cash coverage and all three components are present. Otherwise that side is
-null while matching net costs remain unchanged. Zero-coverage days and legacy
-reports without a cash index never contribute. The aggregate covers the entire
-selection, independently of the bounded daily-detail response. No table, column,
-index, finalized payload or accounting policy changes.
+### `oep_savings_uncapped_days`
+
+Owned by `SettlementStore`. The current uncapped policy writes one projection
+per day in the same transaction as the report and calendar progress. A day
+with no matched coverage retains null monetary amounts for the chart. Its
+parent key cascades on deletion. Startup creates this table additively and
+the worker can replay provisional days from retained quarters. All four
+backend transfers include it.
+
+| Field | Type / key | Meaning and use |
+| --- | --- | --- |
+| `start` | String(40), PK, FK to `oep_savings_days.start` | Inclusive UTC day start. |
+| `end` | String(40) | Exclusive UTC day end. |
+| `day` | String(40) | HA-local ISO date for chart grouping. |
+| `currency` | String(32) | Currency shared by both estimates. |
+| `actual_cost` | Double, nullable | With-battery purchase less export income and uncapped bonus. |
+| `without_battery_cost` | Double, nullable | Reconstructed cost on the same quarters. |
+| `savings` | Double, nullable | Without-battery cost less with-battery cost. |
+| `coverage_seconds` | Double | Elapsed seconds accepted on both sides. |
+| `estimated_seconds` | Double | Matched seconds with reconstructed measurements or intra-quarter tariff splits. |
+| `actual_purchase` | Double, nullable | With-battery import cost on the matching quarters. |
+| `actual_sale` | Double, nullable | Signed with-battery export income. |
+| `actual_bonus` | Double, nullable | With-battery bonus before volume caps. |
+| `without_battery_purchase` | Double, nullable | Reconstructed import cost. |
+| `without_battery_sale` | Double, nullable | Signed reconstructed export income. |
+| `without_battery_bonus` | Double, nullable | Reconstructed bonus before volume caps. |
+
+Amounts and components share the same matched seconds and currency. The range
+and chart aggregates both use this projection. Bounded day details join it
+to the retained reports. The API includes the calculation policy.
 
 
 ## Indexes and query ownership
@@ -1411,7 +1426,7 @@ New plans retain `reference_forecast.reference_start.status` as
 `measured_common_start`, `stored` as null, empty `counters` and `estimated` false.
 Null stock means use the measured battery `initial_kwh` in the same plan, not
 unknown or zero energy. Both strategies also use the plan's opening bonus budgets.
-The forecast does not read or reset the continuous historical settlement checkpoint.
+The forecast uses its own frozen inputs independently of the Savings history.
 Legacy archived starts and their outcomes remain unchanged and replayable.
 
 New `reference_forecast.reference` interval JSON can include deterministic
@@ -1728,10 +1743,9 @@ Forecast-quality reads snapshot the bounded daily-pointer set in one SQL stateme
 The `savings` document `physical-reference.json` is retained historical data only.
 Earlier versions stored independent battery stock and capacities here. New Savings
 processing neither reads nor advances a simulated battery trajectory. Legacy
-checkpoint documents transfer unchanged with the document archive. Current daily
-continuation uses only `oep_savings_days.payload.checkpoint.cash_counters`.
-Unknown usage remains unknown until a valid baseline or contractual reset exists.
-Exact zero bonus payments can still be calculated without inventing a budget.
+checkpoint documents transfer unchanged with the document archive. Capped cash
+reports may retain `oep_savings_days.payload.checkpoint.cash_counters` as
+historical evidence. The current daily estimate has no bonus counter dependency.
 
 ### Historical bonus counter documents
 

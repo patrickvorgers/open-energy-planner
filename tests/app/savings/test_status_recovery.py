@@ -42,7 +42,7 @@ def settlement_service(repository, location):
             ACTIVATIONS.insert().values(activated_at=stamp(START), plan_id=document["plan_id"])
         )
     app = web.Application()
-    capture, runtime, _bonus = savings_api.register(
+    capture, runtime = savings_api.register(
         app,
         repository,
         SimpleNamespace(current=contract()),
@@ -112,9 +112,7 @@ def test_startup_location_recovery_after_capture_needs_no_completed_day(tmp_path
             assert runtime.issue == expected
             assert runtime.attention is True
             assert (
-                DailySavings(runtime).process(
-                    contract(), None, FixedClock.now(START.tzinfo), location[0]
-                )
+                DailySavings(runtime).process(contract(), FixedClock.now(START.tzinfo), location[0])
                 is None
             )
             assert runtime.issue is None
@@ -141,16 +139,13 @@ def test_capture_preserves_an_unresolved_financial_status(tmp_path, attention):
             SimpleNamespace(
                 terms=(EnergyTerm("sensor.import", 1), EnergyTerm("sensor.export", -1))
             ),
-            (),
             location[0],
         )
         runtime.issue, runtime.attention = (
             "Existing financial evidence needs investigation",
             attention,
         )
-        runtime.receive(
-            pending, captured_body(pending), END + timedelta(minutes=1), (), location[0]
-        )
+        runtime.receive(pending, captured_body(pending), END + timedelta(minutes=1), location[0])
         assert runtime.issue == "Existing financial evidence needs investigation"
         assert runtime.attention is attention
         assert len(runtime.store.frames()) == 1

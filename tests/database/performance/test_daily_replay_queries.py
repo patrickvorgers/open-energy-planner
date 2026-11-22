@@ -68,7 +68,7 @@ def test_full_day_replay_query_budget_preserves_independent_amounts(
         for _ in range(2):
             statements.clear()
             report = DailySavings(runtime).calculate(
-                day, zone, contract(buy="market + 0.2"), None, end + timedelta(hours=1), start, None
+                day, zone, contract(buy="market + 0.2"), end + timedelta(hours=1), start
             )
             reports.append(report)
             assert report["scenarios"]["actual"]["totals"]["purchase"] == pytest.approx(
@@ -104,7 +104,7 @@ def test_full_day_replay_query_budget_preserves_independent_amounts(
             ),
         )
     corrected = DailySavings(runtime).calculate(
-        day, zone, contract(buy="market + 0.2"), None, end + timedelta(hours=2), start, None
+        day, zone, contract(buy="market + 0.2"), end + timedelta(hours=2), start
     )
     assert corrected["scenarios"]["actual"]["totals"]["purchase"] == pytest.approx(
         quarters * 0.3 + 0.3

@@ -10,8 +10,6 @@ from zoneinfo import ZoneInfo
 from open_energy_planner.core.calendar import day_window
 from open_energy_planner.installation.location import SiteLocation
 
-from ..contracts.bonus import CounterSeed
-from .bonus import HistoricalBonuses
 from .model import (
     MAX_BATCH_INTERVALS,
     MISSING_MEASUREMENTS,
@@ -30,26 +28,7 @@ PENDING_SETTLEMENT_MESSAGES = {
     "Historical market identity is unresolved": "The historical electricity market or currency cannot be confirmed for some measurements. Those intervals are excluded from cash savings.",
     "Historical market identity changed": "Some measurements belong to a different historical electricity market or currency. Those intervals are excluded from cash savings.",
     "Without-battery comparison requires measured AC solar energy": "The solar source measures DC energy. A without-battery cash comparison requires measured AC solar energy at the household boundary.",
-    "Without-battery bonus usage is unknown after missing measurements": "The export allowance without a battery cannot be reconstructed from earlier missing evidence. No actual counter was substituted.",
-    "A reset inside the bonus anchor interval prevents exact reconstruction": "An export meter reset prevents reconstruction of the bonus starting total.",
-    "Confirmed bonus meter disagrees with its historical boundary": "The confirmed export reading disagrees with the reading in history.",
-    "Confirmed bonus meter is outside its historical interval": "The confirmed export reading falls outside the historical interval's readings.",
-    "Historical bonus anchor does not match the export meters or period": "The bonus starting reading belongs to different export meters or a different period.",
-    "Historical bonus baseline awaits captured export evidence": "The stored export measurements cannot yet connect the historical interval to the bonus checkpoint.",
-    "Historical bonus interval predates the confirmed statistics reference": "The requested interval starts before the confirmed bonus statistics reference.",
-    "Historical bonus history unavailable: history_missing": "The requested historical bonus statistics endpoints are missing from Home Assistant.",
-    "Historical bonus baseline awaits completed hourly statistics": "The hourly export statistics needed for the bonus starting total are not complete yet.",
-    "Historical bonus baseline is being read from Home Assistant": "The bonus starting total is still being read from Home Assistant.",
-    "Historical bonus counter archive is unreadable": "The stored bonus starting totals cannot currently be read.",
-    "Historical bonus export evidence has a gap or changed meters": "Historical export readings have a gap or use different export meters.",
-    "Historical bonus history is incomplete or invalid": "The received bonus export history is incomplete or invalid.",
-    "Historical bonus history unavailable: history_unavailable": "Historical export measurements are unavailable from Home Assistant.",
-    "Historical bonus history unavailable: recorder_unavailable": "Home Assistant Recorder is unavailable for the historical export read.",
-    "Historical bonus history unavailable: unsupported_statistics": "Home Assistant cannot supply supported statistics for these export meters.",
-    "Historical bonus period does not start on a whole UTC hour. Confirm a manual baseline": "The bonus period starts between hourly readings and needs a confirmed manual starting total.",
-    "Historical exports exceed the confirmed used bonus volume": "Historical exports exceed the confirmed export total used for the bonus.",
     "Published price coverage is missing": "Published electricity prices are missing for this measurement interval.",
-    "Validated physical bonus endpoint is unavailable": "The confirmed export measurement needed to continue the bonus calculation is unavailable.",
 }
 SETTLEMENT_VALIDATION_MESSAGES = ("Contract coverage is missing",)
 
@@ -101,14 +80,13 @@ class SavingsRuntime:
     def __init__(self, store, documents, plans):
         """Borrow app-owned stores. A dedicated settlement lock serializes mutations."""
         self.store, self.documents, self.plans = store, documents, plans
-        self.bonus = HistoricalBonuses(store)
         self.issue = None
         self.attention = False
         self.events = None
         self._request_bindings = None, None, None
         self._recovery_search = None, None
 
-    def request(self, now, settings, solar, demand, seeds, location):
+    def request(self, now, settings, solar, demand, location):
         """Request at most one day after first publication. Wait for completed Recorder statistics."""
         if settings is None or solar is None or demand is None:
             return None
@@ -239,7 +217,6 @@ class SavingsRuntime:
         pending: dict,
         body: object,
         now: datetime,
-        seeds: tuple[CounterSeed, ...],
         location: SiteLocation | None,
     ) -> None:
         """Validate scanned coverage and measured intervals before atomically archiving them.
@@ -259,7 +236,6 @@ class SavingsRuntime:
             body: Untrusted JSON response with request identity, frames and
                 disjoint import/export meter identities.
             now: Aware current time. Future measurement intervals are rejected.
-            seeds: Confirmed opening bonus positions retained with the evidence.
             location: Optional installation coordinates/timezone for later billing.
 
         Returns:
@@ -358,7 +334,6 @@ class SavingsRuntime:
                         if pending.get("market_identity")
                         else {}
                     ),
-                    "seeds": [asdict(seed_item) for seed_item in seeds],
                     "location": asdict(location) if location else None,
                 },
                 default=lambda value_item: value_item.isoformat(),

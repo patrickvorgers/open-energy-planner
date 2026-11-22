@@ -210,7 +210,7 @@ def seed(directory, *, corrected=False, now=None):
             context,
         )
         DailySavings(SavingsRuntime(store, SqlDocuments(plans.engine, "savings"), plans)).process(
-            schedule, None, now, SiteLocation(52, 5, "UTC")
+            schedule, now, SiteLocation(52, 5, "UTC")
         )
         if corrected:
             from open_energy_planner.savings.repricing import PlanValuations

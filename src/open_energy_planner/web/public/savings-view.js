@@ -37,7 +37,8 @@ export function createSavingsView(host, api) {
         find("savings-chart").tabIndex = -1;
         find("savings-total").textContent = message;
         find("savings-total").classList.remove("savings-loss");
-        find("savings-outcome").textContent = "Your battery saved";
+        find("savings-outcome").textContent = "Estimated battery saving";
+        find("savings-bonus-basis").hidden = true;
         for (const id of ["savings-actual", "savings-without"]) find(id).textContent = "Unavailable";
         for (const id of ["savings-actual-bar", "savings-without-bar"]) find(id).style.width = "0%";
         find("savings-selected").textContent = "";
@@ -95,7 +96,8 @@ export function createSavingsView(host, api) {
             const amount = value => `${money(value)} ${currency}`.trim();
             find("savings-total").textContent = known ? amount(Math.abs(cash.savings)) : "Not available";
             find("savings-total").classList.toggle("savings-loss", known && cash.savings < 0);
-            find("savings-outcome").textContent = known && cash.savings < 0 ? "Extra electricity cost" : "Your battery saved";
+            if (known && cash.savings < 0) find("savings-outcome").textContent = "Estimated extra electricity cost";
+            find("savings-bonus-basis").hidden = !known;
             if (known) {
                 find("savings-actual").textContent = amount(cash.actual_cost);
                 find("savings-without").textContent = amount(cash.without_battery_cost);
@@ -104,10 +106,8 @@ export function createSavingsView(host, api) {
                 find("savings-without-bar").style.width = `${maximum ? Math.abs(cash.without_battery_cost) / maximum * 100 : 0}%`;
             }
             renderBreakdown(cash, currency);
-            const legacy = data.days?.filter(day => !day.cash).length || 0;
-            find("savings-legacy").hidden = !legacy;
             const complete = known && cash.coverage_seconds === cash.expected_seconds;
-            find("savings-status").textContent = complete ? "All measured time in this period is included." : known ? "Partial period: Both costs include only the same available measured time. Missing intervals are excluded." : legacy ? "These retained days use the previous calculation. New measured savings become available for newly evaluated days." : "Waiting for completed measurements and published electricity prices for this period.";
+            find("savings-status").textContent = complete ? "All measured time in this period is included." : known ? "Partial period: Both costs include only the same available measured time. Missing intervals are excluded." : "No savings estimate is available for this period.";
             if (known && cash.estimated_seconds > 0) find("savings-status").textContent += " Includes reconstructed measurements.";
             if (data.issue) find("savings-status").textContent += " " + data.issue;
             draw(cash?.chart || [], currency, start, end, cash?.aggregation);
@@ -147,6 +147,7 @@ export function createSavingsView(host, api) {
             total.textContent = bin.savings == null ? "No comparable measurements" : `Saving: ${money(bin.savings)} ${currency}`;
             if (bin.coverage_seconds > 0 && (!bin.breakdown?.actual || !bin.breakdown?.without_battery)) total.textContent += "\nSome component details are unavailable for the same comparable time.";
             if (bin.estimated_seconds) total.textContent += "\nIncludes reconstructed measurements.";
+            if (bin.savings != null) total.textContent += "\n" + find("savings-bonus-basis").textContent;
             tooltip.replaceChildren(heading, table, total);
             canvas.setAttribute("aria-describedby", tooltip.id);
             document.addEventListener("keydown", dismissTooltip);

@@ -531,7 +531,6 @@ def test_app_installation_saves_optional_batteries_without_helpers(batteries):
     [
         ("settlement_request", "settlement_bridge"),
         ("forecast_quality_request", "forecast_history_bridge"),
-        ("settlement_bonus_request", "settlement_bonus_bridge"),
     ],
 )
 @pytest.mark.parametrize("decision", ["pause", "revocation"])

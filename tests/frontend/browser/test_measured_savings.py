@@ -89,6 +89,16 @@ def test_bar_tooltip_explains_its_own_backend_costs_and_clears_after_refresh(app
     )
     for key in ("actual_cost", "without_battery_cost", "savings"):
         data["cash"][key] = sum(chart_bin[key] or 0 for chart_bin in data["cash"]["chart"])
+    data["cash"]["breakdown"] = {
+        kind: {
+            component: sum(
+                (chart_bin["breakdown"][kind] or {}).get(component, 0)
+                for chart_bin in data["cash"]["chart"]
+            )
+            for component in ("purchase", "sale", "bonus")
+        }
+        for kind in ("actual", "without_battery")
+    }
     failed = False
 
     def respond(route):
@@ -101,6 +111,8 @@ def test_bar_tooltip_explains_its_own_backend_costs_and_clears_after_refresh(app
         page.get_by_label("Installation API token", exact=True).fill(TOKEN)
         page.get_by_role("button", name="Connect", exact=True).click()
     expect(page.locator("#savings-total")).to_contain_text(f"{data['cash']['savings']:.2f}")
+    expect(page.locator("#savings-outcome")).to_have_text("Estimated battery saving")
+    expect(page.locator("#savings-bonus-basis")).to_be_visible()
     page.locator("#savings-period").get_by_role("button", name="Choose period").click()
     dialog = page.get_by_role("dialog", name="Choose period")
     dialog.get_by_role("button", name="Custom period", exact=True).click()
@@ -110,6 +122,16 @@ def test_bar_tooltip_explains_its_own_backend_costs_and_clears_after_refresh(app
     dialog.get_by_role("button", name="Apply period", exact=True).click()
     canvas = page.locator("#savings-chart")
     expect(dialog).not_to_be_visible()
+    directory = Path("results/ci/savings-daily-breakdown")
+    directory.mkdir(parents=True, exist_ok=True)
+    if aggregation == "day" and "hassio_ingress" in url:
+        page.locator("#savings-breakdown summary").click()
+        page.evaluate("window.scrollTo(0, 0)")
+        page.screenshot(
+            path=str(directory / f"summary-{page.viewport_size['width']}-ingress.png"),
+            full_page=True,
+        )
+        page.locator("#savings-breakdown summary").click()
     page.get_by_role("button", name="Refresh overview", exact=True).focus()
     canvas.scroll_into_view_if_needed()
     coordinates = canvas.evaluate("""canvas => {
@@ -128,6 +150,7 @@ def test_bar_tooltip_explains_its_own_backend_costs_and_clears_after_refresh(app
     expect(table.get_by_role("row", name="Bonus income 0.25 EUR 0.50 EUR")).to_be_visible()
     expect(table.get_by_role("row", name="Net electricity cost 4.00 EUR 12.00 EUR")).to_be_visible()
     expect(tooltip).to_contain_text("Saving: 8.00 EUR")
+    expect(tooltip).to_contain_text("Export bonus volume caps are ignored in these estimates.")
     if page.viewport_size["width"] >= 500:
         bounds = tooltip.bounding_box()
         page.mouse.move(
@@ -148,8 +171,6 @@ def test_bar_tooltip_explains_its_own_backend_costs_and_clears_after_refresh(app
     assert tooltip.evaluate(
         "element => {const bounds=element.getBoundingClientRect();return bounds.left>=0 && bounds.right<=innerWidth && bounds.top>=0 && bounds.bottom<=innerHeight && element.scrollWidth<=element.clientWidth;}"
     )
-    directory = Path("results/ci/savings-daily-breakdown")
-    directory.mkdir(parents=True, exist_ok=True)
     page.screenshot(
         path=str(
             directory
@@ -182,6 +203,7 @@ def test_bar_tooltip_explains_its_own_backend_costs_and_clears_after_refresh(app
         page.keyboard.press("ArrowRight")
     expect(tooltip.get_by_role("row", name="Import cost Unavailable", exact=False)).to_be_visible()
     expect(tooltip).to_contain_text("same comparable time")
+    expect(tooltip).to_contain_text("Export bonus volume caps are ignored")
     expect(tooltip).not_to_contain_text("9.75 EUR")
     if page.viewport_size["width"] >= 500:
         page.keyboard.press("PageDown")
@@ -190,6 +212,7 @@ def test_bar_tooltip_explains_its_own_backend_costs_and_clears_after_refresh(app
     failed = True
     page.get_by_role("button", name="Refresh overview", exact=True).click()
     expect(page.locator("#savings-total")).to_have_text("Not available")
+    expect(page.locator("#savings-bonus-basis")).not_to_be_visible()
     expect(tooltip).not_to_be_visible()
     expect(canvas).to_have_accessible_description("")
 
@@ -269,7 +292,7 @@ def test_negative_savings_and_failed_refresh_never_show_stale_money(app_page):
     page.goto(url + "/overview#savings")
     page.get_by_label("Installation API token", exact=True).fill(TOKEN)
     page.get_by_role("button", name="Connect", exact=True).click()
-    expect(page.locator("#savings-outcome")).to_have_text("Extra electricity cost")
+    expect(page.locator("#savings-outcome")).to_have_text("Estimated extra electricity cost")
     expect(page.locator("#savings-total")).to_contain_text("4.56")
     page.get_by_text("Savings breakdown", exact=True).click()
     expect(page.locator("#savings-breakdown-total")).to_have_text("Saving: -4.56 EUR")
@@ -282,6 +305,14 @@ def test_negative_savings_and_failed_refresh_never_show_stale_money(app_page):
     expect(page.locator("#savings-status")).to_contain_text("could not be loaded")
     expect(page.locator("#savings-chart")).to_have_attribute("tabindex", "-1")
     assert page.locator("#savings-chart").evaluate("canvas => canvas.onkeydown") is None
+
+    failed = False
+    data["cash"] = {"coverage_seconds": 0, "chart": []}
+    page.get_by_role("button", name="Refresh overview", exact=True).click()
+    expect(page.locator("#savings-status")).to_have_text(
+        "No savings estimate is available for this period."
+    )
+    expect(page.locator("#savings-bonus-basis")).not_to_be_visible()
 
 
 @pytest.mark.parametrize("app_site", ["savings"], indirect=True)

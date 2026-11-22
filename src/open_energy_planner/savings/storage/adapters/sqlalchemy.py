@@ -4,15 +4,19 @@ import json
 from contextlib import contextmanager, nullcontext
 from datetime import datetime, timedelta
 
-from sqlalchemy import and_, case, func, select
+from sqlalchemy import func, select
 from sqlalchemy.exc import SQLAlchemyError
 
-from open_energy_planner.savings.model import CASH_POLICY_VERSION, MAX_BATCH_INTERVALS
+from open_energy_planner.savings.model import (
+    CASH_COMPONENTS,
+    CASH_POLICY_VERSION,
+    MAX_BATCH_INTERVALS,
+)
 from open_energy_planner.storage.adapters.lifecycle.evidence import activation_history
 from open_energy_planner.storage.adapters.lifecycle.schema import (
     PUBLISHED_PRICES,
-    SAVINGS_CASH_DAYS,
     SAVINGS_DAYS,
+    SAVINGS_UNCAPPED_DAYS,
     SETTLEMENT_EVALUATIONS,
     SETTLEMENT_FRAMES,
 )
@@ -164,17 +168,24 @@ class SettlementStore:
                 )
             else:
                 connection.execute(SAVINGS_DAYS.insert().values(start=key, **values))
-            connection.execute(SAVINGS_CASH_DAYS.delete().where(SAVINGS_CASH_DAYS.c.start == key))
-            if "cash" in report:
-                cash_values = {
-                    "start": key,
-                    "end": stamp(report["end"]),
-                    "day": report["day"],
-                    "currency": report["currency"],
-                    "policy": report["policy"],
-                    **report["cash"],
-                }
-                connection.execute(SAVINGS_CASH_DAYS.insert().values(**cash_values))
+            connection.execute(
+                SAVINGS_UNCAPPED_DAYS.delete().where(SAVINGS_UNCAPPED_DAYS.c.start == key)
+            )
+            if report["policy"] == CASH_POLICY_VERSION:
+                connection.execute(
+                    SAVINGS_UNCAPPED_DAYS.insert().values(
+                        start=key,
+                        end=values["end"],
+                        day=values["day"],
+                        currency=values["currency"],
+                        **report["cash"],
+                        **{
+                            f"{kind}_{component}": value
+                            for kind, amounts in (report["matched_components"] or {}).items()
+                            for component, value in amounts.items()
+                        },
+                    )
+                )
             documents.write(
                 "daily-progress.json", {"next": next_day, "timezone": report["timezone"]}
             )
@@ -219,37 +230,32 @@ class SettlementStore:
         """Read mutable provisional details, SQL totals and chart bins from one repeatable database snapshot."""
         try:
             with _read_snapshot(self.engine) as connection:
-                count = connection.scalar(
-                    select(func.count())
-                    .select_from(SAVINGS_DAYS)
-                    .where(SAVINGS_DAYS.c.start >= stamp(start), SAVINGS_DAYS.c.end <= stamp(end))
-                )
-                return (
-                    self.cash_overview(start, end, connection),
-                    self.days(start, end, _connection=connection),
-                    count,
-                )
+                cash = self.cash_overview(start, end, connection)
+                return cash, self.days(start, end, _connection=connection), cash["days"]
         except SQLAlchemyError:
             raise OSError("Daily savings archive unavailable") from None
 
     def cash_overview(self, start, end, connection):
-        """Aggregate matching cash quarters separately from immutable legacy simulation results."""
-        table = SAVINGS_CASH_DAYS
+        """Sum matched estimates and their components from the same indexed rows."""
+        table = SAVINGS_UNCAPPED_DAYS
+        kinds = ("actual", "without_battery")
         columns = (
             "actual_cost",
             "without_battery_cost",
             "savings",
             "coverage_seconds",
             "estimated_seconds",
+            *(f"{kind}_{component}" for kind in kinds for component in CASH_COMPONENTS),
         )
         bounds = (table.c.start >= stamp(start), table.c.end <= stamp(end))
+        amounts = [func.sum(table.c[key]).label(key) for key in columns]
         summary = dict(
             connection.execute(
                 select(
                     func.count().label("days"),
                     func.count(func.distinct(table.c.currency)).label("currencies"),
                     func.min(table.c.currency).label("currency"),
-                    *(func.sum(table.c[key]).label(key) for key in columns),
+                    *amounts,
                 ).where(*bounds)
             )
             .mappings()
@@ -267,7 +273,7 @@ class SettlementStore:
                     calendar_bin.label("period"),
                     func.min(table.c.start).label("start"),
                     func.max(table.c.end).label("end"),
-                    *(func.sum(table.c[key]).label(key) for key in columns),
+                    *amounts,
                 )
                 .where(*bounds)
                 .group_by(calendar_bin)
@@ -278,73 +284,16 @@ class SettlementStore:
         summary["coverage_seconds"] = summary["coverage_seconds"] or 0.0
         summary["estimated_seconds"] = summary["estimated_seconds"] or 0.0
         summary["policy"] = CASH_POLICY_VERSION
-        summary["breakdown"] = self.cash_breakdown(start, end, connection)
-        breakdowns = self.cash_breakdown(start, end, connection, calendar_bin=calendar_bin)
-        for chart_bin in summary["chart"]:
-            chart_bin["breakdown"] = breakdowns.get(
-                chart_bin.pop("period"), {"actual": None, "without_battery": None}
-            )
+        for values in (summary, *summary["chart"]):
+            values.pop("period", None)
+            breakdown = {}
+            for kind in kinds:
+                components = {
+                    component: values.pop(f"{kind}_{component}") for component in CASH_COMPONENTS
+                }
+                breakdown[kind] = components if values["coverage_seconds"] else None
+            values["breakdown"] = breakdown
         return summary
-
-    def cash_breakdown(self, start, end, connection, *, calendar_bin=None):
-        """Read retained cost components only when every included day's scenario covers exactly its matched cash time.
-
-        Matched quarters are a subset of each scenario's accepted quarters. Equal
-        daily coverage proves that its retained components describe the same time.
-        Never substitute a broader actual total for the matched comparison.
-        An optional SQL calendar expression groups the same evidence for chart
-        tooltips in one query, independently of bounded daily report payloads.
-        """
-        table = SAVINGS_CASH_DAYS
-        kinds, components = ("actual", "without_battery"), ("purchase", "sale", "bonus")
-        available = {
-            kind: and_(
-                SAVINGS_DAYS.c[f"{kind}_coverage_seconds"] == table.c.coverage_seconds,
-                *(SAVINGS_DAYS.c[f"{kind}_{component}"].is_not(None) for component in components),
-            )
-            for kind in kinds
-        }
-        query = (
-            select(
-                func.count().label("days"),
-                *(
-                    func.sum(
-                        case(
-                            (available[kind], 1),
-                            else_=0,
-                        )
-                    ).label(f"{kind}_matching_days")
-                    for kind in kinds
-                ),
-                *(
-                    func.sum(SAVINGS_DAYS.c[f"{kind}_{component}"]).label(f"{kind}_{component}")
-                    for kind in kinds
-                    for component in components
-                ),
-            )
-            .select_from(table.join(SAVINGS_DAYS, table.c.start == SAVINGS_DAYS.c.start))
-            .where(
-                table.c.start >= stamp(start),
-                table.c.end <= stamp(end),
-                table.c.coverage_seconds > 0,
-            )
-        )
-        if calendar_bin is not None:
-            query = query.add_columns(calendar_bin.label("period")).group_by(calendar_bin)
-        breakdowns = {}
-        for values in connection.execute(query).mappings():
-            breakdown = {
-                kind: {component: values[f"{kind}_{component}"] for component in components}
-                if values["days"]
-                and values[f"{kind}_matching_days"] == values["days"]
-                and all(values[f"{kind}_{component}"] is not None for component in components)
-                else None
-                for kind in kinds
-            }
-            if calendar_bin is None:
-                return breakdown
-            breakdowns[values["period"]] = breakdown
-        return breakdowns
 
     def days(self, start, end, *, _connection=None):
         """Read bounded daily details without retaining or loading quarter measurement payloads."""
@@ -354,6 +303,9 @@ class SettlementStore:
             rows = (
                 connection.execute(
                     select(SAVINGS_DAYS)
+                    .join(
+                        SAVINGS_UNCAPPED_DAYS, SAVINGS_UNCAPPED_DAYS.c.start == SAVINGS_DAYS.c.start
+                    )
                     .where(SAVINGS_DAYS.c.start >= stamp(start), SAVINGS_DAYS.c.end <= stamp(end))
                     .order_by(SAVINGS_DAYS.c.start)
                     .limit(DAILY_CHART_WINDOW_DAYS)

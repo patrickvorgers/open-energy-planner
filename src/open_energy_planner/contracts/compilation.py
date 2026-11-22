@@ -50,13 +50,15 @@ class BonusCompiler:
             for identity, rules in sorted(result.items())
         }
 
-    def boundaries(self, contract, start, end, location):
-        """Collect rule/window/year edges before projecting the physical energy forecasts."""
+    def boundaries(self, contract, start, end, location, *, include_resets=True):
+        """Collect rule/window edges and annual resets when using a volume counter."""
         return {
             edge
             for rule in contract.bonuses
             if rule.effective_from < end
-            for edge in rule.boundaries(start, end, location=location)
+            for edge in rule.boundaries(
+                start, end, location=location, include_resets=include_resets
+            )
         }
 
     def preview(self, contract, prices, *, location=None):

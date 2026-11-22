@@ -773,7 +773,6 @@ def create_app(
                 {
                     "release": RELEASE,
                     "settlement_request": settlement,
-                    "settlement_bonus_request": settlement_bonus_request(),
                     "savings_status": {
                         "issue": savings_runtime.issue,
                         "action_required": savings_runtime.attention,
@@ -1119,7 +1118,7 @@ def create_app(
     )
     from .savings.api import register as register_savings
 
-    settlement_request, savings_runtime, settlement_bonus_request = register_savings(
+    settlement_request, savings_runtime = register_savings(
         app,
         repository,
         contracts,
