@@ -82,7 +82,7 @@ def test_charts_precede_simulations_and_evidence_waits_for_disclosure(app_page):
         "Original and repriced expected costs",
     ):
         expect(page.get_by_text(name, exact=True)).to_have_count(0)
-    expect(page.locator("#inspect-time")).to_have_attribute("max", "119")
+    expect(page.locator("#inspect-time")).to_have_attribute("max", "191")
     assert evidence == []
     page.evaluate(
         "window.immediatePlanChart = Chart.getChart(document.getElementById('plan-chart'))"
