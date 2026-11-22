@@ -92,7 +92,7 @@ def test_material_thermal_deviations_reuse_five_minute_throttle_and_quarter_refr
         published=(original, document),
         submit=submitted.append,
         invalidate=lambda reason: None,
-        last_calculation_started=None,
+        busy=False,
     )
     repository = SimpleNamespace(invalidate_plan=lambda: None, store_sources=lambda value: None)
     config = parse_configuration(
@@ -137,6 +137,8 @@ def test_material_thermal_deviations_reuse_five_minute_throttle_and_quarter_refr
             ],
         }
         live.receive(parse_report(body, config, clock[0]))
+        if seconds in (300, 600, 900):
+            live._install(live._prepare(live._capture()), force=False, boundary=clock[0])
         assert len(submitted) == expected
 
 

@@ -602,7 +602,7 @@ The fixed reference asks what the same installation would do without price plann
 
 If required reserve recovery is enabled below minimum SoC, restore as soon as feasible before either primary objective. All battery/route/inverter/grid limits remain hard. Do not defer recovery for cheap prices or block it under consumption minimization. Normal strategy resumes after recovery. Keep the actually below-reserve initial measurement, forbid further discharge and report limiting capacity rather than relaxing limits. Physical control/protection remains HA's responsibility.
 
-1. Coalesce ordinary measurements. Schedule on UTC quarters, with material deviations/new future inputs throttled to at most once per five minutes. Keep readiness recovery, explicit configuration/resume and hard invalidation immediate. Measurement freshness is checked on every report, not used as a solve timer. See [workspace and cadence](../docs/development/EMS-VISUALIZATION.md).
+1. Coalesce ordinary measurements. A live timer schedules each UTC quarter plus intervening five-minute boundaries with pending requests. A busy boundary leaves work pending for the next eligible boundary. The first ready plan and explicit operator requests may start when idle. Hard invalidation remains immediate. Measurement freshness is checked on every report and before submission. See [workspace and cadence](../docs/development/EMS-VISUALIZATION.md).
 2. Validate current required state. Refresh only needed weather/prices/forecasts/contracts, not every download/training on each round.
 3. Freeze input. Plan only remaining time from now, up to available 48-hour coverage.
 4. Assemble/solve in one bounded worker while API/HA remain responsive.
@@ -1115,8 +1115,8 @@ candidate through `PublicationSuperseded`: the coordinator reports INFO and pres
 any newer invalidation reason. Ordinary measurement, forecast and price updates do
 not discard a usable active result: publish it with its original evidence, then
 calculate the newest coalesced input at the next permitted round. Continuous soft updates must not starve
-publication. Revalidate against the newest observations even when the five-minute
-scheduling limit did not queue them. Only missing/unusable core input, changed
+publication. Revalidate against the newest observations even when they have yet
+to reach a scheduling boundary. Only missing/unusable core input, changed
 configuration/strategy, expired input/first interval, or an infeasible remaining
 battery dispatch blocks publication. Check each battery's measured reserve/capacity
 using validated internal-energy changes (including losses) through command expiry.
@@ -1125,9 +1125,10 @@ threshold. EV capacity checks likewise integrate only remaining useful charge fr
 the latest measurement through command expiry. A rising SoC must not be compared
 with the entire original charging horizon. Missing EV sessions still block publication.
 Material sensor deviations latch one pending request until submission with the latest
-snapshot. Ordinary source updates, quarter transitions and publication retries share
-the five-minute submission gap. Explicit user/configuration requests and readiness
-recovery remain immediate. The locked publication callback must not submit directly.
+snapshot. Ordinary source updates, readiness recovery and publication retries
+wait for a clock boundary. A busy coordinator keeps the request pending and
+finishes its current calculation. The locked publication callback can request
+a future round without submitting one directly.
 If no newer generation exists, hard rejection becomes not ready. Genuine
 publication/storage failures remain ERROR with traceback and retain rollback behavior.
 
