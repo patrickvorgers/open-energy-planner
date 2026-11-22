@@ -348,7 +348,8 @@ unavailable permission/power. Choose immediate idempotent actions, never queued
 delayed starts. Relevant capacities and limits have separate native sensors.
 The blueprint also rejects permission and power entities from different virtual
 points. A five-percentage-point vehicle SoC deviation from the published trajectory
-requests a new round behind the normal five-minute throttle.
+requests a round at the next five-minute clock boundary. Newly usable charging
+work for a physical connection follows the same cadence.
 
 The balance chart includes EV AC consumption and predicted vehicle SoC. Charging
 losses are already in AC intake, not added as stationary converter losses. For new versioned Planning

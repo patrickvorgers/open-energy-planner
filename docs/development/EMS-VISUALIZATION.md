@@ -247,22 +247,28 @@ version-selection and stale-response guards remain in place.
 
 ## Scheduling ownership
 
-LiveInputs validates every report but requests ordinary planning on UTC quarter
-boundaries. A new forecast/price version or a material measured deviation may
-request an earlier round only after 300 seconds since the last submission.
+The app's live timer checks UTC clock boundaries independently of HA reports and
+browser polling. On each quarter-hour boundary it builds a fresh planning snapshot
+when inputs are usable. On the intermediate five-minute boundaries it does so only
+when a request is pending. For example, a new price or deviation at 00:01 is
+eligible at 00:05. Several updates produce one calculation with the newest
+available inputs. An empty 00:10 is skipped. At 00:15, one regular round also
+consumes any pending request.
+
 Material defaults are 1000 W grid-power error or 5 percentage points of battery
 capacity relative to the interpolated published trajectory. Expected SoC motion
-is therefore not a deviation. All thresholds are named constants in LiveInputs.
-Normal cadence derives from the central fine planning interval.
-
-Initial readiness, recovery and explicit configuration/resume/replan requests
-can run immediately. The first usable charging work for a new physical EV
-connection can also request a round immediately, once per connection. Hard
-input invalidation and publication safety checks remain immediate. During normal
-operation, quarter transitions, new source versions and deviations share the
-five-minute limit. Ordinary sensor captures and measurement freshness deadlines
-are never solve timers.
-Log each actual submission with its reason and previous submission timestamp.
+is therefore not a deviation. Forecast updates, appliance feedback, newly usable
+EV charging work and readiness recovery can also leave requests pending. A
+calculation in progress finishes. If it overlaps a due boundary, the latest
+inputs are considered at the next eligible boundary, even if the solver finishes
+in between. If state access or preparation takes the scheduler past the boundary
+minute, the request also stays pending. The first ready plan and explicit
+configuration, resume or replan actions can still start when idle. Hard input
+invalidation and publication safety
+checks remain immediate. Ordinary sensor captures and measurement freshness
+deadlines are never solve timers. Each submission logs its reason and elapsed
+time since the previous submission. The performance chart records actual start
+times, including worker and event-loop scheduling delays.
 
 Effective-price revision hashing coalesces adjacent segments with the same rates,
 source, published/forecast kind, native resolution and contract period. Moving

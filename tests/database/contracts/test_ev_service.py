@@ -186,8 +186,8 @@ def test_missing_power_and_small_noise_do_not_create_unplanned_charging(service,
         assert not service.execution_deviated(plan, now)
 
 
-def test_first_usable_ev_work_bypasses_throttle_once_per_connection(ev_service):
-    """Only the first usable work for each physical connection requests an immediate round."""
+def test_first_usable_ev_work_waits_for_the_next_boundary(ev_service):
+    """First usable work stays pending until the next boundary and uses the current connection."""
     from open_energy_planner.installation.model import InstallationProblem
     from open_energy_planner.live_inputs import LiveInputs
     from open_energy_planner.optimization.domain import Interval
@@ -209,12 +209,14 @@ def test_first_usable_ev_work_bypasses_throttle_once_per_connection(ev_service):
     )
     submitted = []
     now = NOW
-    planner = SimpleNamespace(submit=submitted.append, last_calculation_started=None)
+    planner = SimpleNamespace(submit=submitted.append, busy=False)
     live = LiveInputs(planner, None, clock=lambda: now, ev=ev_service)
     live.assembler = SimpleNamespace(expiry=lambda *_arguments: None)
     live.report = SimpleNamespace(readings=())
 
-    def capture(seconds, *, connected=True, identified=False, session=SESSION, soc=50, hours=1):
+    def capture(
+        seconds, *, connected=True, identified=False, session=SESSION, soc=50, hours=1, tick=False
+    ):
         """Feed a current HA capture and its typed EV work through normal planning admission."""
         nonlocal now
         now = NOW + timedelta(seconds=seconds)
@@ -235,7 +237,7 @@ def test_first_usable_ev_work_bypasses_throttle_once_per_connection(ev_service):
             ),
             ev_revision=ev_service.hard_revision(now, timezone),
         )
-        live._install((now, future, prepared), force=False)
+        live._install((now, future, prepared), force=False, boundary=now if tick else None)
         return work
 
     assert capture(0, connected=False) == ()
@@ -259,31 +261,35 @@ def test_first_usable_ev_work_bypasses_throttle_once_per_connection(ev_service):
     assert capture(44, identified=True, hours=0.1)[0].required_kwh == 18
     assert len(submitted) == 1
 
-    work = capture(45, identified=True)
+    capture(45, identified=True)
+    assert len(submitted) == 1
+    work = capture(300, identified=True, tick=True)
     assert len(submitted) == 2
     assert submitted[-1].problem.ev_work == work
     assert work[0].session_id == SESSION
     assert work[0].required_kwh == 18
 
-    assert capture(90, identified=True, soc=60)[0].required_kwh == 12
-    assert capture(100, connected=False) == ()
+    assert capture(330, identified=True, soc=60)[0].required_kwh == 12
+    assert capture(340, connected=False) == ()
     assert len(submitted) == 2
 
     next_session = str(uuid4())
-    work = capture(115, identified=True, session=next_session, soc=60)
+    capture(345, identified=True, session=next_session, soc=60)
+    assert len(submitted) == 2
+    work = capture(600, identified=True, session=next_session, soc=60, tick=True)
     assert len(submitted) == 3
     assert submitted[-1].problem.ev_work == work
     assert work[0].session_id == next_session
 
     future.price_version = "new-prices"
-    capture(414, identified=True, session=next_session, soc=60)
+    capture(614, identified=True, session=next_session, soc=60)
     assert len(submitted) == 3
-    capture(415, identified=True, session=next_session, soc=60)
+    capture(900, identified=True, session=next_session, soc=60, tick=True)
     assert len(submitted) == 4
 
 
-def test_ev_connection_can_retry_a_queued_round_rejected_before_solving(service):
-    """If a queued snapshot expires before solving, admit fresh work once on the same connection."""
+def test_ev_connection_waits_for_fresh_work_when_a_boundary_is_busy(service):
+    """A busy boundary leaves the EV request pending without queuing an ageing snapshot."""
     import asyncio
 
     from open_energy_planner.installation.model import InstallationProblem
@@ -292,7 +298,7 @@ def test_ev_connection_can_retry_a_queued_round_rejected_before_solving(service)
     from open_energy_planner.planning import InputSnapshot, PlanningCoordinator, PlanningService
 
     async def scenario():
-        """Let an active solve overrun the queued EV snapshot's first interval."""
+        """Let an active solve overrun the first eligible EV boundary."""
         now = NOW
         started = asyncio.Event()
         release = asyncio.Event()
@@ -320,7 +326,7 @@ def test_ev_connection_can_retry_a_queued_round_rejected_before_solving(service)
             valid_until=NOW + timedelta(hours=1),
         )
 
-        def capture(seconds, *, connected, duration_h=1):
+        def capture(seconds, *, connected, duration_h=1, tick=False):
             """Admit current observations with one short or long first interval."""
             nonlocal now
             now = NOW + timedelta(seconds=seconds)
@@ -349,23 +355,23 @@ def test_ev_connection_can_retry_a_queued_round_rejected_before_solving(service)
                 problem,
                 source="home_assistant",
             )
-            live._install((now, future, snapshot), force=False)
+            live._install((now, future, snapshot), force=False, boundary=now if tick else None)
             return snapshot
 
-        capture(0, connected=False)
+        original = capture(0, connected=False)
         await started.wait()
-        queued = capture(30, connected=True, duration_h=1 / 120)
-        assert planner.latest is queued
-        now = NOW + timedelta(seconds=61)
+        capture(30, connected=True, duration_h=1 / 120)
+        capture(300, connected=True, duration_h=1 / 120, tick=True)
+        assert planner.latest is original
+        now = NOW + timedelta(seconds=301)
         release.set()
         await planner.wait()
-        assert planner.reason == "stale_input"
         assert solved == [()]
 
-        fresh = capture(62, connected=True)
+        fresh = capture(600, connected=True, tick=True)
         await planner.wait()
         assert solved == [(), fresh.problem.ev_work]
-        capture(65, connected=True)
+        capture(605, connected=True)
         await planner.wait()
         assert solved == [(), fresh.problem.ev_work]
         await planner.close()
@@ -374,9 +380,7 @@ def test_ev_connection_can_retry_a_queued_round_rejected_before_solving(service)
 
 
 @pytest.mark.parametrize("retained_capture", [False, True])
-def test_ev_power_deviation_obeys_five_minute_throttle_and_does_not_repeat(
-    service, retained_capture
-):
+def test_ev_power_deviation_waits_for_a_boundary_and_does_not_repeat(service, retained_capture):
     """A 2.3-kW unexpected charge hidden at the grid causes one early round, then normal quarters."""
     from open_energy_planner.installation.model import InstallationProblem
     from open_energy_planner.live_inputs import LiveInputs
@@ -394,9 +398,7 @@ def test_ev_power_deviation_obeys_five_minute_throttle_and_does_not_repeat(
     }
     submitted = []
     clock = [NOW]
-    planner = SimpleNamespace(
-        published=(snapshot, document), submit=submitted.append, last_calculation_started=None
-    )
+    planner = SimpleNamespace(published=(snapshot, document), submit=submitted.append, busy=False)
     live = LiveInputs(planner, None, clock=lambda: clock[0], ev=service)
     live.assembler = SimpleNamespace(expiry=lambda *_arguments: None)
     live.report = SimpleNamespace(readings=())
@@ -412,12 +414,10 @@ def test_ev_power_deviation_obeys_five_minute_throttle_and_does_not_repeat(
         body["points"][0]["power_w"] = 2300
         if not retained_capture or seconds == 0:
             service.receive(body, clock[0])
-        live._install((clock[0], future, snapshot), force=False)
+        boundary = clock[0] if seconds in (300, 600, 900) else None
+        live._install((clock[0], future, snapshot), force=False, boundary=boundary)
         if retained_capture:
             assert len(submitted) == (1 if seconds < 900 else 2)
-            if seconds == 0:
-                # Allow an early round immediately. Only new power evidence may request it.
-                live.last_submission = NOW - timedelta(minutes=5)
         else:
             assert len(submitted) == (1 if seconds < 300 else 2 if seconds < 900 else 3)
 

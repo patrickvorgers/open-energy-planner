@@ -9,7 +9,6 @@ from typing import Protocol
 from open_energy_planner.core.units import (
     FULL_SOC_PERCENT,
     SECONDS_PER_HOUR,
-    SECONDS_PER_MINUTE,
     WATTS_PER_KW,
 )
 from open_energy_planner.home_assistant.observations import (
@@ -23,7 +22,8 @@ from .optimization.domain import Strategy
 from .planning import PlanningCoordinator
 from .planning_policy import FINE_INTERVAL_MINUTES
 
-MIN_DEVIATION_REPLAN_SECONDS = 300
+REPLAN_BOUNDARY_MINUTES = 5
+BOUNDARY_START_WINDOW = timedelta(minutes=1)
 GRID_DEVIATION_W = 1000
 BATTERY_DEVIATION_FRACTION = 0.05
 THERMAL_DEVIATION_C = 2
@@ -69,7 +69,6 @@ class LiveInputs:
         self.current_snapshot = None
         self.last_submission = None
         self.last_basis = None
-        self.last_quarter = None
         self.replan_requested = False
         self.configuration_issue = lambda: None
         self.requested_strategy = lambda: Strategy.COST
@@ -79,6 +78,8 @@ class LiveInputs:
     def invalidate(self, reason):
         """Revoke the current planning generation and persisted publication with a readiness reason."""
         self.current_snapshot = None
+        if self.last_submission is not None:
+            self.replan_requested = True
         self.planner.invalidate(reason)
         self.repository.invalidate_plan()
 
@@ -94,9 +95,8 @@ class LiveInputs:
         self.configuration = configuration
         self.report = None
         self.current_snapshot = None
-        self.last_submission = None
-        self.last_basis = self.last_quarter = None
-        self.replan_requested = False
+        self.last_basis = None
+        self.replan_requested = True
         self.planner.invalidate("waiting_for_measurements")
         self.repository.invalidate_plan()
         _LOGGER.info(
@@ -127,17 +127,38 @@ class LiveInputs:
             )
 
     def refresh(self, *, force=False):
-        """Validate every capture, but solve on quarters or throttled material changes.
-
-        Explicit configuration/resume requests, readiness recovery and first work
-        for a new EV connection may start immediately. Quarters, other source
-        versions and deviations share the five-minute limit, measured from the
-        actual start of the preceding calculation.
-        Measurement freshness is validated, not a solve timer.
-        """
+        """Validate every capture and latch material changes for the scheduler."""
         self._install(self._prepare(self._capture()), force=force)
 
-    async def refresh_async(self, *, force=False):
+    async def run(self, lock, *, sleep=asyncio.sleep):
+        """Drive the live schedule independently of API traffic and provider polling."""
+        interval = timedelta(minutes=REPLAN_BOUNDARY_MINUTES)
+        boundary = self.clock().astimezone(UTC)
+        while True:
+            now = max(boundary, self.clock().astimezone(UTC))
+            boundary = (
+                now.replace(
+                    minute=now.minute // REPLAN_BOUNDARY_MINUTES * REPLAN_BOUNDARY_MINUTES,
+                    second=0,
+                    microsecond=0,
+                )
+                + interval
+            )
+            while (delay := (boundary - self.clock()).total_seconds()) > 0:
+                await sleep(delay)
+            if boundary.minute % FINE_INTERVAL_MINUTES == 0:
+                self.replan_requested = True
+            if not self.replan_requested or self.planner.busy:
+                continue
+            async with lock:
+                if self.clock() >= boundary + BOUNDARY_START_WINDOW:
+                    continue
+                try:
+                    await self.refresh_async(boundary=boundary)
+                except Exception:
+                    _LOGGER.exception("Planning boundary refresh failed")
+
+    async def refresh_async(self, *, force=False, boundary=None):
         """Prepare off-loop, draining cancellation before releasing the caller-held state lock.
 
         Coordinator mutation and submission remain on the event loop. The state
@@ -154,8 +175,8 @@ class LiveInputs:
                 if worker.cancelled():
                     raise
                 cancellation = error
-        if not self.planner.closed:
-            self._install(prepared, force=force)
+        if not self.planner.closed and (boundary is None or cancellation is None):
+            self._install(prepared, force=force, boundary=boundary)
         if cancellation is not None:
             raise cancellation
 
@@ -205,20 +226,19 @@ class LiveInputs:
         except InputsUnavailable as error:
             return error
 
-    def _install(self, prepared, *, force):
+    def _install(self, prepared, *, force, boundary=None):
         """Recheck freshness and install completed preparation on the coordinator's thread."""
         if isinstance(prepared, InputsUnavailable):
             self.invalidate(str(prepared))
-            self.last_submission = None
             return
         now, basis, snapshot = prepared
         try:
-            self.assembler.expiry(self.configuration, self.report, self.clock())
-            if self.clock() >= basis.valid_until:
+            current = self.clock()
+            self.assembler.expiry(self.configuration, self.report, current)
+            if current >= basis.valid_until:
                 raise InputsUnavailable("forecast_or_prices_invalid")
         except InputsUnavailable as error:
             self.invalidate(str(error))
-            self.last_submission = None
             return
         versions = (
             basis.config_revision,
@@ -229,18 +249,11 @@ class LiveInputs:
             snapshot.thermal_revision,
         )
         self.current_snapshot = snapshot
-        quarter = int(now.timestamp()) // (FINE_INTERVAL_MINUTES * SECONDS_PER_MINUTE)
         elapsed = (now - self.last_submission).total_seconds() if self.last_submission else None
         published = getattr(self.planner, "published", None)
-        last_start = self.planner.last_calculation_started
-        if elapsed is not None and last_start is not None:
-            elapsed = min(elapsed, (now - last_start).total_seconds())
         ev_deviation = bool(
             self.ev is not None
             and self.ev.execution_deviated(published[1] if published else {}, now)
-        )
-        self.replan_requested = (
-            self.replan_requested or ev_deviation or self.deviated(snapshot, now)
         )
         active = getattr(self.planner, "active", None)
         stale = active if getattr(self.planner, "reason", None) == "stale_input" else None
@@ -248,19 +261,23 @@ class LiveInputs:
         new_ev_sessions = (
             self.ev.unsubmitted_sessions(snapshot.problem, stale_id) if self.ev is not None else {}
         )
-        if (
-            force
-            or self.last_submission is None
-            or new_ev_sessions
-            or (
-                elapsed >= MIN_DEVIATION_REPLAN_SECONDS
-                and (
-                    quarter != self.last_quarter
-                    or versions != self.last_basis
-                    or self.replan_requested
-                )
-            )
-        ):
+        regular = boundary is not None and boundary.minute % FINE_INTERVAL_MINUTES == 0
+        self.replan_requested = (
+            self.replan_requested
+            or regular
+            or force
+            or versions != self.last_basis
+            or bool(new_ev_sessions)
+            or ev_deviation
+            or self.deviated(snapshot, now)
+        )
+        eligible_boundary = (
+            boundary is not None
+            and current < boundary + BOUNDARY_START_WINDOW
+            and self.replan_requested
+        )
+        initial = boundary is None and self.last_submission is None
+        if not self.planner.busy and (force or initial or eligible_boundary):
             changed = (
                 ", ".join(
                     label
@@ -283,16 +300,16 @@ class LiveInputs:
                 else ""
             )
             reason = (
-                "an explicit settings or user request"
+                "a new quarter-hour started"
+                if regular
+                else "an explicit settings or user request"
                 if force
                 else "all required inputs are ready"
                 if self.last_submission is None
                 else "a new EV session is ready to plan"
                 if new_ev_sessions
-                else "a new quarter-hour started"
-                if quarter != self.last_quarter
                 else f"updated {changed}"
-                if versions != self.last_basis
+                if changed
                 else "pending measurement or publication updates"
             )
             _LOGGER.info(
@@ -308,19 +325,11 @@ class LiveInputs:
                 snapshot.measurement_version,
                 versions,
             )
-            self.last_submission, self.last_basis, self.last_quarter = now, versions, quarter
+            self.last_submission, self.last_basis = now, versions
             self.replan_requested = False
-            queued = getattr(self.planner, "latest", None)
             self.planner.submit(snapshot)
             if self.ev is not None:
-                replaced_id = (
-                    queued.snapshot_id if queued is not None and queued is not active else stale_id
-                )
-                if replaced_id != stale_id:
-                    new_ev_sessions = self.ev.unsubmitted_sessions(snapshot.problem, replaced_id)
-                self.ev.record_submitted_sessions(
-                    new_ev_sessions, snapshot.snapshot_id, replaced_id
-                )
+                self.ev.record_submitted_sessions(new_ev_sessions, snapshot.snapshot_id, stale_id)
                 self.ev.accept_execution_deviations(now)
 
     def deviated(self, snapshot, now):

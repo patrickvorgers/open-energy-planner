@@ -508,7 +508,7 @@ def test_forwarding_reports_does_not_replan_on_every_poll():
 
     class Planner:
         latest = None
-        last_calculation_started = None
+        busy = False
 
         def __init__(self):
             self.submitted = []
@@ -538,15 +538,11 @@ def test_forwarding_reports_does_not_replan_on_every_poll():
     for seconds in (0, 5, 10, 59, 60, 120, 299, 300, 600, 899, 900):
         clock[0] = NOW + timedelta(seconds=seconds)
         live.receive(parse_report(report_body(now=clock[0]), config, clock[0]))
+        if seconds in (300, 600, 900):
+            live._install(live._prepare(live._capture()), force=False, boundary=clock[0])
         assert len(planner.submitted) == (2 if seconds == 900 else 1)
         assert live.current_snapshot.measured_at == clock[0]
     assert len(planner.submitted) == 2
-    # A quarter transition cannot bypass the five-minute gap after configuration.
-    live.configure(config)
-    for seconds in (1799, 1800, 2098, 2099):
-        clock[0] = NOW + timedelta(seconds=seconds)
-        live.receive(parse_report(report_body(now=clock[0]), config, clock[0]))
-        assert len(planner.submitted) == (4 if seconds == 2099 else 3)
 
 
 def test_pending_sensor_deviation_is_latched_until_latest_inputs_can_be_submitted():
@@ -554,7 +550,7 @@ def test_pending_sensor_deviation_is_latched_until_latest_inputs_can_be_submitte
     from unittest.mock import Mock
 
     clock = [NOW]
-    planner = Mock(published=None, last_calculation_started=None)
+    planner = Mock(published=None, busy=False)
     live = LiveInputs(planner, Mock(), Mock(), clock=lambda: clock[0])
     config = configuration()
     live.configure(config)
@@ -586,6 +582,8 @@ def test_pending_sensor_deviation_is_latched_until_latest_inputs_can_be_submitte
         if seconds == 60:
             body["readings"][0]["value"] = 2000
         live.receive(parse_report(body, config, clock[0]))
+        if seconds == 300:
+            live._install(live._prepare(live._capture()), force=False, boundary=clock[0])
         assert planner.submit.call_count == expected
         assert live.replan_requested is (seconds < 300)
     latest = planner.submit.call_args.args[0]
@@ -631,11 +629,11 @@ def test_live_candidate_cannot_skip_first_transfer_when_solving_crosses_boundary
     asyncio.run(scenario())
 
 
-def test_changing_price_versions_cannot_bypass_five_minute_limit(caplog):
-    """New composed prices on every poll coalesce until 300 seconds, including quarter transitions."""
+def test_changing_price_versions_coalesce_at_clock_boundaries(caplog):
+    """New prices coalesce at fixed boundaries despite a delayed first submission."""
 
     class Planner:
-        last_calculation_started = None
+        busy = False
 
         def __init__(self):
             self.submitted = []
@@ -664,9 +662,8 @@ def test_changing_price_versions_cannot_bypass_five_minute_limit(caplog):
     config = configuration()
     live.configure(config)
     for seconds, expected in (
-        (0, 1),
-        (5, 1),
-        (10, 1),
+        (12, 1),
+        (48, 1),
         (299, 1),
         (300, 2),
         (301, 2),
@@ -677,55 +674,120 @@ def test_changing_price_versions_cannot_bypass_five_minute_limit(caplog):
     ):
         clock[0] = NOW + timedelta(seconds=seconds)
         live.receive(parse_report(report_body(now=clock[0]), config, clock[0]))
+        if seconds in (300, 600, 900):
+            live._install(live._prepare(live._capture()), force=False, boundary=clock[0])
         assert len(planner.submitted) == expected
     requests = [message for message in caplog.messages if message.startswith("Planning requested:")]
     assert len(requests) == 4
     assert "all required inputs are ready" in requests[0]
     assert "updated market prices" in requests[1]
-    assert "300 seconds ago" in requests[1]
+    assert "288 seconds ago" in requests[1]
     assert "a new quarter-hour started" in requests[-1]
     assert "Last submission" not in caplog.text
 
 
-def test_price_change_waits_five_minutes_from_actual_calculation_start():
-    """A delayed worker start sets the automatic replan deadline."""
+@pytest.mark.parametrize("overrun", [False, True])
+def test_live_clock_runs_quarters_and_keeps_pending_updates_through_busy_boundaries(overrun):
+    """Run the live timer with an independent clock and hold a real coordinator task open."""
 
     async def scenario():
-        clock = [NOW]
+        clock = [NOW + timedelta(seconds=2)]
         config = configuration()
         starts = []
+        started, release = asyncio.Event(), asyncio.Event()
+        sleeps, ticks = asyncio.Queue(), asyncio.Queue()
 
-        async def calculate(_snapshot):
-            starts.append(clock[0])
+        async def calculate(snapshot):
+            """Retain exact start times and measurement ages, blocking only the first round."""
+            starts.append((clock[0], snapshot.measured_at, snapshot.price_version))
+            if len(starts) == 1:
+                started.set()
+                await release.wait()
             return SimpleNamespace(document=None, reason="test_no_plan")
 
         async def publish(_document):
             raise AssertionError("No plan was produced")
 
+        async def sleep(delay):
+            """Let the test advance the clock while the scheduler is asleep."""
+            await sleeps.put(delay)
+            await ticks.get()
+
+        price = ["original"]
         planner = PlanningCoordinator(
             SimpleNamespace(calculate=calculate), publish, clock=lambda: clock[0]
         )
         repository = SimpleNamespace(store_sources=lambda _: None, invalidate_plan=lambda: None)
         future = SimpleNamespace(
             current=lambda config, now, report: replace(
-                basis(config, now=now), price_version=str(now)
+                basis(config, now=now), price_version=price[0]
             )
         )
         live = LiveInputs(planner, repository, future, clock=lambda: clock[0])
         live.configure(config)
-        live.receive(parse_report(report_body(), config, NOW))
-        first_start = NOW + timedelta(seconds=2)
-        clock[0] = first_start
-        await planner.wait()
-        assert starts == [first_start]
+        schedule = asyncio.create_task(live.run(asyncio.Lock(), sleep=sleep))
 
-        for seconds in (300, 301, 302):
+        def receive(seconds):
+            """Deliver an ordinary HA capture without waking the clock."""
             clock[0] = NOW + timedelta(seconds=seconds)
             live.receive(parse_report(report_body(now=clock[0]), config, clock[0]))
-            await planner.wait()
-            assert starts == ([first_start, clock[0]] if seconds == 302 else [first_start])
 
-        await planner.close()
+        async def tick(seconds):
+            """Release one scheduled boundary and wait for the subsequent timer registration."""
+            clock[0] = NOW + timedelta(seconds=seconds)
+            await ticks.put(None)
+            assert await asyncio.wait_for(sleeps.get(), 2) == 300
+
+        try:
+            assert await asyncio.wait_for(sleeps.get(), 2) == 298
+            receive(2)
+            await asyncio.wait_for(started.wait(), 2)
+            price[0] = "first-update"
+            receive(60)
+            price[0] = "latest-update"
+            receive(299)
+            assert len(starts) == 1
+            if not overrun:
+                release.set()
+                await planner.wait()
+            await tick(300)
+            if overrun:
+                assert len(starts) == 1
+                clock[0] = NOW + timedelta(seconds=301)
+                release.set()
+                await planner.wait()
+                assert len(starts) == 1
+            else:
+                await planner.wait()
+                assert starts[-1] == (
+                    NOW + timedelta(minutes=5),
+                    NOW + timedelta(seconds=299),
+                    "latest-update",
+                )
+            receive(599)
+            await tick(600)
+            await planner.wait()
+            assert len(starts) == 2
+            assert starts[-1][0] == NOW + timedelta(minutes=10 if overrun else 5)
+            price[0] = "quarter-update"
+            receive(899)
+            await tick(900)
+            await planner.wait()
+            assert [start[0] for start in starts] == [
+                NOW + timedelta(seconds=2),
+                NOW + timedelta(minutes=10 if overrun else 5),
+                NOW + timedelta(minutes=15),
+            ]
+            assert starts[-1][2] == "quarter-update"
+            receive(1199)
+            await tick(1200)
+            assert len(starts) == 3
+        finally:
+            release.set()
+            schedule.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await schedule
+            await planner.close()
 
     asyncio.run(scenario())
 
