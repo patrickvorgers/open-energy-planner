@@ -1,5 +1,16 @@
 // Presentation of immutable, independently validated physical flows. Never optimize or infer energy routes here.
 export const FLOW_COLORS = Object.freeze({solar: "#23965e", solarAC: "#165c3c", import: "#2586c4", export: "#56bac7", discharge: "#d45464", charge: "#8560b5", load: "#d29323", losses: "#88949f"});
+const OTHER_BATTERY_FLOW = ["other", "Other", "#667785"];
+export const BATTERY_FLOW_GROUPS = [
+    {key: "charge", title: "Charging sources", sign: -1, routes: [
+        ["pv_dc", "PV DC", FLOW_COLORS.solar], ["pv_ac", "PV AC", FLOW_COLORS.solarAC],
+        ["grid_import", "Grid import", FLOW_COLORS.import], OTHER_BATTERY_FLOW
+    ]},
+    {key: "discharge", title: "Discharge destinations", sign: 1, routes: [
+        ["own_use", "Own use", "#805a1b"], ["grid_export", "Grid export", FLOW_COLORS.import],
+        OTHER_BATTERY_FLOW
+    ]}
+];
 const MILLISECONDS_PER_HOUR = 3600000;
 export const QUARTER_MILLISECONDS = MILLISECONDS_PER_HOUR / 4;
 const TIMESTAMP_ROUNDOFF_MILLISECONDS = 1;
@@ -53,26 +64,16 @@ export function quarterBalanceSeries(series) {
             const end = start + QUARTER_MILLISECONDS;
             const coveredStart = Math.max(start, first), coveredEnd = Math.min(end, last);
             let cursor = coveredStart, weighted = 0, valid = true;
-            const sourceEnergy = entry.showChargingSources ? {} : null;
             for (const row of source) {
                 const left = Math.max(coveredStart, row.start), right = Math.min(coveredEnd, Math.round(row.end));
                 if (right <= left) continue;
                 if (Math.abs(left - cursor) > TIMESTAMP_ROUNDOFF_MILLISECONDS || !finite(row.value)) valid = false;
                 weighted += (right - left) * row.value;
-                if (sourceEnergy && row.value < 0) {
-                    for (const [source, power] of Object.entries(row.chargingSources || {other: -row.value})) {
-                        sourceEnergy[source] = (sourceEnergy[source] || 0) + (right - left) * power;
-                    }
-                }
                 cursor = right;
             }
             if (Math.abs(cursor - coveredEnd) > TIMESTAMP_ROUNDOFF_MILLISECONDS) valid = false;
             const duration = coveredEnd - coveredStart;
-            const interval = {start, end, coveredStart, coveredEnd, value: valid ? weighted / duration : null};
-            if (valid && sourceEnergy) {
-                interval.chargingSources = Object.fromEntries(Object.entries(sourceEnergy).map(([source, value]) => [source, value / duration]));
-            }
-            intervals.push(interval);
+            intervals.push({start, end, coveredStart, coveredEnd, value: valid ? weighted / duration : null});
         }
         return {...entry, intervals};
     });
@@ -186,7 +187,13 @@ function socSeries(plan, intervals, units, labels) {
     });
 }
 
-/** Display each battery's frozen terminal power and stored state independently of the installation balance. */
+/** Preserve known terminal energy when the archived detail is unavailable. */
+export function batteryRouteValues(battery, attribution, direction) {
+    const amount = battery?.[`${direction}_kwh`];
+    return energy(amount) ? attribution?.[direction] || {other: Math.max(0, amount)} : null;
+}
+
+/** Stack server-attributed terminal power independently of the installation balance. */
 export function batteryPlanSeries(plan, labels) {
     const problem = plan.input_snapshot?.problem;
     const intervals = problem?.intervals || [], units = problem?.batteries || [];
@@ -198,22 +205,18 @@ export function batteryPlanSeries(plan, labels) {
         const barStyle = {outlineColor: state.color};
         const rows = intervals.map((_, intervalIndex) =>
             plan.expected_flows?.[intervalIndex]?.batteries?.find((row) => row.device_id === unit.device_id));
-        const charge = rows.map((row) => energy(row?.charge_kwh) ? -row.charge_kwh : null);
-        const discharge = rows.map((row) => energy(row?.discharge_kwh) ? row.discharge_kwh : null);
-        const charging = flowSeries(`${name}: Charging`, FLOW_COLORS.charge, intervals, charge, "Consumption");
-        charging.showChargingSources = true;
-        charging.intervals.forEach((row, intervalIndex) => {
-            const sources = plan.battery_charging_sources?.[intervalIndex]?.[unit.device_id];
-            if (sources && row.value < 0) {
-                const hours = intervals[intervalIndex].duration_h;
-                row.chargingSources = Object.fromEntries(Object.entries(sources).map(([source, amount]) => [source, amount / hours]));
-            }
+        const bars = BATTERY_FLOW_GROUPS.flatMap(({key, sign, routes}) => {
+            const attributed = rows.map((row, intervalIndex) => batteryRouteValues(
+                row, plan.battery_flow_attribution?.[intervalIndex]?.[unit.device_id], key
+            ));
+            return routes.map(([route, label, color], routeIndex) => ({
+                ...flowSeries(`${name}: ${label}`, color, intervals,
+                    attributed.map(values => values === null ? null : sign * (values[route] ?? 0)),
+                    key === "charge" ? "Consumption" : "Production"),
+                ...legend, ...barStyle, stackOrder: routeIndex + 1
+            }));
         });
-        return [
-            {...charging, ...legend, ...barStyle},
-            {...flowSeries(`${name}: Discharging`, FLOW_COLORS.discharge, intervals, discharge, "Production"), ...legend, ...barStyle},
-            {...state, ...legend}
-        ];
+        return [...bars, {...state, ...legend}];
     });
 }
 

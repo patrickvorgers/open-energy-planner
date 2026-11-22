@@ -14,7 +14,7 @@ from open_energy_planner.contracts.bonus_statistics import (
 )
 from open_energy_planner.history.wire import parse_history
 from open_energy_planner.home_assistant.names import display_plan, energy_source_names
-from open_energy_planner.installation.charge_sources import battery_charge_sources
+from open_energy_planner.installation.battery_flows import battery_flow_attribution
 from open_energy_planner.runtime.diagnostics.http import phase
 from open_energy_planner.runtime.diagnostics.logging import (
     BackgroundLog,
@@ -130,7 +130,7 @@ def initial_plan_view(plan):
                 for field, value in snapshot["problem"].items()
                 if field != "terminal_valuations"
             }
-            result["battery_charging_sources"] = battery_charge_sources(
+            result["battery_flow_attribution"] = battery_flow_attribution(
                 snapshot["problem"], plan.get("expected_flows", ())
             )
         if snapshot.get("tariff_evidence") is not None:

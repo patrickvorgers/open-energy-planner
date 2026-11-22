@@ -24,8 +24,9 @@
             <figure class="chart-card wide scenario-card optimizer-scenario" aria-labelledby="optimizer-heading"><figcaption><h3 id="optimizer-heading">Optimizer</h3><p>Smart energy planning using the original forecast and contract.</p><div id="ems-costs" class="scenario-costs"></div><p id="smart-benefit-period" class="scenario-period" role="status">Select a plan to see expected costs for its displayed period.</p><p id="expected-benefit"></p></figcaption><div class="chart-wrap"><canvas id="plan-chart" role="img" aria-label="Planned energy supply and use with battery state of charge"></canvas></div><div id="plan-chart-legend" class="chart-legend"></div>
                 <details id="battery-plan-panel" class="battery-plan" hidden>
                     <summary>Battery plan</summary>
-                    <p class="muted" id="battery-plan-key">Below zero: Charging. Above zero: Discharging. Lines show the planned state of charge. The tooltip shows the planned breakdown of charging sources.</p>
-                    <div class="chart-wrap"><canvas id="battery-plan-chart" role="img" aria-label="Planned power and state of charge by battery" aria-describedby="battery-plan-key"></canvas></div>
+                    <p class="muted" id="battery-plan-key">Below zero: Charging sources. Above zero: Discharge destinations. Lines show planned state of charge.</p>
+                    <div class="chart-wrap"><canvas id="battery-plan-chart" role="img" aria-label="Planned power and state of charge by battery" aria-describedby="battery-plan-key battery-flow-key"></canvas></div>
+                    <div id="battery-flow-key" class="battery-flow-key"></div>
                     <div id="battery-plan-chart-legend" class="chart-legend"></div>
                 </details>
             </figure>
