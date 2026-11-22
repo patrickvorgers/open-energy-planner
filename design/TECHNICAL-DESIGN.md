@@ -912,7 +912,7 @@ schemas have no migration/conversion path. Test installations are reconfigured
 manually. Supported migration transfers all current-schema OEP tables between
 backends, verifies content and permits restarting with the source unavailable.
 Bootstrap connection settings, access tokens, certificates and technical logs stay
-outside the database. Settlement ingestion and continuous reference/savings use the same active database. Full backup/restore acceptance remains a separate release gate.
+outside the database. Settlement ingestion and measured Savings use the same active database. Full backup/restore acceptance remains a separate release gate.
 
 ### Backend and abstraction
 
@@ -1225,15 +1225,15 @@ The authenticated comparison read adds `scenarios.without_battery` and
 chart projection, or an explicit issue. The savings boundary owns both deterministic
 simulations and reuses the existing dispatch physics. The browser only renders
 signed balances. Replay of legacy reference physics must match retained grid and
-stock outcomes before showing bars. This does not reset continuous reference state
-or call the optimizer. No schema or historical plan rewrite is required.
+stock outcomes before showing bars. This does not call the optimizer or rewrite
+historical plans.
 
 The browser defaults to without-battery comparison and reuses shared balance/chart
 helpers for both references, shown simultaneously. Full-horizon original spot, import and export prices
 come from retained tariff segments, independently of control resolution. Do not
-substitute current/repriced tariffs into explanation charts. The existing evaluated
-Savings view remains explicitly continuous self-consumption. See
-[plan evidence](../docs/development/PLAN-EVIDENCE.md) for scope and valuation policy.
+substitute current/repriced tariffs into explanation charts. The separate Savings
+view uses measured cash estimates. See [plan evidence](../docs/development/PLAN-EVIDENCE.md)
+for the scope and valuation of original plans.
 
 Only the chart renderer projects validated physical series onto UTC quarters.
 Weight powers by covered milliseconds, preserve invalid quarters as gaps and
@@ -1425,20 +1425,18 @@ retain the existing ten-percent axis-height clearance. Visible series and the
 selected time window determine the range for both original plan prices and
 current tariff previews. SoC remains fixed at 0–100%.
 
-### Physical reference and financial settlement separation
+### Measured Savings and planning valuation
 
-Resolve measured load/PV and independent reference stock through `savings/physical.py`
-before financial evaluation. Daily checkpoints keep physical readiness separately
-from financial counters and accepted costs. Missing prices do not erase known
-physical progress. Missing measurements leave unknown stock rather than resetting
-it to actual SoC. Provisional-day replay starts from the preceding daily checkpoint.
-Finalized-day continuation and results remain independent of expired quarter detail.
+`savings/accounting.py` reconstructs grid exchange without the battery from the
+same recorded AC measurements. The worker calculates each provisional local day
+independently. A missing measurement or tariff leaves a gap in both cash totals
+for that quarter. Dated bonus rates and eligibility windows apply to both sides
+without an export volume cap or counter. Finalized reports are immutable and
+remain readable after quarter detail expires.
 
-Future planning comparisons start from their own common measured state, separately
-from this continuous historical reference. Missing historical bonus provenance
-keeps affected evaluated costs unavailable. It cannot grant a fresh simulated
-budget or block an otherwise valid future plan. Retained original expectations
-are never rewritten during daily financial backfill.
+Future planning comparisons start from a common measured state and apply the
+recorded bonus budgets. Missing bonus provenance cannot grant a fresh budget.
+Daily Savings replay preserves original plan expectations.
 
 The native Recorder bridge looks back one hour for historical SoC. Unknown or
 unavailable spans up to one hour require identical valid percentages before and
@@ -1452,7 +1450,7 @@ Later valid intervals continue importing through a validated `scanned_until`
 boundary. The capture cursor records examined time rather than complete coverage.
 After forward capture catches up, missing intervals in unfinalized daily reports
 are retried within the existing recovery window. Original evidence remains
-immutable and unknown simulated stock or bonus usage is never reset.
+immutable.
 An independent recovery cursor rotates acknowledged attempts across gaps and
 provisional days, including empty replies. It is committed atomically with frames
 and the forward cursor and survives restart and database transfer. Recovery

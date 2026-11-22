@@ -119,19 +119,16 @@ is explicitly unavailable. No flow or price curtailment is invented to hide it.
 
 **Battery self-consumption** uses the plan's recorded starting stock and bonus
 budgets for new horizon comparisons. Legacy original comparisons retain their
-recorded reference start. The separate retrospective Savings reference carries
-its own stock and counters across time. Reading charts never resets that state. The no-battery forecast uses
-the plan's recorded initial bonus budgets. It is a horizon comparison, not a new
-continuous lifetime settlement scenario. The Savings screen continues to evaluate
-the established continuous self-consumption reference and labels that policy.
+recorded reference start. The no-battery forecast uses the plan's recorded initial
+bonus budgets. The separate [Savings screen](SAVINGS.md) compares measured cash with
+and without the battery using the same measurements and uncapped bonus estimates.
 
 Both battery charts show expected economic cost and benefit against the same
 without-battery baseline. Optimizer benefit includes storage and smart planning.
 Self-consumption benefit shows storage without price optimization. Their benefits
 are alternatives, not additive. Neither includes investment costs. Inventory changes remain separate from grid cash. Original costs are used
-for both graphs. Corrected cost evaluations remain separately available for the
-continuous self-consumption reference. Do not silently mix original and corrected
-reference/EMS costs.
+for both graphs. Corrected plan valuations remain separate from original
+reference and EMS costs.
 
 These reference results are computed in the app from frozen inputs without solver
 calls. Original saved self-consumption outcomes/costs are preserved. Physical bars

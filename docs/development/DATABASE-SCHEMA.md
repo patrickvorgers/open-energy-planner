@@ -1426,7 +1426,7 @@ New plans retain `reference_forecast.reference_start.status` as
 `measured_common_start`, `stored` as null, empty `counters` and `estimated` false.
 Null stock means use the measured battery `initial_kwh` in the same plan, not
 unknown or zero energy. Both strategies also use the plan's opening bonus budgets.
-The forecast does not read or reset the continuous historical settlement checkpoint.
+The forecast uses its own frozen inputs independently of the Savings history.
 Legacy archived starts and their outcomes remain unchanged and replayable.
 
 New `reference_forecast.reference` interval JSON can include deterministic

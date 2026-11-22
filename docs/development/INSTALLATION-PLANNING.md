@@ -247,7 +247,7 @@ added.
   retrieval uses the existing app composition (`--market-area`). Tests substitute
   only external normalized prices/weather, never the physical installation basis.
 - Learned-model promotion requires independent chronological decision evidence.
-  [Both strategies](CONSUMPTION-STRATEGY.md) and [continuous reference/savings](SAVINGS.md)
+  [Both strategies](CONSUMPTION-STRATEGY.md) and [measured savings](SAVINGS.md)
   use the configured installation. [Automatic bounded-average terminal valuation](TERMINAL-VALUATION.md)
   remains separate from grid cash and wear and retains method/window/rate/volume evidence.
   These calculations do not establish forecast superiority or complete release admission.

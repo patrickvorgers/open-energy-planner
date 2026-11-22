@@ -424,7 +424,7 @@ Open proposal: shared timeline for prices, flows, SoC and modes with selected-pe
 - STORAGE-08: Store only compact measurements needed for visualization/learning/savings, not all HA sensor history. Ingest from HA but do not rely on indefinite HA retention. Specify minimal sets/resolution.
 - STORAGE-09: Distinguish measured energy, estimated available curtailed PV, calculated wear and simulated reference. Keep separate import/export per applicable billing interval. Net daily totals/power samples are insufficient. Respect bonus windows/meter boundaries. Derived series retain provenance/quality. Gaps are not zero.
 - STORAGE-10: Select data needed for benefit calculations and forecast evaluation at ingestion. Temporary settlement quarters and detailed historical plan projections may expire only after a verified finalized daily report and continuation are committed. Preserve separate control ownership for Forecast Quality. Do not archive every raw HA sample/log.
-- STORAGE-11: Retain the chronological quarter-hour evidence needed during provisional-day recovery. Permanently preserve compact daily energy, costs, missing/estimated coverage, configuration/method provenance and independent cash counters. Preserve battery stock/value endpoints in legacy reports without requiring them in new measured-cash reports. Finalized reports must remain readable without full old plans or indefinite HA retention.
+- STORAGE-11: Retain the chronological quarter-hour evidence needed during provisional-day recovery. Permanently preserve compact daily energy, costs, missing/estimated coverage and configuration/method provenance. Preserve independent counters and battery stock/value endpoints where the original policy used them. Finalized reports must remain readable without full old plans or indefinite HA retention.
 - STORAGE-12: Recover missing grid volumes from fine HA history where possible. Usable hourly totals may be distributed linearly to quarters as explicitly marked estimates, not exact measurements. Preserve separate directions/boundaries/hour sums. Avoid duplicating measured volume. With partial quarters distribute only a consistent residual across gaps. Report conflicts. Costs retain estimated quality.
 - STORAGE-13: Preserve exact content and hashes of retained original plans. Permanently retain finalized daily scenario outcomes, coverage, monetary/energy breakdowns and any financial continuation used by the original policy. Preserve physical continuation in legacy simulation archives. Current measured Savings estimates use dated bonus rates and eligibility windows without the export volume cap, disclose that basis, and need no bonus counter or battery trajectory. Full historical quarter replay is supported only while temporary evidence remains. Daily totals cannot reconstruct intentionally expired originals. See STORAGE-16.
 - STORAGE-14: Never rewrite original measurements or immutable rule/configuration versions. Provisional daily reports may be recalculated with current validated prices and corrections until closure. Finalized reports preserve their calculation/evidence versions and cannot be silently changed by later corrections.
@@ -544,7 +544,7 @@ legend and size changes. SoC remains on its own fixed percentage axis.
 UI-20 also requires two expected reference balances: default without battery versus
 OEP, and future battery self-consumption beside OEP. Both future battery
 scenarios start from the same measured stock and opening bonus budgets. Keep the
-separate continuous historical evaluated-savings policy unchanged and explicitly labelled.
+measured Savings comparison separate and disclose its uncapped basis.
 Use identical frozen external forecasts, physical converter limits and original
 price inputs. Show the reference above the optimized balance and the factual
 explanation below. Available solar/household forecasts and spot-market, import and
@@ -558,7 +558,7 @@ connection limits and physical device bounds. Insufficient comparable service
 makes the monetary comparison unavailable. Freeze this reference policy in each
 new plan and retain older archived expectations unchanged. No-battery expected
 benefit includes storage and load optimization, excludes investment, and uses
-the plan's recorded bonus budget. It is not continuous historical savings.
+the plan's recorded bonus budget. Measured Savings uses the basis in STORAGE-13.
 
 The planning page shows all three scenario balances without a comparison selector. Costs remain beside each scenario. Planned commands, inputs and selected-interval values belong under Understand this plan, with keyboard access. Avoid duplicate whole-horizon tables and technical forecast-version labels in the user view. Preserve original archival metadata and separate financial valuations.
 Each graph identifies its original expected economic cost, net grid cash, wear and
@@ -745,21 +745,11 @@ See [EV charging](../docs/development/EV-CHARGING.md) for the implemented comman
 
 ### Measured cash availability
 
-Savings needs recorded AC energy and published prices, not historical SoC,
-forecast models or a simulated dispatch. Missing quarters reduce matching coverage
-without blocking later valid quarters. Unknown bonus allowance stays unknown
-until independent evidence or a contractual reset establishes it. Legacy
-simulation history remains available as its original policy.
-
-Historical bonus-budget recovery must be automatic for captured settlement
-intervals. All configured physical export meters contribute to one used volume.
-A later confirmed seed must support older intervals through contiguous measured,
-reset-aware export evidence. It must never require resetting the independent
-battery reference or changing that confirmation. Missing older periods must be
-requested from native HA history using their own contractual reset dates.
-Changed meter membership, incomplete coverage and inconsistent anchors remain
-unknown. Historical recovery must preserve configuration, original plans,
-measurements and current planning confirmations on every database backend.
+Savings needs recorded AC energy, published prices and dated contract rules.
+Missing quarters reduce matching coverage without blocking later valid quarters.
+Unknown bonus allowance does not affect the uncapped Savings estimates. Preserve
+earlier finalized results and their recorded basis in the archive. Planning and
+plan valuation use their separately recorded bonus budgets.
 
 
 ### Central bonus opening and one-time setup
