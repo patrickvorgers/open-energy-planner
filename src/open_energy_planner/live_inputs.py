@@ -24,6 +24,7 @@ from .planning_policy import FINE_INTERVAL_MINUTES
 
 REPLAN_BOUNDARY_MINUTES = 5
 BOUNDARY_START_WINDOW = timedelta(minutes=1)
+EXPIRED_ROUND_REASONS = ("stale_input", "input_expired_during_solve", "publication_inputs_expired")
 GRID_DEVIATION_W = 1000
 BATTERY_DEVIATION_FRACTION = 0.05
 THERMAL_DEVIATION_C = 2
@@ -146,7 +147,10 @@ class LiveInputs:
             )
             while (now := self.clock()) < boundary:
                 await sleep((boundary - now).total_seconds())
-            if _clock_boundary(now, FINE_INTERVAL_MINUTES) >= boundary:
+            if (
+                _clock_boundary(now, FINE_INTERVAL_MINUTES) >= boundary
+                or self.planner.reason in EXPIRED_ROUND_REASONS
+            ):
                 self.replan_requested = True
             boundary = _clock_boundary(now, REPLAN_BOUNDARY_MINUTES)
             if not self.replan_requested or self.planner.busy:

@@ -703,7 +703,12 @@ def test_live_clock_runs_quarters_and_keeps_pending_updates_through_busy_boundar
             if len(starts) == 1:
                 started.set()
                 await release.wait()
-            return SimpleNamespace(document=None, reason="test_no_plan")
+            reason = (
+                "input_expired_during_solve"
+                if clock[0] == NOW + timedelta(minutes=35)
+                else "test_no_plan"
+            )
+            return SimpleNamespace(document=None, reason=reason)
 
         async def publish(_document):
             raise AssertionError("No plan was produced")
@@ -770,7 +775,11 @@ def test_live_clock_runs_quarters_and_keeps_pending_updates_through_busy_boundar
             await tick(600)
             await planner.wait()
             assert len(starts) == 2
-            assert starts[-1][0] == NOW + timedelta(minutes=10 if overrun else 5)
+            assert starts[-1] == (
+                NOW + timedelta(minutes=10 if overrun else 5),
+                NOW + timedelta(seconds=599 if overrun else 299),
+                "latest-update",
+            )
             price[0] = "quarter-update"
             receive(899)
             await tick(900)
@@ -792,6 +801,15 @@ def test_live_clock_runs_quarters_and_keeps_pending_updates_through_busy_boundar
             await tick(2100)
             await planner.wait()
             assert starts[-1][0] == NOW + timedelta(minutes=35)
+            assert planner.reason == "input_expired_during_solve"
+            receive(2399)
+            await tick(2400)
+            await planner.wait()
+            assert starts[-1] == (
+                NOW + timedelta(minutes=40),
+                NOW + timedelta(seconds=2399),
+                "quarter-update",
+            )
         finally:
             release.set()
             schedule.cancel()
