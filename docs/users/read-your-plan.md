@@ -52,7 +52,9 @@ Open **Battery plan** under **Optimizer** to compare the batteries in the select
 
 The chart starts collapsed and follows the Planning time selection. Use the legend to hide or show an individual battery. The tooltip shows power and the recorded state of charge at the start of the interval when that state is available. Plans without batteries omit the chart.
 
-The tooltip also breaks charging down by source. The plan assigns local **PV DC** first, then **PV AC** from the shared AC bus, then **Grid**. When batteries share a source, it is divided in proportion to their charging demand. This is a breakdown of planned flows. Any remaining charging power is shown as **Other or unassigned**.
+The tooltip also breaks charging down by source. OEP attributes planned charging to local **PV DC** first, then **PV AC** from the shared AC bus, then **Grid**. When batteries share a source, it is divided in proportion to their charging demand. Any remaining charging power is shown as **Other or unassigned**.
+
+You can also read the source breakdown in kWh under **Understand this plan**. Open **Selected interval details**, select an interval, and open **Energy balance and source details**.
 
 ### Solar AC, Solar DC and conversion losses
 

@@ -62,8 +62,11 @@ def _interval_sources(flow, inverter_rows, topology):
     for identity, (local_batteries, local_solar) in topology.items():
         efficiency = _efficiency(inverter_rows[identity]["efficiency"])
         inverter = inverters[identity]
-        charging = [(device, _nonnegative(batteries[device]), dc) for device, dc in local_batteries]
-        demand_dc = sum(amount / dc for _, amount, dc in charging)
+        charging = [
+            (device, _nonnegative(batteries[device]), dc_efficiency)
+            for device, dc_efficiency in local_batteries
+        ]
+        demand_dc = sum(amount / dc_efficiency for _, amount, dc_efficiency in charging)
         solar_dc = sum(_nonnegative(solar[source]) for source in local_solar)
         direct = min(demand_dc, solar_dc)
         solar_ac += min(_nonnegative(inverter["export_kwh"]), (solar_dc - direct) * efficiency)

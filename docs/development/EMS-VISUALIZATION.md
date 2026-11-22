@@ -44,6 +44,8 @@ proportionally, with inverter and battery DC conversion losses applied at their
 own boundaries. Attribution is expressed in kWh at each battery's terminals.
 Unsupported or unassigned energy remains explicit. Tooltip power averages the
 attribution over the same covered portion of a quarter as its charge bar.
+The keyboard-operated interval inspector lists the same source attribution in kWh
+for the selected original interval.
 
 ## Signed interval balances
 

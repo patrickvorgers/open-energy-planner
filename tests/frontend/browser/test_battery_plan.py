@@ -87,7 +87,7 @@ def test_optimizer_battery_plan_shares_the_window_and_groups_each_battery(app_pa
         const rect = element.getBoundingClientRect();
         const index = chart.data.datasets[0].data.findIndex(point => point.chargingSources?.pv_dc > 0.1);
         const bar = chart.getDatasetMeta(0).data[index];
-        return {x: rect.x + bar.x, y: rect.y + (bar.y + bar.base) / 2};
+        return {x: rect.x + bar.x, y: rect.y + (bar.y + bar.base) / 2, index};
     }""")
     if width < 500:
         page.touchscreen.tap(point["x"], point["y"])
@@ -126,3 +126,22 @@ def test_optimizer_battery_plan_shares_the_window_and_groups_each_battery(app_pa
     expect(canvas).to_be_hidden()
     summary.click()
     expect(garage).not_to_be_checked()
+
+    if width == 1440:
+        evidence = page.locator("#plan-evidence-panel > summary")
+        evidence.press("Enter")
+        page.locator("#interval-evidence-panel > summary").press("Enter")
+        inspector = page.get_by_role("slider", name="Inspect planning time")
+        inspector.press("Home")
+        # The captured PV example is within the first day of original quarter hours.
+        for _ in range(point["index"]):
+            inspector.press("ArrowRight")
+        page.get_by_text("Energy balance and source details", exact=True).press("Enter")
+        sources = page.locator("#inspect-values article").filter(
+            has=page.get_by_role("heading", name="Example home battery: Charging sources")
+        )
+        expect(sources.get_by_text("PV DC", exact=True)).to_be_visible()
+        expect(sources.get_by_text("0.375 kWh", exact=True)).to_be_visible()
+        sources.screenshot(path=str(images / "charging-sources-inspector.png"))
+        inspector.press("Home")
+        expect(sources.get_by_text("PV DC", exact=True)).to_have_count(0)

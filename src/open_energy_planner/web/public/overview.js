@@ -65,7 +65,7 @@ const CHARGING_SOURCES = [
     ["grid", "Grid", FLOW_COLORS.import],
     ["other", "Other or unassigned", null]
 ];
-const CHARGING_SOURCE_DISPLAY_MIN_KW = 0.0005;
+const CHARGING_SOURCE_DISPLAY_MIN = 0.0005;
 const TOOLTIP_VIEWPORT_MARGIN_PX = 12;
 const MILLISECONDS_PER_MINUTE = 60000;
 const MILLISECONDS_PER_HOUR = 60 * MILLISECONDS_PER_MINUTE;
@@ -183,7 +183,7 @@ function renderTooltip({chart: instance, tooltip}, node, balance = false, balanc
             swatch.classList.toggle("series-swatch-expected", item.dataset.deviceState === "expected");
             label.append(swatch, document.createTextNode(item.dataset.label));
             if (batteryPlan && item.raw?.chargingSources) {
-                const sources = CHARGING_SOURCES.filter(([source]) => item.raw.chargingSources[source] >= CHARGING_SOURCE_DISPLAY_MIN_KW);
+                const sources = CHARGING_SOURCES.filter(([source]) => item.raw.chargingSources[source] >= CHARGING_SOURCE_DISPLAY_MIN);
                 if (sources.length) {
                     const detail = document.createElement("div");
                     detail.className = "charging-source-detail";
@@ -712,7 +712,7 @@ function renderIntervalValues(step, evidence) {
     const period = parent.querySelector(".interval-values-period");
     period.hidden = Boolean(evidence); period.textContent = `From ${when(step.start)} to ${when(step.end)}`;
     evidenceCards(values, evidence?.cards?.length ? [...evidence.cards, ...step.applianceValues] : step.values);
-    evidenceCards(parent.querySelector("details > .evidence-grid"), [step.priceSource, ...step.balances]);
+    evidenceCards(parent.querySelector("details > .evidence-grid"), [step.priceSource, ...step.chargingSourceValues, ...step.balances]);
 }
 /** Explain exact interval advice with keyboard/touch access independent of canvas tooltips. */
 function inspect() {
@@ -1073,7 +1073,7 @@ async function showPlan(signal, background = false) {
             const originalDemand = householdForecastEnergy(plan, prices);
             add(demandForecast, prices.duration_h > 0 && originalDemand != null ? originalDemand / prices.duration_h : null);
             add(solarForecast, prices.duration_h > 0 && typeof prices.pv_kwh === "number" ? prices.pv_kwh / prices.duration_h : null);
-            const commands = [], deviceValues = [], applianceValues = [];
+            const commands = [], deviceValues = [], applianceValues = [], chargingSourceValues = [];
             for (const task of plan.appliance_schedule || []) {
                 const energy = task.interval_kwh[i];
                 if (energy > 0) {
@@ -1089,7 +1089,10 @@ async function showPlan(signal, background = false) {
                 commands.push(`${name}: ${text}: Stored: ${number(battery.end_kwh)} kWh`);
                 const inverter = identities.find((unit) => unit.device_id === battery.device_id)?.inverter_id;
                 deviceValues.push(intervalCard(name, [["Control", text], ["Stored energy", battery.end_kwh, "kWh"]], inverterGroups.get(inverter)));
-
+                const charging = plan.battery_charging_sources?.[i]?.[battery.device_id];
+                const sources = CHARGING_SOURCES.filter(([source]) => charging?.[source] >= CHARGING_SOURCE_DISPLAY_MIN)
+                    .map(([source, label]) => [label, charging[source], "kWh"]);
+                if (sources.length) chargingSourceValues.push(intervalCard(`${name}: Charging sources`, sources));
             }
             for (const [index, [source]] of (step.pv_sources || []).entries()) {
                 const enabled = command?.devices?.[source]?.enabled;
@@ -1106,7 +1109,7 @@ async function showPlan(signal, background = false) {
                     intervalCard("Electricity rates", [["Import", prices.buy_price, `${currency}/kWh`], ["Export", prices.sell_price, `${currency}/kWh`]]),
                     ...applianceValues, ...deviceValues
                 ],
-                applianceValues,
+                applianceValues, chargingSourceValues,
                 priceSource: intervalCard("Price source", [["Market rate", tariff ? optionLabel(tariff.price_kind || "unknown") : null], ["Native resolution", tariff?.native_resolution_minutes, "minutes"]]),
                 balances: []});
         });
