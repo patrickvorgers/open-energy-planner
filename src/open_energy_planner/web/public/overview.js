@@ -3,7 +3,7 @@ import {createSavingsView} from "./savings-view.js";
 import {updateCharts} from "./chart_theme.js";
 import {calendarDays, calendarTime, calendarDayStart} from "./chart_days.js";
 import {money, configuredRate, when, dateLabel, localDate, localInstant, nextDate, percentage, optionLabel, planName, useHomeAssistantTimezone, watchSourceNames} from "./display.js";
-import {batteryPlanSeries, energyBalances, householdForecastEnergy, quarterBalanceSeries, balancePeriodEnergy, FLOW_COLORS, QUARTER_MILLISECONDS} from "./balance.js";
+import {BATTERY_FLOW_GROUPS, batteryPlanSeries, batteryRouteValues, energyBalances, householdForecastEnergy, quarterBalanceSeries, balancePeriodEnergy, QUARTER_MILLISECONDS} from "./balance.js";
 import {bindSettingsActions, sessionResponse} from "./settings-actions.js";
 bindSettingsActions();
 const $ = (id) => document.getElementById(id);
@@ -59,13 +59,7 @@ const DEVICE_ROUNDING_TOLERANCE_KW = DEVICE_ROUNDING_KW * Number.EPSILON;
 const hiddenPriceSeries = new Set();
 const palette = ["#078b80", "#e49b38", "#5d70bc", "#d56788", "#399bc1", "#8a65ad"];
 const INTERVAL_BAR_FILL = 0.9;
-const CHARGING_SOURCES = [
-    ["pv_dc", "PV DC", FLOW_COLORS.solar],
-    ["pv_ac", "PV AC", FLOW_COLORS.solarAC],
-    ["grid", "Grid", FLOW_COLORS.import],
-    ["other", "Other or unassigned", null]
-];
-const CHARGING_SOURCE_DISPLAY_MIN = 0.0005;
+const BATTERY_FLOW_DISPLAY_MIN = 0.0005;
 const TOOLTIP_VIEWPORT_MARGIN_PX = 12;
 const MILLISECONDS_PER_MINUTE = 60000;
 const MILLISECONDS_PER_HOUR = 60 * MILLISECONDS_PER_MINUTE;
@@ -162,6 +156,7 @@ function renderTooltip({chart: instance, tooltip}, node, balance = false, balanc
             if (point && !items.some(item => item.dataset === dataset)) items.push({dataset: {...dataset, label: `${dataset.label} at start`}, parsed: point});
         });
     }
+    if (batteryPlan) items = items.filter(item => item.dataset.type !== "bar" || Math.abs(item.parsed.y) >= BATTERY_FLOW_DISPLAY_MIN);
     // Totals retain original flows even when the legend or display threshold hides a series.
     const totalItems = interval && !batteryPlan ? instance.data.datasets.filter(dataset => dataset.type === "bar").map(dataset => {
         const point = dataset.data.find(point => point.start === interval.raw.start && point.end === interval.raw.end);
@@ -182,26 +177,6 @@ function renderTooltip({chart: instance, tooltip}, node, balance = false, balanc
             const swatch = document.createElement("span"); swatch.className = "series-swatch"; swatch.style.backgroundColor = item.dataset.swatchColor || item.dataset.backgroundColor;
             swatch.classList.toggle("series-swatch-expected", item.dataset.deviceState === "expected");
             label.append(swatch, document.createTextNode(item.dataset.label));
-            if (batteryPlan && item.raw?.chargingSources) {
-                const sources = CHARGING_SOURCES.filter(([source]) => item.raw.chargingSources[source] >= CHARGING_SOURCE_DISPLAY_MIN);
-                if (sources.length) {
-                    const detail = document.createElement("div");
-                    detail.className = "charging-source-detail";
-                    for (const [source, name, color] of sources) {
-                        const entry = document.createElement("span");
-                        if (color) {
-                            const mark = document.createElement("span");
-                            mark.className = "series-swatch";
-                            mark.style.backgroundColor = color;
-                            mark.setAttribute("aria-hidden", "true");
-                            entry.append(mark);
-                        }
-                        entry.append(`${name}: ${number(item.raw.chargingSources[source])} kW`);
-                        detail.append(entry);
-                    }
-                    label.append(detail);
-                }
-            }
             value.className = "chart-tooltip-value";
             value.textContent = valueText(item.parsed.y, item.dataset.unit);
             unit.className = "chart-tooltip-unit"; unit.textContent = item.dataset.unit;
@@ -463,9 +438,9 @@ function chart(id, series, {utcDays = false, calendarDates = false, unit = "", m
             if (values.length) values.push({x: segment[0][0], y: null});
             values.push(...segment.map(([x, y, priceKind]) => ({x, y, priceKind})));
         }
-        if (s.intervals) values.push(...s.intervals.map(({start, end, value, coveredStart, coveredEnd, chargingSources}) => ({x: (start + end) / 2, y: value, start, end, coveredStart, coveredEnd, chargingSources})));
+        if (s.intervals) values.push(...s.intervals.map(({start, end, value, coveredStart, coveredEnd}) => ({x: (start + end) / 2, y: value, start, end, coveredStart, coveredEnd})));
         const color = s.color || palette[index % palette.length];
-        return {label: s.name, data: values, hidden: id === "price-chart" && hiddenPriceSeries.has(s.name), type: s.type || "line", stack: s.stack, yAxisID: s.axis || "y", unit: s.unit || unit, tooltipGroup: s.tooltipGroup, deviceState: s.deviceState, swatchColor: color, borderColor: s.outlineColor || color, backgroundColor: deviceFill(color, s.deviceState), borderWidth: s.outlineColor ? {top: 1, bottom: 1} : s.type === "bar" ? 0 : 2, borderSkipped: s.outlineColor ? false : undefined, borderDash: s.reference ? [6, 4] : [], segment: {borderDash: ({p0}) => p0.raw.priceKind === "forecast" ? FORECAST_PRICE_DASH : undefined}, pointRadius: 0, pointHitRadius: 10, spanGaps: false, order: s.axis === "soc" ? 0 : 1};
+        return {label: s.name, data: values, hidden: id === "price-chart" && hiddenPriceSeries.has(s.name), type: s.type || "line", stack: s.stack, yAxisID: s.axis || "y", unit: s.unit || unit, tooltipGroup: s.tooltipGroup, deviceState: s.deviceState, swatchColor: color, borderColor: s.outlineColor || color, backgroundColor: deviceFill(color, s.deviceState), borderWidth: s.outlineColor ? ({raw}) => raw?.y ? {top: 1, bottom: 1} : 0 : s.type === "bar" ? 0 : 2, borderSkipped: s.outlineColor ? false : undefined, borderDash: s.reference ? [6, 4] : [], segment: {borderDash: ({p0}) => p0.raw.priceKind === "forecast" ? FORECAST_PRICE_DASH : undefined}, pointRadius: 0, pointHitRadius: 10, spanGaps: false, order: s.axis === "soc" ? 0 : s.stackOrder ?? 1};
     });
     const result = new Chart(canvas, {
         type: "line", data: {datasets: planningLegend ? [] : datasets}, plugins: [intervalWidths, ...(id === "price-chart" ? [dailyPriceExtremes] : []), ...(calendarDates ? [] : [calendarDays]), {
@@ -712,7 +687,7 @@ function renderIntervalValues(step, evidence) {
     const period = parent.querySelector(".interval-values-period");
     period.hidden = Boolean(evidence); period.textContent = `From ${when(step.start)} to ${when(step.end)}`;
     evidenceCards(values, evidence?.cards?.length ? [...evidence.cards, ...step.applianceValues] : step.values);
-    evidenceCards(parent.querySelector("details > .evidence-grid"), [step.priceSource, ...step.chargingSourceValues, ...step.balances]);
+    evidenceCards(parent.querySelector("details > .evidence-grid"), [step.priceSource, ...step.batteryFlowValues, ...step.balances]);
 }
 /** Explain exact interval advice with keyboard/touch access independent of canvas tooltips. */
 function inspect() {
@@ -853,6 +828,21 @@ batteryPlanPanel.addEventListener("toggle", () => {
         if (tooltip) tooltip.hidden = true;
     }
 });
+
+for (const {title, routes} of BATTERY_FLOW_GROUPS) {
+    const key = document.createElement("div"), heading = document.createElement("strong");
+    heading.textContent = title;
+    key.append(heading);
+    for (const [, label, color] of routes) {
+        const item = document.createElement("span"), swatch = document.createElement("i");
+        swatch.className = "series-swatch";
+        swatch.style.backgroundColor = color;
+        swatch.setAttribute("aria-hidden", "true");
+        item.append(swatch, document.createTextNode(label));
+        key.append(item);
+    }
+    $("battery-flow-key").append(key);
+}
 
 /** Clear supplementary values as soon as a different original plan is displayed. */
 function clearPlanComparisons() {
@@ -1073,7 +1063,7 @@ async function showPlan(signal, background = false) {
             const originalDemand = householdForecastEnergy(plan, prices);
             add(demandForecast, prices.duration_h > 0 && originalDemand != null ? originalDemand / prices.duration_h : null);
             add(solarForecast, prices.duration_h > 0 && typeof prices.pv_kwh === "number" ? prices.pv_kwh / prices.duration_h : null);
-            const commands = [], deviceValues = [], applianceValues = [], chargingSourceValues = [];
+            const commands = [], deviceValues = [], applianceValues = [], batteryFlowValues = [];
             for (const task of plan.appliance_schedule || []) {
                 const energy = task.interval_kwh[i];
                 if (energy > 0) {
@@ -1089,10 +1079,13 @@ async function showPlan(signal, background = false) {
                 commands.push(`${name}: ${text}: Stored: ${number(battery.end_kwh)} kWh`);
                 const inverter = identities.find((unit) => unit.device_id === battery.device_id)?.inverter_id;
                 deviceValues.push(intervalCard(name, [["Control", text], ["Stored energy", battery.end_kwh, "kWh"]], inverterGroups.get(inverter)));
-                const charging = plan.battery_charging_sources?.[i]?.[battery.device_id];
-                const sources = CHARGING_SOURCES.filter(([source]) => charging?.[source] >= CHARGING_SOURCE_DISPLAY_MIN)
-                    .map(([source, label]) => [label, charging[source], "kWh"]);
-                if (sources.length) chargingSourceValues.push(intervalCard(`${name}: Charging sources`, sources));
+                const attribution = plan.battery_flow_attribution?.[i]?.[battery.device_id];
+                for (const {key, title, routes} of BATTERY_FLOW_GROUPS) {
+                    const values = batteryRouteValues(battery, attribution, key);
+                    const facts = routes.filter(([route]) => values?.[route] >= BATTERY_FLOW_DISPLAY_MIN)
+                        .map(([route, label]) => [label, values[route], "kWh"]);
+                    if (facts.length) batteryFlowValues.push(intervalCard(`${name}: ${title}`, facts));
+                }
             }
             for (const [index, [source]] of (step.pv_sources || []).entries()) {
                 const enabled = command?.devices?.[source]?.enabled;
@@ -1109,7 +1102,7 @@ async function showPlan(signal, background = false) {
                     intervalCard("Electricity rates", [["Import", prices.buy_price, `${currency}/kWh`], ["Export", prices.sell_price, `${currency}/kWh`]]),
                     ...applianceValues, ...deviceValues
                 ],
-                applianceValues, chargingSourceValues,
+                applianceValues, batteryFlowValues,
                 priceSource: intervalCard("Price source", [["Market rate", tariff ? optionLabel(tariff.price_kind || "unknown") : null], ["Native resolution", tariff?.native_resolution_minutes, "minutes"]]),
                 balances: []});
         });

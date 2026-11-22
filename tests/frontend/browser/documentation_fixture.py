@@ -50,6 +50,11 @@ def _validated_example(two_batteries=False):
         solar_kw = 4 * max(0, sin(pi * (hour - 7) / 10)) if 7 < hour < 17 else 0
         load_kw = 2.2 if 7 <= hour < 9 else 2.7 if 17 <= hour < 21 else 0.45
         market = 0.32 if 17 <= hour < 21 else 0.02 if hour < 6 else 0.08
+        sources = (("roof", solar_kw * hours),)
+        if two_batteries:
+            sources = (("roof", solar_kw * hours * 0.6), ("shed", solar_kw * hours * 0.4))
+            if 17 <= hour < 21:
+                load_kw = 1.35
         intervals.append(
             Interval(
                 start,
@@ -58,7 +63,7 @@ def _validated_example(two_batteries=False):
                 market,
                 load_kw * hours,
                 solar_kw * hours,
-                pv_sources=(("roof", solar_kw * hours),),
+                pv_sources=sources,
             )
         )
         tariffs.append(
@@ -77,16 +82,20 @@ def _validated_example(two_batteries=False):
             )
         )
     batteries = (BatteryState("battery", "hybrid", Battery(10, 4, 1, 3000, 3000, 0.95, 0.95)),)
+    inverters = (SolarInverter("hybrid", 5000, 0.96, True),)
+    pv_units = (PVUnit("roof", "hybrid", False),)
     if two_batteries:
         batteries = (
             BatteryState("battery", "hybrid", Battery(10, 4, 1, 1500, 1500, 0.95, 0.95)),
             BatteryState("battery-2", "hybrid", Battery(8, 5, 1, 1500, 1500, 0.95, 0.95)),
         )
+        inverters += (SolarInverter("solar", 2000, 0.96, False),)
+        pv_units += (PVUnit("shed", "solar", False),)
     problem = InstallationProblem(
         tuple(intervals),
-        (SolarInverter("hybrid", 5000, 0.96, True),),
+        inverters,
         batteries,
-        (PVUnit("roof", "hybrid", False),),
+        pv_units,
         6000,
         6000,
         terminal_valuations=tuple(
@@ -120,6 +129,7 @@ def _validated_example(two_batteries=False):
     names = {"battery": "Example home battery", "roof": "Example south roof"}
     if two_batteries:
         names["battery-2"] = "Example garage battery"
+        names["shed"] = "Example shed roof"
     document.update(
         currency="EUR",
         market_area="NL",
