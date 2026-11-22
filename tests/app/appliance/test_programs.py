@@ -176,8 +176,8 @@ def test_hand_start_uses_only_profiles_available_at_readiness(service):
     assert restore_profile(run["profile"]) == restore_profile(accepted["profile"])
 
 
-def test_program_http_errors_keep_their_owned_explanations(service):
-    """Expected profile failures keep their actionable messages across the HTTP boundary."""
+def test_program_http_errors_and_planning_requests(service):
+    """Keep actionable profile errors and distinguish settings from readiness signals."""
     from aiohttp import web
     from aiohttp.test_utils import TestClient, TestServer
 
@@ -189,8 +189,11 @@ def test_program_http_errors_keep_their_owned_explanations(service):
     async def scenario():
         """Use the real route admission and repository while observing only its public response."""
 
-        async def refresh_async(**_):
-            """Accept the planning contract without starting a calculation in this test."""
+        refreshes = []
+
+        async def refresh_async(*, force=False):
+            """Record whether a successful operation requested the idle fast path."""
+            refreshes.append(force)
 
         app = web.Application()
         events = Events(ActivityStore(service.documents.engine))
@@ -232,8 +235,21 @@ def test_program_http_errors_keep_their_owned_explanations(service):
             )
             assert response.status == 400
             assert await response.text() == "Additional profile learning must be boolean"
+            assert refreshes == []
+            response = await client.post(
+                "/v1/appliances/manual_profile",
+                json={
+                    "entity_id": ENTITY,
+                    "duration_minutes": 95,
+                    "energy_kwh": 0.7,
+                    "expected_version": service.revision,
+                },
+            )
+            assert response.status == 200
+            assert refreshes == [True]
             response = await client.post(endpoint, json={**ready, "program": "default"})
             assert response.status == 200
+            assert refreshes == [True, False]
             response = await client.post(endpoint, json=ready)
             assert response.status == 400
             assert (

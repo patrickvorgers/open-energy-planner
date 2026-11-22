@@ -478,7 +478,7 @@ def create_app(
         Contract-related writes activate contract inputs. Unrelated settings must
         pass contract_input=False to retain the existing future-input adapter.
         Explicit contract writes also wake the price owner to admit a newly configured area.
-        Background evidence writes use the normal scheduling limit with force_replan=False.
+        Background evidence writes use the next planning boundary with force_replan=False.
         """
         cancellation = await complete_write(save, candidate)
         if install is not None:
@@ -907,10 +907,15 @@ def create_app(
             planner.submit(capture())
 
     async def cleanup(app):
-        """Drain planning before outer resources and lifecycle completion, including failed startup."""
+        """Own the live clock and drain planning before outer resources close."""
+        schedule = asyncio.create_task(live.run(lock)) if live else None
         try:
             yield
         finally:
+            if schedule:
+                schedule.cancel()
+                with suppress(asyncio.CancelledError):
+                    await schedule
             await planner.close()
 
     async def replan(request):
@@ -988,7 +993,6 @@ def create_app(
                             cancellation = await complete_write(installation.observe, report)
                         if installation.calibration.command_revision != previous_progress:
                             live.invalidate("battery_calibration_changed")
-                            live.last_submission = None
                     demand.set_weather_location(report.location)
                     await live.receive_async(report)
                     if cancellation is not None:

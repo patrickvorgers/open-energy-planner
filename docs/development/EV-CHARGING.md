@@ -314,18 +314,16 @@ Live work reserves up to 130 seconds for calculation and handover, derived from 
 125-second worker deadline plus five seconds for HA. The worker deadline includes
 the shared 120-second solver budget plus five seconds for process overhead.
 When departure is sooner, readiness is clamped to one microsecond before departure.
-A late result cannot publish after its first usable segment. New ordinary valid SoC readings wait for
-the next throttled round. Settings, session, identity, departure and measurement
-availability changes block publication. New SoC also blocks a candidate exceeding
-physical capacity. The first prepared snapshot with usable charging work for
-a new physical connection can request a round immediately when additional
-energy is needed and its charging window overlaps the prepared horizon. Admission consumes
-this exception once per charge point and connection nonce. Further changes on
-that connection follow the ordinary quarter and five-minute cadence, including
-recovery of temporarily unavailable EV work while the installation remains ready.
-A new submission coalesces with other pending inputs if a solver is already
-running. If the queued snapshot expires before solving, the next fresh capture
-can still use the connection's immediate admission.
+A late result cannot publish after its first usable segment. New ordinary valid
+SoC readings are used in the next eligible round. Settings, session, identity,
+departure and measurement availability changes block publication. New SoC also
+blocks a candidate exceeding physical capacity. The first prepared snapshot
+with usable charging work for a new physical connection requests a round when
+additional energy is needed and its charging window overlaps the horizon. The
+request waits for the next eligible five-minute boundary and uses a fresh
+snapshot. The first ready installation plan and explicit configuration
+requests can start immediately when idle. When a solve is in progress, usable
+charging work is grouped with other pending requests for a later boundary.
 
 Independent validation checks identity, timing, no discharge, physical power,
 AC energy, conversion, target bounds and bus conservation. Original plans retain
@@ -348,7 +346,8 @@ unavailable permission/power. Choose immediate idempotent actions, never queued
 delayed starts. Relevant capacities and limits have separate native sensors.
 The blueprint also rejects permission and power entities from different virtual
 points. A five-percentage-point vehicle SoC deviation from the published trajectory
-requests a new round behind the normal five-minute throttle.
+requests a round at the next five-minute clock boundary. Newly usable charging
+work for a physical connection follows the same cadence.
 
 The balance chart includes EV AC consumption and predicted vehicle SoC. Charging
 losses are already in AC intake, not added as stationary converter losses. For new versioned Planning

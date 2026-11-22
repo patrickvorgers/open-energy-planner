@@ -413,7 +413,6 @@ class PlanningCoordinator:
         self.events = None
         self.latest = None
         self.active = None
-        self.last_calculation_started = None
         self.published = None
         self.task = None
         self.closed = False
@@ -471,12 +470,17 @@ class PlanningCoordinator:
             )
             self.events.availability("planning", health, detail)
 
+    @property
+    def busy(self):
+        """Report whether a submitted round is running or still being recorded."""
+        return self.task is not None and not self.task.done()
+
     def submit(self, snapshot: InputSnapshot):
         """Replace the latest requested snapshot and start a worker task only when needed."""
         if self.closed:
             raise RuntimeError("Planning coordinator is closed")
         self.latest = snapshot
-        if self.task is None or self.task.done():
+        if not self.busy:
             self.task = asyncio.create_task(self._run())
 
     def invalidate(self, reason):
@@ -548,7 +552,7 @@ class PlanningCoordinator:
             self.active = snapshot
             self._set_status("calculating")
             started = monotonic()
-            calculation_started = self.last_calculation_started = self.clock()
+            calculation_started = self.clock()
             outcome = None
             calculation_reason = "planning_error"
             superseded = False
