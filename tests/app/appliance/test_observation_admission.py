@@ -43,6 +43,45 @@ def test_shared_observer_controls_task_interception_at_actual_age(service, age, 
         assert "observed_run" not in data["devices"][ENTITY]
 
 
+def test_same_observed_cycle_progress_keeps_the_planning_revision(service):
+    """A newer meter sample leaves the same frozen run usable. A real run transition changes it."""
+    service.learn_history(ENTITY, POWER, readings(cycles=1), False, NOW)
+    initial = service.planning_revision
+    data = deepcopy(service.state)
+    running = {
+        "started_at": (NOW - timedelta(minutes=15)).isoformat(),
+        "observed_until": NOW.isoformat(),
+        "energy_kwh": 0.25,
+        "status": "observed",
+    }
+    service.observe_history(
+        data, ENTITY, [], [], {"running": running}, POWER, NOW, observed_until=NOW
+    )
+    service.commit(data)
+    running_revision = service.planning_revision
+    public_revision = service.revision
+    assert running_revision != initial
+
+    later = NOW + timedelta(seconds=5)
+    data = deepcopy(service.state)
+    running.update(observed_until=later.isoformat(), energy_kwh=0.26)
+    service.observe_history(
+        data, ENTITY, [], [], {"running": running}, POWER, later, observed_until=later
+    )
+    service.commit(data)
+    assert service.state["devices"][ENTITY]["observed_run"]["energy_kwh"] == 0.26
+    assert service.revision != public_revision
+    assert service.planning_revision == running_revision
+
+    closed = NOW + timedelta(minutes=5)
+    data = deepcopy(service.state)
+    service.observe_history(
+        data, ENTITY, [], [], {"quiet": True}, POWER, closed, observed_until=closed
+    )
+    service.commit(data)
+    assert service.planning_revision != running_revision
+
+
 @pytest.mark.parametrize("raw", [False, True])
 def test_closing_watermark_prevents_old_run_from_intercepting_new_readiness(service, raw):
     """A 12:00 run replay cannot intercept readiness submitted after its 12:05 quiet update."""

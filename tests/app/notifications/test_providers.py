@@ -43,7 +43,9 @@ def test_known_input_problems_name_the_responsible_resource_and_recovery_page(
 @pytest.mark.parametrize(
     "reason,resource,destination",
     [
-        ("configuration_changed", "settings", "/overview"),
+        ("configuration_changed", "configuration or planning strategy", "/overview"),
+        ("report_configuration_mismatch", "measurement report", "/overview"),
+        ("planning_work_changed", "appliance, charging or heating work", "/overview"),
         ("inputs_unavailable", "current planning inputs", "/overview"),
         ("battery_dispatch_unavailable", "battery", "/overview"),
         ("ev_capacity_unavailable", "vehicle", "/ev"),

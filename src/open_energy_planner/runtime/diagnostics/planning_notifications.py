@@ -83,9 +83,26 @@ def explain_planning_problem(reason: str, _detail: str | None = None) -> NoticeT
     if reason == "configuration_changed":
         return NoticeText(
             "Waiting for inputs for the updated settings",
-            "The calculation or measurement report belongs to earlier installation or device settings.\n\n"
-            "OEP automatically checks new reports and retries with inputs matching the saved settings. "
-            "This is usually temporary. If it persists, check the integration connection and recent settings changes.",
+            "The installation configuration or planning strategy changed during calculation. "
+            "OEP automatically retries with the current configuration.",
+            "View planning",
+            "/overview",
+            "info",
+        )
+    if reason == "report_configuration_mismatch":
+        return NoticeText(
+            "Waiting for a matching measurement report",
+            "The latest measurement report refers to a different installation configuration. "
+            "OEP automatically checks incoming reports and retries when one matches.",
+            "View planning",
+            "/overview",
+            "info",
+        )
+    if reason == "planning_work_changed":
+        return NoticeText(
+            "Waiting for a plan with current device work",
+            "The appliance, charging or heating work no longer matches the calculation. "
+            "OEP automatically retries with the current planning inputs.",
             "View planning",
             "/overview",
             "info",
