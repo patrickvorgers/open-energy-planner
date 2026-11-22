@@ -77,10 +77,8 @@ eligible hours for both columns. It ignores the maximum export volume eligible
 for bonuses. The estimated bonus can exceed the supplier's payment when the
 contract's cap is reached.
 
-The breakdown uses the same accepted quarters as the net costs. Some older
-reports retained matching net costs but only kept component totals for a wider
-period. These component details stay **Unavailable** unless their coverage
-matches. Opening the breakdown does not recalculate or rewrite historical results.
+The breakdown uses the same accepted quarters as the net costs. Opening it
+reads the stored estimate for the selected period.
 
 Open **How is this calculated?** for the basis and limitations. Values above the
 bars and dates below them follow the selected daily or monthly bins. Labels are
@@ -127,11 +125,10 @@ becomes provisional. Three complete local days remain available for missing
 measurements, published prices and corrections. Monday closes at Friday 00:00.
 Summer and winter clock changes do not shorten that recovery window.
 
-Finalized daily results retain their original calculation. If a selection spans
-older capped results and current estimates, the totals and chart use the current
-estimates. Choose the earlier dates to see retained results calculated with the
-cap. Provisional days with the required measurements can be evaluated on the
-new basis. Expired detail cannot be reconstructed from an old total.
+Savings displays estimates calculated on the current basis. Finalized results
+from older calculations remain archived outside that comparison. Provisional
+days with the required quarter measurements are evaluated on the current
+basis. Expired detail cannot be reconstructed from an old total.
 
 Changing the installation timezone after daily history exists pauses processing
 until the original Home Assistant timezone is restored. Missing Contract or

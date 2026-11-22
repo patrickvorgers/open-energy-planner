@@ -19,7 +19,7 @@ costs for timezone-aware subperiods of an original plan. A different chart windo
 does not optimize again or change original valuation curves, prices or bonus
 chronology. Whole-plan evidence remains separate from selected-period amounts.
 
-Current measured Savings uses `measured-battery-cash-uncapped-v2`. It runs no continuous battery
+Measured Savings uses `measured-battery-cash-uncapped`. It runs no continuous battery
 simulation and needs no historical SoC, original physical forecast, wear rate or
 terminal valuation. It does require frozen, disjoint AC measurement bindings,
 published prices and dated contract rules.
@@ -132,24 +132,18 @@ without-battery cash breakdowns, a `cash` comparison and `matched_components` on
 matching quarters, and a calendar checkpoint. There is no bonus-counter or
 simulated battery continuation in these reports.
 
-`oep_savings_uncapped_days` is the indexed projection for the current estimate.
-`oep_savings_cash_days` retains the older capped
-comparison. A selected period containing usable current estimates displays
-only that basis. A period containing only capped results displays those results.
-The UI points to earlier dates when the selection spans both. A report hash
-binds each current projection to its exact report, so an older writer can
-replace a provisional day without leaving stale estimates visible on recovery.
+`oep_savings_uncapped_days` is the indexed projection for Savings. It is
+created additively when an existing archive is opened. Older finalized
+records remain archived outside the displayed comparison. The normal worker
+recalculates provisional days from their retained quarter measurements.
 
 The overview also returns `cash.breakdown.actual` and
 `cash.breakdown.without_battery`, each containing `purchase`, `sale` and `bonus`,
-or null when comparable component evidence is incomplete. Daily settlement
-adds each component only when both scenarios accept the quarter. Older capped
-reports can use normalized scenario totals when their coverage equals the
-matched coverage and all components exist. Finalized reports remain immutable.
-An indexed SQL aggregate covers the entire selected range, and a second grouped
-aggregate returns each daily or monthly `cash.chart` bin's `breakdown` using the
-same rule. Both use the same read snapshot without loading raw quarters or
-bounded daily payloads.
+or null when no quarter is comparable. Daily settlement adds each component
+only when both scenarios accept the quarter. An indexed SQL aggregate returns
+the costs and components for the entire selected range. A grouped aggregate
+returns the same fields for each daily or monthly `cash.chart` bin. Both use the
+same read snapshot without loading raw quarters or bounded daily payloads.
 
 Finalized legacy reports and their tables are retained without reinterpretation
 or destructive migration. `GET /v1/evaluations` and explicit revision reads retain

@@ -7,14 +7,15 @@ import pytest
 from sqlalchemy import func, select
 
 from open_energy_planner.savings.daily import DailySavings
+from open_energy_planner.savings.model import CASH_COMPONENTS, CASH_POLICY_VERSION
 from open_energy_planner.savings.storage.adapters.sqlalchemy import stamp
 from open_energy_planner.storage.adapters.lifecycle.retention import collect_blocks
 from open_energy_planner.storage.adapters.lifecycle.schema import (
     PARTS,
     PLANS,
     RECORDS,
-    SAVINGS_CASH_DAYS,
     SAVINGS_DAYS,
+    SAVINGS_UNCAPPED_DAYS,
     VALUES,
 )
 from open_energy_planner.storage.adapters.lifecycle.sqlalchemy import canonical, digest
@@ -59,7 +60,7 @@ def test_eight_year_daily_query_aggregates_without_loading_all_reports(settlemen
             "market_area": "NL",
             "expected_seconds": 86400,
             "finalized_at": (following + timedelta(days=3)).isoformat(),
-            "policy": "measured-battery-cash-v1",
+            "policy": CASH_POLICY_VERSION,
             "scenarios": {
                 kind: {
                     "totals": values,
@@ -101,14 +102,18 @@ def test_eight_year_daily_query_aggregates_without_loading_all_reports(settlemen
                 "end": stamp(following),
                 "day": report["day"],
                 "currency": "EUR",
-                "policy": "measured-battery-cash-v1",
                 **cash,
+                **{
+                    f"{kind}_{component}": values[component]
+                    for kind, values in totals.items()
+                    for component in CASH_COMPONENTS
+                },
             }
         )
         if len(batch) == 128 or following == end:
             with engine.begin() as connection:
                 connection.execute(SAVINGS_DAYS.insert(), batch)
-                connection.execute(SAVINGS_CASH_DAYS.insert(), cash_batch)
+                connection.execute(SAVINGS_UNCAPPED_DAYS.insert(), cash_batch)
             batch.clear()
             cash_batch.clear()
     began = perf_counter()

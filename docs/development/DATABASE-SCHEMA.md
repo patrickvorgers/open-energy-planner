@@ -530,7 +530,7 @@ before the worker exits and the database engine is disposed.
 | --- | --- | --- |
 | `contracts` | `ContractStore`: effective-dated purchase/sale formula and bonus rule books. | Immutable `<version>.json`. `current.json` selects a book. |
 | `bonus-counters` | `CounterStore`: confirmed historical counter seeds, period context and optional origin evidence. | Immutable `<version>.json` books and `<seed-digest>.origin.json` provenance. `current.json` selects a book. Scenario continuation is in settlement state. |
-| `savings-bonus-counters` | `CounterStore` via `HistoricalBonuses`: automatically derived historical bonus seeds and optional origin evidence. Confirmed planning books remain in `bonus-counters`. | Immutable `<version>.json` books and `<seed-digest>.origin.json` provenance. `current.json` selects a book of at most 64 seeds. |
+| `savings-bonus-counters` | Historical documents from the retired measured Savings bonus worker. Current planning books use `bonus-counters`. | Archived `<version>.json` books, optional `<seed-digest>.origin.json` provenance and `current.json`. |
 | `installation` | `InstallationStore`: Energy-bound virtual devices, limits, relations and settings. `BatteryCalibration`: measured periodic full-charge progress. | Immutable `<version>.json`. `current.json` selects settings. Mutable bounded `battery-calibration.json` stores schema 1 and per-device progress. |
 | `demand` | Consumption settings, issued forecasts and current daily fits. | `configuration-<version>.json`, `forecast-<version>.json`, `active-training-<learner-hash>.json`. `current.json` selects configuration. |
 | `weather` | Shared live forecast runs, observed weather and historical training temperatures. | Live manifests, provider receipts, hourly value blocks and mutable `temperature-day-<query-hash>-<YYYY-MM-DD>.json` records. |
@@ -1277,12 +1277,10 @@ The public daily response omits checkpoints.
 
 ### `oep_savings_cash_days`
 
-Owned by `SettlementStore`. One matched cash index per capped daily report.
-The parent report, this index and daily progress commit in the same transaction.
-Finalized parent immutability protects both. Legacy reports are never relabelled or
-indexed as this policy. Shared schema creation adds the empty table to existing
-archives without rewriting old results. All four backend transfers include it.
-Deleting a mutable parent requires deleting its child first. No cascade is declared.
+Retired index of capped daily reports. The shared archive schema still registers
+it for data retention and cross-backend transfers. Savings reads the current
+uncapped projection. The existing foreign key requires deleting its child
+before deleting the parent. No cascade is declared.
 
 | Field | Type / key | Meaning and use |
 | --- | --- | --- |
@@ -1297,24 +1295,17 @@ Deleting a mutable parent requires deleting its child first. No cascade is decla
 | `coverage_seconds` | Double | Matching elapsed seconds. Zero means no accepted comparison. |
 | `estimated_seconds` | Double | Matching seconds using reconstructed measurements or split tariffs. |
 
-Null money means unavailable. A known zero remains zero. Range reads aggregate in
-SQL and share a repeatable snapshot with bounded parent details. Charts use daily
-bins up to 366 elapsed days and monthly bins for longer ranges. The start primary
-key supports inclusive-start/exclusive-end period reads without loading raw quarters.
-
-Earlier capped reports can show component totals for a scenario only when all
-three components are present and that scenario's coverage equals the matched
-coverage. This proves that the stored components use the same quarters.
+Null money means unavailable. A known zero remains zero. These rows retain
+their original measured coverage.
 
 ### `oep_savings_uncapped_days`
 
 Owned by `SettlementStore`. The current uncapped policy writes one projection
 per day in the same transaction as the report and calendar progress. A day
 with no matched coverage retains null monetary amounts for the chart. Its
-parent key cascades on deletion. The report hash
-guards against stale estimates after an older writer replaces a provisional
-report. Existing capped projections stay readable under their original basis.
-Startup creates this empty table additively. All four backend transfers include it.
+parent key cascades on deletion. Startup creates this table additively and
+the worker can replay provisional days from retained quarters. All four
+backend transfers include it.
 
 | Field | Type / key | Meaning and use |
 | --- | --- | --- |
@@ -1322,7 +1313,6 @@ Startup creates this empty table additively. All four backend transfers include 
 | `end` | String(40) | Exclusive UTC day end. |
 | `day` | String(40) | HA-local ISO date for chart grouping. |
 | `currency` | String(32) | Currency shared by both estimates. |
-| `report_hash` | String(64) | Digest of the exact parent report. |
 | `actual_cost` | Double, nullable | With-battery purchase less export income and uncapped bonus. |
 | `without_battery_cost` | Double, nullable | Reconstructed cost on the same quarters. |
 | `savings` | Double, nullable | Without-battery cost less with-battery cost. |
@@ -1335,10 +1325,9 @@ Startup creates this empty table additively. All four backend transfers include 
 | `without_battery_sale` | Double, nullable | Signed reconstructed export income. |
 | `without_battery_bonus` | Double, nullable | Reconstructed bonus before volume caps. |
 
-Amount columns share the cash index's time and currency. An overview selects the
-uncapped projection when that period contains valid uncapped rows. A period with
-only usable capped rows reads the capped index. The API exposes the selected
-policy and indicates when capped data also exist outside the selected basis.
+Amounts and components share the same matched seconds and currency. The range
+and chart aggregates both use this projection. Bounded day details join it
+to the retained reports. The API includes the calculation policy.
 
 
 ## Indexes and query ownership

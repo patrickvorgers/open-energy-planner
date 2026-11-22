@@ -1261,7 +1261,6 @@ def test_settlement_bridge_reads_native_recorder_and_labels_hourly_reconstructio
     [
         ("settlement_request", "settlement_bridge"),
         ("forecast_quality_request", "forecast_history_bridge"),
-        ("settlement_bonus_request", "settlement_bonus_bridge"),
     ],
 )
 @pytest.mark.parametrize("failure", [ValueError, TimeoutError])
@@ -1309,7 +1308,6 @@ def test_optional_history_failure_does_not_interrupt_command_synchronization(
     [
         ("settlement_request", "settlement_bridge"),
         ("forecast_quality_request", "forecast_history_bridge"),
-        ("settlement_bonus_request", "settlement_bonus_bridge"),
     ],
 )
 def test_optional_history_wait_cannot_override_newer_resume_intent(

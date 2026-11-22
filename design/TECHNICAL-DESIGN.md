@@ -879,7 +879,7 @@ Diagrams distinguish selected versus candidate sources, not promised free/keyles
 
 ### Settlement and visual overview
 
-The [savings boundary](../docs/development/SAVINGS.md) composes native Recorder capture, independently retained installation/advice chronology and measured quarter-hour billing. Completed HA local days retain the with-battery and without-battery scenarios and matching cash components. The current estimate uses dated bonus rates and eligibility windows without the export volume cap. Three complete recovery dates precede immutable closure, including partial/unavailable days. Daily checkpoints, measured energy, quality and calculation versions survive temporary-quarter and full-plan expiry. SQL aggregates period totals and daily/monthly chart bins on one calculation basis. Earlier finalized capped results are available under their original basis. Details are bounded to 366 days per response. Shared archive tables and their complete rows transfer across all four backends. Counterfactuals and gaps remain explicit. Retained original plans follow the [fixed age policy](../docs/development/PLAN-ARCHIVE.md#retention-and-payload-representation). REQUIREMENTS STORAGE-10–16 and the maintained Savings/archive guides define retention.
+The [savings boundary](../docs/development/SAVINGS.md) composes native Recorder capture, independently retained installation/advice chronology and measured quarter-hour billing. Completed HA local days retain the with-battery and without-battery scenarios and matching cash components. The current estimate uses dated bonus rates and eligibility windows without the export volume cap. Three complete recovery dates precede immutable closure, including partial/unavailable days. Daily checkpoints, measured energy, quality and calculation versions survive temporary-quarter and full-plan expiry. SQL aggregates period totals and daily/monthly chart bins on one calculation basis. Earlier finalized capped reports are archived outside the Savings comparison. Details are bounded to 366 days per response. Shared archive tables and their complete rows transfer across all four backends. Counterfactuals and gaps remain explicit. Retained original plans follow the [fixed age policy](../docs/development/PLAN-ARCHIVE.md#retention-and-payload-representation). REQUIREMENTS STORAGE-10–16 and the maintained Savings/archive guides define retention.
 
 
 ### Plan archive
@@ -1460,24 +1460,6 @@ selection is bounded and does not advance a request before receipt.
 Legacy reference and interval readers cannot initialize dependent battery or
 bonus state after an uncovered opening interval. Recovery pages through all
 retained configuration fragments before classifying a range as missing.
-
-### Historical bonus evidence
-
-`savings/bonus.py` owns historical opening usage. It combines immutable captured
-export deltas with confirmed per-member counter anchors, or reuses `BonusHistory`
-and the native `HistoryBridge` for missing historical periods. Inside-interval
-anchors require an unchanged physical counter across that interval. Full-frame
-Recorder deltas can cross meter resets. Current confirmations override archived
-context. A source identity is never substituted for its physical meter members.
-Historical automatic books use `savings-bonus-counters` through the active
-SQLAlchemy engine and existing `CounterStore` validation. The original
-`bonus-counters` book, raw frames and independent reference checkpoint are not
-modified. The worker publishes a versioned `settlement_bonus_request`, accepted
-only by the authenticated historical-history endpoint for that contract and
-current confirmation revision. HA performs bounded read-only transport through
-a separate optional bridge. Missing evidence pauses financial replay, without
-holding control publication or inventing zero quota.
-
 
 ### Bonus opening provenance and central view
 

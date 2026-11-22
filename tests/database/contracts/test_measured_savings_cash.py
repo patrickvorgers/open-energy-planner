@@ -10,11 +10,13 @@ from open_energy_planner.core.calendar import day_window
 from open_energy_planner.prices.model import PriceKind, PricePoint, PriceSeries
 from open_energy_planner.prices.storage.adapters.published import retain
 from open_energy_planner.savings.daily import DailySavings
-from open_energy_planner.savings.model import CAPPED_CASH_POLICY_VERSION
 from open_energy_planner.savings.storage.adapters.sqlalchemy import stamp
-from open_energy_planner.storage.adapters.lifecycle.schema import SAVINGS_DAYS, SETTLEMENT_FRAMES
-from open_energy_planner.storage.adapters.lifecycle.sqlalchemy import canonical, digest
-from open_energy_planner.storage.adapters.payloads import encode_payload
+from open_energy_planner.storage.adapters.lifecycle.schema import (
+    SAVINGS_CASH_DAYS,
+    SAVINGS_UNCAPPED_DAYS,
+    SETTLEMENT_FRAMES,
+)
+from open_energy_planner.storage.adapters.lifecycle.sqlalchemy import SqlPlanRepository
 from tests.app.savings.support.scenarios import END, START, bindings, contract, frame
 
 
@@ -89,8 +91,8 @@ def test_cash_index_retains_matching_totals_and_does_not_mix_a_legacy_day(settle
     store.put_day(legacy, documents, "2026-10-24")
     start, end = day_window(START.date().isoformat(), "UTC")
     result = DailySavings(runtime).overview(start, end + timedelta(days=1))
-    assert len(result["days"]) == 2
-    assert result["days"][1]["policy"] == "daily-savings-v1"
+    assert len(result["days"]) == 1
+    assert store.day(after=end)["policy"] == "daily-savings-v1"
     assert result["cash"]["actual_cost"] == pytest.approx(0.60)
     assert result["cash"]["without_battery_cost"] == pytest.approx(0.60)
     assert result["cash"]["savings"] == 0
@@ -105,61 +107,48 @@ def test_cash_index_retains_matching_totals_and_does_not_mix_a_legacy_day(settle
     assert "checkpoint" not in result["days"][0]
 
 
-def test_capped_history_is_retained_and_never_blended_with_current_estimates(settlement):
-    """Choose one cash basis for totals and bins and ignore projections orphaned by an older writer."""
+def test_provisional_old_day_replays_without_migrating_its_existing_archive(settlement):
+    """Only new estimates appear in Savings. A populated old ledger does not require conversion."""
     runtime, store, documents, engine, _plans = settlement
     start, end = day_window(START.date().isoformat(), "UTC")
-    day = DailySavings(runtime).calculate(
-        START.date().isoformat(), "UTC", contract(), START + timedelta(days=2), START
-    )
-    store.put_day(day, documents, end.date().isoformat())
-    day_before = start - timedelta(days=1)
-    capped = deepcopy(day)
-    capped.update(
-        day=day_before.date().isoformat(),
-        start=day_before.isoformat(),
-        end=start.isoformat(),
-        policy=CAPPED_CASH_POLICY_VERSION,
-        accounting_policy=CAPPED_CASH_POLICY_VERSION,
-        finalized_at=(end + timedelta(days=4)).isoformat(),
-    )
-    capped["checkpoint"]["end"] = capped["end"]
-    capped["cash"].update(actual_cost=3, without_battery_cost=4, savings=1)
-    capped["scenarios"]["actual"]["totals"].update(purchase=3, grid_cash=3)
-    capped["scenarios"]["without_battery"]["totals"].update(purchase=4, grid_cash=4)
-    capped.pop("matched_components")
-    store.put_day(capped, documents, start.date().isoformat())
-
-    old_cash, _days, _count = store.daily_overview(day_before, start)
-    assert old_cash["bonus_volume_cap_ignored"] is False
-    assert old_cash["savings"] == 1
-    assert old_cash["breakdown"]["actual"]["purchase"] == 3
-    assert store.day(after=day_before) == capped
-
-    cash, _days, _count = store.daily_overview(day_before, end)
-    assert cash["bonus_volume_cap_ignored"] is True
-    assert cash["has_capped_history"] is True
-    assert cash["coverage_seconds"] == 1800
-    assert cash["actual_cost"] == pytest.approx(0.60)
-    assert len(cash["chart"]) == 1
-    assert cash["chart"][0]["breakdown"] == cash["breakdown"]
-
-    # Older writers can replace the provisional parent without touching the new projection.
-    rolled_back = {**day, "policy": CAPPED_CASH_POLICY_VERSION}
+    now = START + timedelta(days=2)
+    daily = DailySavings(runtime)
+    current = daily.calculate(START.date().isoformat(), "UTC", contract(), now, START)
+    older = deepcopy(current)
+    older.update(policy="measured-battery-cash-v1", accounting_policy="measured-battery-cash-v1")
+    older.pop("matched_components")
+    older["cash"].update(actual_cost=3, without_battery_cost=4, savings=1)
+    store.put_day(older, documents, now.date().isoformat())
     with engine.begin() as connection:
         connection.execute(
-            SAVINGS_DAYS.update()
-            .where(SAVINGS_DAYS.c.start == stamp(start))
-            .values(
-                payload=encode_payload(canonical(rolled_back)), payload_hash=digest(rolled_back)
+            SAVINGS_CASH_DAYS.insert().values(
+                start=stamp(start),
+                end=stamp(end),
+                day=older["day"],
+                currency="EUR",
+                policy=older["policy"],
+                **older["cash"],
             )
         )
-    stale, _days, _count = store.daily_overview(day_before, end)
-    assert stale["bonus_volume_cap_ignored"] is False
-    assert stale["savings"] == 1
-    store.put_day(day, documents, end.date().isoformat())
-    replayed, _days, _count = store.daily_overview(day_before, end)
-    assert replayed == cash
+        SAVINGS_UNCAPPED_DAYS.drop(connection)
+    SqlPlanRepository(".", engine=engine)
+    old = daily.overview(start, end)
+    assert old["days"] == []
+    assert old["cash"]["savings"] is None
+    assert store.day(after=start) == older
+
+    from open_energy_planner.installation.location import SiteLocation
+
+    report = daily.process(contract(), now, SiteLocation(52, 5, "UTC"))
+    assert report["policy"] == current["policy"]
+    cash = daily.overview(start, end)["cash"]
+    assert cash["coverage_seconds"] == 1800
+    assert cash["actual_cost"] == pytest.approx(0.60)
+    assert cash["breakdown"]["actual"]["purchase"] == pytest.approx(0.60)
+    with engine.connect() as connection:
+        from sqlalchemy import select
+
+        assert connection.scalar(select(SAVINGS_CASH_DAYS.c.savings)) == 1
 
 
 def test_finalized_cash_day_is_immutable_with_its_matching_index(settlement):
@@ -180,7 +169,7 @@ def test_finalized_cash_day_is_immutable_with_its_matching_index(settlement):
 
 
 def test_legacy_report_is_retained_without_fabricating_new_policy_totals(settlement):
-    """A finalized legacy day remains readable but cannot be relabelled as measured-cash savings."""
+    """Keep the finalized record in the archive and omit it from the Savings comparison."""
     runtime, store, documents, _engine, _plans = settlement
     day = DailySavings(runtime).calculate(
         START.date().isoformat(), "UTC", contract(), START + timedelta(days=7), START
@@ -191,7 +180,7 @@ def test_legacy_report_is_retained_without_fabricating_new_policy_totals(settlem
     store.put_day(day, documents, (START.date() + timedelta(days=1)).isoformat())
     start, end = day_window(START.date().isoformat(), "UTC")
     result = DailySavings(runtime).overview(start, end)
-    assert result["days"][0]["policy"] == "daily-savings-v1"
+    assert result["days"] == []
     assert result["cash"]["savings"] is None
     assert result["cash"]["coverage_seconds"] == 0
 
@@ -413,7 +402,6 @@ def test_capture_splits_market_changes_but_batches_unchanged_markets(settlement,
         SimpleNamespace(batteries=[]),
         SimpleNamespace(sources=[]),
         SimpleNamespace(terms=[]),
-        (),
         None,
     )
     assert request["market_identity"] == {"currency": "EUR", "market_area": "NL"}
@@ -482,52 +470,12 @@ def test_legacy_market_lookup_respects_activation_changes_while_disabled(settlem
         assert report["cash"]["without_battery_cost"] == pytest.approx(0.3)
 
 
-@pytest.mark.parametrize("missing_detail", ["broader_time", "missing_component"])
-def test_cash_breakdown_never_substitutes_components_from_broader_or_unknown_time(
-    settlement, missing_detail
-):
-    """A matched .60 cost remains known while incompatible actual components stay unavailable independently."""
+def test_cash_breakdown_aggregates_signed_income_across_a_long_range(settlement, monkeypatch):
+    """Matched signed components remain exact across years without loading report payloads."""
     runtime, store, documents, _engine, _plans = settlement
     day = DailySavings(runtime).calculate(
         START.date().isoformat(), "UTC", contract(), START + timedelta(days=2), START
     )
-    day.update(policy=CAPPED_CASH_POLICY_VERSION, accounting_policy=CAPPED_CASH_POLICY_VERSION)
-    day.pop("matched_components")
-    if missing_detail == "broader_time":
-        day["scenarios"]["actual"]["coverage_seconds"] += 900
-        day["scenarios"]["actual"]["totals"]["purchase"] = 99
-    else:
-        day["scenarios"]["actual"]["totals"].pop("bonus")
-    day["finalized_at"] = (START + timedelta(days=4)).isoformat()
-    original = deepcopy(day)
-    store.put_day(day, documents, "2026-10-23")
-    start, end = day_window(START.date().isoformat(), "UTC")
-    cash, _reports, _count = store.daily_overview(start, end)
-    assert cash["actual_cost"] == pytest.approx(0.60)
-    assert cash["without_battery_cost"] == pytest.approx(0.60)
-    assert cash["savings"] == 0
-    assert cash["breakdown"]["actual"] is None
-    assert cash["breakdown"]["without_battery"] == {
-        "purchase": pytest.approx(0.60),
-        "sale": 0,
-        "bonus": 0,
-    }
-    assert cash["chart"][0]["breakdown"] == cash["breakdown"]
-    assert store.day(after=start) == original
-
-
-@pytest.mark.parametrize("uncapped", [False, True])
-def test_cash_breakdown_aggregates_signed_income_across_a_long_range(
-    settlement, monkeypatch, uncapped
-):
-    """Each pricing basis reproduces its matched totals across years without loading report payloads."""
-    runtime, store, documents, _engine, _plans = settlement
-    day = DailySavings(runtime).calculate(
-        START.date().isoformat(), "UTC", contract(), START + timedelta(days=2), START
-    )
-    if not uncapped:
-        day.update(policy=CAPPED_CASH_POLICY_VERSION, accounting_policy=CAPPED_CASH_POLICY_VERSION)
-        day.pop("matched_components")
     for offset in (0, 400):
         report = deepcopy(day)
         first = START.date() + timedelta(days=offset)
@@ -537,13 +485,12 @@ def test_cash_breakdown_aggregates_signed_income_across_a_long_range(
         report["scenarios"]["without_battery"]["totals"].update(
             purchase=18, sale=-2, bonus=0, grid_cash=20
         )
-        if uncapped:
-            report["matched_components"] = {
-                "actual": {"purchase": 12, "sale": 3, "bonus": 1},
-                "without_battery": {"purchase": 18, "sale": -2, "bonus": 0},
-            }
-            report["scenarios"]["actual"]["coverage_seconds"] += 900
-            report["scenarios"]["actual"]["totals"]["purchase"] += 99
+        report["matched_components"] = {
+            "actual": {"purchase": 12, "sale": 3, "bonus": 1},
+            "without_battery": {"purchase": 18, "sale": -2, "bonus": 0},
+        }
+        report["scenarios"]["actual"]["coverage_seconds"] += 900
+        report["scenarios"]["actual"]["totals"]["purchase"] += 99
         report["cash"].update(actual_cost=8, without_battery_cost=20, savings=12)
         store.put_day(report, documents, end.date().isoformat())
     monkeypatch.setattr(store, "days", lambda *_args, **_kwargs: [])
@@ -563,42 +510,3 @@ def test_cash_breakdown_aggregates_signed_income_across_a_long_range(
             "actual": {"purchase": 12, "sale": 3, "bonus": 1},
             "without_battery": {"purchase": 18, "sale": -2, "bonus": 0},
         }
-
-
-def test_chart_breakdown_keeps_each_day_independent_and_rejects_incomplete_month(settlement):
-    """Two days retain distinct .60 and 1.80 costs. One missing component invalidates only its side of that day or month."""
-    runtime, store, documents, _engine, _plans = settlement
-    first_day = DailySavings(runtime).calculate(
-        START.date().isoformat(), "UTC", contract(), START + timedelta(days=2), START
-    )
-    first_day.update(
-        policy=CAPPED_CASH_POLICY_VERSION, accounting_policy=CAPPED_CASH_POLICY_VERSION
-    )
-    for offset in range(2):
-        report = deepcopy(first_day)
-        date = START.date() + timedelta(days=offset)
-        start, end = day_window(date.isoformat(), "UTC")
-        report.update(day=date.isoformat(), start=start.isoformat(), end=end.isoformat())
-        if offset:
-            report.pop("matched_components")
-            report["scenarios"]["actual"]["totals"].update(purchase=2, sale=0.2, grid_cash=1.8)
-            report["scenarios"]["without_battery"]["totals"].update(
-                purchase=3, sale=0.3, grid_cash=2.7
-            )
-            report["scenarios"]["actual"]["totals"].pop("bonus")
-            report["cash"].update(actual_cost=1.8, without_battery_cost=2.7, savings=0.9)
-        store.put_day(report, documents, end.date().isoformat())
-    first, _end = day_window(START.date().isoformat(), "UTC")
-    cash, _reports, _count = store.daily_overview(first, first + timedelta(days=2))
-    assert cash["chart"][0]["breakdown"]["actual"]["purchase"] == pytest.approx(0.6)
-    assert cash["chart"][1]["breakdown"] == {
-        "actual": None,
-        "without_battery": {"purchase": 3, "sale": 0.3, "bonus": 0},
-    }
-    assert cash["chart"][1]["actual_cost"] == pytest.approx(1.8)
-    monthly, _reports, _count = store.daily_overview(first, first + timedelta(days=400))
-    assert monthly["chart"][0]["breakdown"] == {
-        "actual": None,
-        "without_battery": {"purchase": pytest.approx(3.6), "sale": 0.3, "bonus": 0},
-    }
-    assert monthly["chart"][0]["savings"] == pytest.approx(0.9)

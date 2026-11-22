@@ -351,7 +351,6 @@ SAVINGS_UNCAPPED_DAYS = archive_table(
     Column("end", String(TIMESTAMP_LENGTH), nullable=False),
     Column("day", String(TIMESTAMP_LENGTH), nullable=False),
     Column("currency", String(AREA_LENGTH), nullable=False),
-    Column("report_hash", text_key(HASH_LENGTH), nullable=False),
     Column("actual_cost", Double),
     Column("without_battery_cost", Double),
     Column("savings", Double),

@@ -30,7 +30,7 @@ def test_archive_maintenance_failure_does_not_report_a_financial_failure(
     async def observe_worker():
         """Wait for the real maintenance attempt rather than substituting financial execution."""
         app = web.Application()
-        _, runtime, _ = savings_api.register(
+        _, runtime = savings_api.register(
             app,
             repository,
             SimpleNamespace(current=None),

@@ -93,7 +93,6 @@ class PlanCoordinator:
         self.solar_forecast_generation = None
         self.history_bridge = HistoryBridge(hass)
         self.settlement_bridge = SettlementBridge(hass)
-        self.settlement_bonus_bridge = HistoryBridge(hass)
         self.demand_history_bridge = HistoryBridge(hass)
         self.forecast_history_bridge = HistoryBridge(hass)
         self.solar_history_bridge = HistoryBridge(hass)
@@ -975,12 +974,6 @@ class PlanCoordinator:
                         "Forecast quality",
                     ),
                     ("settlement_request", self.settlement_bridge, "/v1/settlement", "Settlement"),
-                    (
-                        "settlement_bonus_request",
-                        self.settlement_bonus_bridge,
-                        "/v1/settlement/bonus-history",
-                        "Historical bonus",
-                    ),
                 ):
                     pending_history = data.get(request_key)
                     if not pending_history:

@@ -79,11 +79,9 @@ def test_savings_prices_all_available_quarters_without_bonus_history(settlement)
         assert not any(scenario["missing"] for scenario in report["scenarios"].values())
         assert set(report["checkpoint"]) == {"end"}
         store.put_day(report, documents, (day + timedelta(days=1)).isoformat())
-    assert runtime.bonus.pending is None
     assert runtime.issue is None
 
     cash = daily.overview(start, end)["cash"]
-    assert cash["bonus_volume_cap_ignored"] is True
     assert cash["coverage_seconds"] == 48 * 3600
     assert cash["breakdown"]["actual"] == {"purchase": pytest.approx(57.60), "sale": 0, "bonus": 0}
     assert cash["breakdown"]["without_battery"] == {

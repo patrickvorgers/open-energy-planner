@@ -116,7 +116,7 @@ def connection_app(pairing, token, upstream, ui_url):
             raise web.HTTPUnauthorized()
         if (request.method, request.path) not in PEER_ROUTES:
             raise web.HTTPForbidden()
-        if request.path in ("/v1/history", "/v1/settlement/bonus-history"):
+        if request.path == "/v1/history":
             request = request.clone(client_max_size=MAX_STATISTICS_REPORT_BYTES)
         try:
             async with app[FORWARD].request(

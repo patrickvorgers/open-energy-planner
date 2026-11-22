@@ -1,16 +1,19 @@
 """Independent AC cash arithmetic needs neither forecast dispatch nor historical battery stock."""
 
 from dataclasses import replace
+from datetime import timedelta
 from decimal import Decimal
 
 import pytest
 
+from open_energy_planner.contracts.bonus import CounterSeed
 from open_energy_planner.contracts.calculation.condition import (
     ComparisonCondition,
     ComparisonOperator,
 )
 from open_energy_planner.contracts.calculation.formula import Formula
-from open_energy_planner.savings.accounting import bill, measured_cash_flows
+from open_energy_planner.contracts.export_meter import export_identity, seed_reading
+from open_energy_planner.savings.accounting import bill, bonus_payment, measured_cash_flows
 from tests.app.savings.support.scenarios import START, bindings, contract, frame, prices
 
 
@@ -37,6 +40,37 @@ def test_savings_ignores_only_the_volume_cap_at_real_bonus_edges(market, uncappe
     usage = {rule.rule_id + "|" + rule.period_start(START).isoformat(): 0.0}
     original = bill(schedule, frame(), 0, 3, usage, (), published, None)
     assert original["bonus"] == pytest.approx(capped)
+
+
+def test_capped_billing_uses_all_confirmed_export_meter_members():
+    """The recorded usage leaves .70 kWh under the 2-kWh cap, paying .07 on the next kWh."""
+    schedule = contract(bonus=True)
+    sources = ("sensor.export_a", "sensor.export_b")
+    seed = CounterSeed(
+        "bonus",
+        schedule.bonuses[0].period_start(START),
+        1,
+        300,
+        export_identity(sources),
+        START,
+        ((sources[0], 100), (sources[1], 200)),
+    )
+    counters = {}
+    paid = bonus_payment(
+        schedule,
+        START,
+        START + timedelta(minutes=15),
+        0.1,
+        1,
+        counters,
+        (seed,),
+        {sources[0]: 100.2, sources[1]: 200.1, "sensor.import": 99999},
+        None,
+    )
+    assert paid == pytest.approx(0.07)
+    assert list(counters.values()) == pytest.approx([2.3])
+    with pytest.raises(ValueError, match="reset"):
+        seed_reading(seed, {sources[0]: 99, sources[1]: 202})
 
 
 def test_discharge_reconstructs_without_battery_from_measured_flows_without_soc():

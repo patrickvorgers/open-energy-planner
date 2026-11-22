@@ -50,7 +50,6 @@ def test_recovery_skips_all_97_retained_frames_when_a_configuration_splits_a_qua
         SimpleNamespace(batteries=[]),
         SimpleNamespace(sources=[]),
         SimpleNamespace(terms=[]),
-        (),
         SiteLocation(52, 5, "UTC"),
     )
     assert request is None
@@ -97,7 +96,6 @@ def test_permanent_first_gap_does_not_starve_later_recovery_after_restart(
         SimpleNamespace(batteries=[]),
         SimpleNamespace(sources=[]),
         SimpleNamespace(terms=[]),
-        (),
         SiteLocation(52, 5, "UTC"),
     )
     first_request = runtime.request(*arguments)
@@ -113,7 +111,6 @@ def test_permanent_first_gap_does_not_starve_later_recovery_after_restart(
             "scanned_until": END.isoformat(),
         },
         now,
-        (),
         None,
     )
     runtime = SavingsRuntime(SettlementStore(engine), SqlDocuments(engine, "savings"), plans)
@@ -132,7 +129,6 @@ def test_permanent_first_gap_does_not_starve_later_recovery_after_restart(
             "scanned_until": later_request["end"],
         },
         now,
-        (),
         None,
     )
     assert documents.read("capture.json")["end"] == forward.isoformat()
@@ -186,7 +182,6 @@ def test_sparse_capture_retains_later_costs_and_recovers_only_the_missing_quarte
             "scanned_until": scanned.isoformat(),
         },
         scanned,
-        (),
         None,
     )
     daily = DailySavings(runtime)
@@ -207,7 +202,6 @@ def test_sparse_capture_retains_later_costs_and_recovers_only_the_missing_quarte
         SimpleNamespace(batteries=[]),
         SimpleNamespace(sources=[]),
         SimpleNamespace(terms=[]),
-        (),
         SiteLocation(52, 5, "UTC"),
     )
     assert runtime.request(*arguments)["start"] == scanned.isoformat()
@@ -228,7 +222,6 @@ def test_sparse_capture_retains_later_costs_and_recovers_only_the_missing_quarte
             "scanned_until": third.isoformat(),
         },
         now,
-        (),
         None,
     )
     assert documents.read("capture.json")["end"] == forward.isoformat()
@@ -397,7 +390,7 @@ def test_missing_daily_prerequisite_is_visible_and_blocks_maintenance_until_reco
     async def observe():
         """Run the actual worker and existing financial HTTP projection."""
         app = web.Application()
-        _, worker, _ = savings_api.register(
+        _, worker = savings_api.register(
             app,
             plans,
             selected,
@@ -509,7 +502,7 @@ def test_timezone_pause_is_owned_visible_and_recovers_without_rewriting_days(
     async def observe():
         """Read the real worker and HTTP projection, then restore the original timezone."""
         app = web.Application()
-        _, worker, _ = savings_api.register(
+        _, worker = savings_api.register(
             app,
             plans,
             SimpleNamespace(current=contract()),

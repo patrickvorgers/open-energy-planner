@@ -30,7 +30,7 @@ def application(repository, *, activate=False):
                 )
             )
     app = web.Application()
-    _capture, runtime, _bonus = savings_api.register(
+    _capture, runtime = savings_api.register(
         app,
         repository,
         SimpleNamespace(current=None),

@@ -9,7 +9,6 @@ import pytest
 
 from open_energy_planner.savings.daily import DailySavings
 from open_energy_planner.savings.storage.adapters.sqlalchemy import SettlementStore
-from open_energy_planner.storage.adapters.documents import SqlDocuments
 from tests.app.savings.support.scenarios import END, START, bindings, contract, frame
 from tests.database.support.history_datasets import retained_evaluation, settlement_batches
 
@@ -59,7 +58,6 @@ def test_empty_scanned_batch_advances_without_inventing_measurements(settlement)
             "scanned_until": end.isoformat(),
         },
         end,
-        (),
         None,
     )
     assert documents.read("capture.json") == {"end": end.isoformat()}
@@ -95,11 +93,11 @@ def test_recovery_receipt_commits_frames_and_both_cursors_atomically(settlement,
     with monkeypatch.context() as patch:
         patch.setattr(documents, "write", fail_recovery)
         with pytest.raises(OSError, match="Synthetic recovery storage failure"):
-            runtime.receive(pending, response, end, (), None)
+            runtime.receive(pending, response, end, None)
     assert len(store.frames()) == 2
     assert documents.read("capture.json") == {"end": end.isoformat()}
     assert not documents.exists("recovery.json")
-    runtime.receive(pending, response, end, (), None)
+    runtime.receive(pending, response, end, None)
     assert len(store.frames()) == 3
     assert documents.read("capture.json") == {"end": end.isoformat()}
     assert documents.read("recovery.json") == {"end": end.isoformat()}
@@ -147,7 +145,6 @@ def test_sparse_capture_rejects_invalid_scan_or_frame_boundaries_atomically(sett
                 "scanned_until": scanned.isoformat(),
             },
             now,
-            (),
             None,
         )
     assert len(store.frames()) == 2
@@ -287,7 +284,7 @@ def test_capture_cannot_reclassify_or_omit_grid_meters(settlement, role, entitie
     }
     report[role] = entities
     with pytest.raises(ValueError, match="Grid settlement meters"):
-        runtime.receive(pending, report, END, (), None)
+        runtime.receive(pending, report, END, None)
     assert not docs.exists("capture.json")
 
 
@@ -311,7 +308,6 @@ def test_pending_capture_reuses_only_one_archived_binding_projection(settlement,
             SimpleNamespace(batteries=()),
             SimpleNamespace(sources=()),
             SimpleNamespace(terms=()),
-            (),
             None,
         )
     assert read_ids == ["original-plan"]
@@ -349,11 +345,11 @@ def test_capture_rejects_nonquarter_interior_without_poisoning_archive(settlemen
         ],
     }
     with pytest.raises(ValueError, match="quarter boundary"):
-        runtime.receive(pending, report, end, (), None)
+        runtime.receive(pending, report, end, None)
     assert store.frames(after=start) == []
     assert not docs.exists("capture.json")
     report["frames"] = [frame(start=start).record()]
-    runtime.receive(pending, report, end, (), None)
+    runtime.receive(pending, report, end, None)
     assert len(store.frames(after=start)) == 1
     assert docs.read("capture.json")["end"] == end.isoformat()
 
@@ -399,39 +395,9 @@ def test_capture_preserves_requested_configuration_edges(
         "exports": bindings()["exports"],
         "frames": rows,
     }
-    runtime.receive(pending, report, end, (), None)
+    runtime.receive(pending, report, end, None)
     assert len(store.frames(after=start)) == len(rows)
     assert docs.read("capture.json")["end"] == moments[-1].isoformat()
-
-
-def test_later_budget_confirmation_initializes_historical_billing_on_every_backend(
-    settlement, tmp_path
-):
-    """A later 1-kWh confirmation at the unchanged export meter reconstructs both old quarters without changing evidence."""
-    from open_energy_planner.contracts.bonus import CounterBook, CounterSeed
-
-    runtime, store, _docs, engine, _plans = settlement
-    selected = contract(bonus=True)
-    original = store.frames()
-    seed = CounterSeed(
-        "bonus", selected.bonuses[0].period_start(START), 1, 10, "sensor.export", END
-    )
-    confirmed = CounterBook(END, (seed,))
-    result = DailySavings(runtime).calculate(
-        "2026-10-22", "UTC", selected, END + timedelta(days=1), START
-    )
-    assert runtime.issue is None
-    assert result["cash"]["coverage_seconds"] == 1800
-    assert store.frames() == original
-    assert confirmed.seeds == (seed,)
-    # An automatic historical seed lives separately from the manual planning confirmation.
-    runtime.bonus.archive.save(confirmed)
-    from open_energy_planner.storage.counters import CounterStore
-
-    current = CounterStore(SqlDocuments(engine, "bonus-counters"))
-    current.save(CounterBook(END, (replace(seed, used_kwh=9),)))
-    assert runtime.bonus.archive.current == confirmed
-    assert current.current.seeds[0].used_kwh == 9
 
 
 def test_retained_export_seed_does_not_limit_current_estimates(settlement, monkeypatch):
@@ -461,24 +427,6 @@ def test_retained_export_seed_does_not_limit_current_estimates(settlement, monke
     assert runtime.issue is None
     assert result["cash"]["coverage_seconds"] == 1800
     assert result["scenarios"]["actual"]["totals"]["bonus"] == pytest.approx(0.1)
-
-
-def test_multiple_export_anchors_backdate_on_every_database_backend(settlement):
-    """Both physical meters contribute .50+.50+.15 kWh, leaving 8.85 of the confirmed 10 kWh at the old boundary."""
-    from tests.app.savings.test_savings_bonus import EXPORTS, anchor, measured_rows
-
-    runtime, store, _docs, _engine, _plans = settlement
-    shift = timedelta(hours=2)
-    original = store.frames()
-    for measured, context in measured_rows():
-        store.put_frames(
-            (replace(measured, start=measured.start + shift, end=measured.end + shift),), context
-        )
-    confirmed = replace(anchor(), observed_at=anchor().observed_at + shift)
-    seed = runtime.bonus.backdate(confirmed, START + shift, EXPORTS)
-    assert seed.used_kwh == pytest.approx(8.85)
-    assert seed.component_meters == ((EXPORTS[0], 100), (EXPORTS[1], 200))
-    assert store.frames()[:2] == original
 
 
 def test_repricing_failure_hides_private_exception_values(settlement, monkeypatch, caplog):
