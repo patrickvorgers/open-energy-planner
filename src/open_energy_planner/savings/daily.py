@@ -220,11 +220,10 @@ class DailySavings:
         return report
 
     def calculate(self, day, timezone, contract, now, initial):
-        """Settle independent measured quarters without simulating a battery trajectory.
+        """Estimate costs independently for each measured quarter.
 
-        Keep actual and reconstructed bonus counters separate. A missing quarter
-        only removes its own comparison coverage. Unknown allowance usage stays
-        unknown until an independently valid opening or contractual reset exists.
+        Apply the dated bonus rate and payment conditions without the export
+        volume cap. Missing evidence affects only the quarter that requires it.
         """
         self.runtime.issue, self.runtime.attention = None, False
         start, end = day_window(day, timezone)

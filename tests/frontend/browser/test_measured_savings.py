@@ -90,6 +90,16 @@ def test_bar_tooltip_explains_its_own_backend_costs_and_clears_after_refresh(app
     )
     for key in ("actual_cost", "without_battery_cost", "savings"):
         data["cash"][key] = sum(chart_bin[key] or 0 for chart_bin in data["cash"]["chart"])
+    data["cash"]["breakdown"] = {
+        kind: {
+            component: sum(
+                (chart_bin["breakdown"][kind] or {}).get(component, 0)
+                for chart_bin in data["cash"]["chart"]
+            )
+            for component in ("purchase", "sale", "bonus")
+        }
+        for kind in ("actual", "without_battery")
+    }
     failed = False
 
     def respond(route):
@@ -116,6 +126,16 @@ def test_bar_tooltip_explains_its_own_backend_costs_and_clears_after_refresh(app
     dialog.get_by_role("button", name="Apply period", exact=True).click()
     canvas = page.locator("#savings-chart")
     expect(dialog).not_to_be_visible()
+    directory = Path("results/ci/savings-daily-breakdown")
+    directory.mkdir(parents=True, exist_ok=True)
+    if aggregation == "day" and "hassio_ingress" not in url:
+        page.locator("#savings-breakdown summary").click()
+        page.evaluate("window.scrollTo(0, 0)")
+        page.screenshot(
+            path=str(directory / f"summary-{page.viewport_size['width']}-standalone.png"),
+            full_page=True,
+        )
+        page.locator("#savings-breakdown summary").click()
     page.get_by_role("button", name="Refresh overview", exact=True).focus()
     canvas.scroll_into_view_if_needed()
     coordinates = canvas.evaluate("""canvas => {
@@ -155,8 +175,6 @@ def test_bar_tooltip_explains_its_own_backend_costs_and_clears_after_refresh(app
     assert tooltip.evaluate(
         "element => {const bounds=element.getBoundingClientRect();return bounds.left>=0 && bounds.right<=innerWidth && bounds.top>=0 && bounds.bottom<=innerHeight && element.scrollWidth<=element.clientWidth;}"
     )
-    directory = Path("results/ci/savings-daily-breakdown")
-    directory.mkdir(parents=True, exist_ok=True)
     page.screenshot(
         path=str(
             directory
