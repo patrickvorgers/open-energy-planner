@@ -372,6 +372,12 @@
 .workspace .scenario-costs [data-benefit-state="negative"] dd { color:#a3312e; }
 .workspace .scenario-costs details { border:0; padding:0; margin:12px 0 18px; border-radius:0; }
 .workspace .scenario-costs summary { min-height:32px; font-size:14px; }
+.workspace .battery-plan { margin:16px 0 0; padding:0; border:0; border-top:1px solid var(--oep-line); border-radius:0; }
+.battery-plan > summary { min-height:44px; box-sizing:border-box; padding:12px 8px; }
+.battery-plan > summary:focus-visible { outline-offset:-2px; }
+.battery-plan > p { margin:4px 0 8px; }
+.chart-tooltip .charging-source-detail { display:flex; flex-wrap:wrap; gap:4px 12px; padding-inline-start:20px; font-weight:400; }
+.chart-tooltip .charging-source-detail > span { white-space:nowrap; }
 .workspace .scenario-costs details dl { display:flex; flex-wrap:wrap; gap:12px 32px; margin:10px 0; }
 .workspace .scenario-costs details dd { font-size:16px; font-weight:400; }
 .workspace .scenario-costs > p { font-size:13px; color:var(--oep-muted); }

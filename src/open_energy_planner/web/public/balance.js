@@ -1,5 +1,5 @@
 // Presentation of immutable, independently validated physical flows. Never optimize or infer energy routes here.
-const FLOW_COLORS = Object.freeze({solar: "#23965e", solarAC: "#165c3c", import: "#2586c4", export: "#56bac7", discharge: "#d45464", charge: "#8560b5", load: "#d29323", losses: "#88949f"});
+export const FLOW_COLORS = Object.freeze({solar: "#23965e", solarAC: "#165c3c", import: "#2586c4", export: "#56bac7", discharge: "#d45464", charge: "#8560b5", load: "#d29323", losses: "#88949f"});
 const MILLISECONDS_PER_HOUR = 3600000;
 export const QUARTER_MILLISECONDS = MILLISECONDS_PER_HOUR / 4;
 const TIMESTAMP_ROUNDOFF_MILLISECONDS = 1;
@@ -7,7 +7,7 @@ const PERCENT = 100;
 const BALANCE_TOLERANCE_KWH = 0.00001;
 // Match the independent physical validator's per-flow roundoff allowance. Never relax conservation to make bars fit.
 const DISPLAY_ZERO_TOLERANCE_KWH = 0.0000001;
-const SOC_COLORS = ["#324f9d", "#78541d", "#5e3979", "#22665b"];
+const SOC_COLORS = ["#087f76", "#a75a17", "#2266a5", "#ad4052"];
 const DEVICE_COLORS = ["#b55a9d", "#5868b5", "#b9673c", "#267e78", "#8b648c", "#8f7441"];
 const THERMAL_COLORS = ["#b9673c", "#8f7441", "#a14e66", "#8b648c"];
 const finite = (value) => typeof value === "number" && Number.isFinite(value);
@@ -53,15 +53,26 @@ export function quarterBalanceSeries(series) {
             const end = start + QUARTER_MILLISECONDS;
             const coveredStart = Math.max(start, first), coveredEnd = Math.min(end, last);
             let cursor = coveredStart, weighted = 0, valid = true;
+            const sourceEnergy = entry.showChargingSources ? {} : null;
             for (const row of source) {
                 const left = Math.max(coveredStart, row.start), right = Math.min(coveredEnd, Math.round(row.end));
                 if (right <= left) continue;
                 if (Math.abs(left - cursor) > TIMESTAMP_ROUNDOFF_MILLISECONDS || !finite(row.value)) valid = false;
                 weighted += (right - left) * row.value;
+                if (sourceEnergy && row.value < 0) {
+                    for (const [source, power] of Object.entries(row.chargingSources || {other: -row.value})) {
+                        sourceEnergy[source] = (sourceEnergy[source] || 0) + (right - left) * power;
+                    }
+                }
                 cursor = right;
             }
             if (Math.abs(cursor - coveredEnd) > TIMESTAMP_ROUNDOFF_MILLISECONDS) valid = false;
-            intervals.push({start, end, coveredStart, coveredEnd, value: valid ? weighted / (coveredEnd - coveredStart) : null});
+            const duration = coveredEnd - coveredStart;
+            const interval = {start, end, coveredStart, coveredEnd, value: valid ? weighted / duration : null};
+            if (valid && sourceEnergy) {
+                interval.chargingSources = Object.fromEntries(Object.entries(sourceEnergy).map(([source, value]) => [source, value / duration]));
+            }
+            intervals.push(interval);
         }
         return {...entry, intervals};
     });
@@ -172,6 +183,37 @@ function socSeries(plan, intervals, units, labels) {
         });
         const identityIndex = plan.input_snapshot.problem.batteries.findIndex((battery) => battery.device_id === unit.device_id);
         return {name: `${labels.get(unit.device_id) || "Battery"}: SoC`, points, color: SOC_COLORS[identityIndex % SOC_COLORS.length], axis: "soc", unit: "%", tooltipGroup: "Battery state"};
+    });
+}
+
+/** Display each battery's frozen terminal power and stored state independently of the installation balance. */
+export function batteryPlanSeries(plan, labels) {
+    const problem = plan.input_snapshot?.problem;
+    const intervals = problem?.intervals || [], units = problem?.batteries || [];
+    const states = socSeries(plan, intervals, units, labels);
+    return units.flatMap((unit, index) => {
+        const name = labels.get(unit.device_id) || `Battery ${index + 1}`;
+        const state = states[index];
+        const legend = {legendId: unit.device_id, legendName: name, legendColor: state.color};
+        const barStyle = {outlineColor: state.color};
+        const rows = intervals.map((_, intervalIndex) =>
+            plan.expected_flows?.[intervalIndex]?.batteries?.find((row) => row.device_id === unit.device_id));
+        const charge = rows.map((row) => energy(row?.charge_kwh) ? -row.charge_kwh : null);
+        const discharge = rows.map((row) => energy(row?.discharge_kwh) ? row.discharge_kwh : null);
+        const charging = flowSeries(`${name}: Charging`, FLOW_COLORS.charge, intervals, charge, "Consumption");
+        charging.showChargingSources = true;
+        charging.intervals.forEach((row, intervalIndex) => {
+            const sources = plan.battery_charging_sources?.[intervalIndex]?.[unit.device_id];
+            if (sources && row.value < 0) {
+                const hours = intervals[intervalIndex].duration_h;
+                row.chargingSources = Object.fromEntries(Object.entries(sources).map(([source, amount]) => [source, amount / hours]));
+            }
+        });
+        return [
+            {...charging, ...legend, ...barStyle},
+            {...flowSeries(`${name}: Discharging`, FLOW_COLORS.discharge, intervals, discharge, "Production"), ...legend, ...barStyle},
+            {...state, ...legend}
+        ];
     });
 }
 
