@@ -131,10 +131,12 @@ net meter reading, then save. With the option off, OEP still plans the battery
 and uses its fixed power commands.
 
 With the option enabled, OEP can select grid following when the current plan
-expects both zero grid import and zero grid export and the battery meets the
-reserve and calibration conditions. The Grid mode becomes `zero_grid` when at
-least one battery is following. The battery's own mode identifies whether it
-participates in this interval.
+expects at most 10 W of average grid exchange and the battery meets the
+reserve and calibration conditions. Import and export both count toward the
+limit. In a 15-minute interval, 10 W equals 2.5 Wh. The plan keeps its
+original expected grid exchange. The Grid mode becomes `zero_grid` with a
+0 W target when at least one battery is following. The battery's own mode
+identifies whether it participates in this interval.
 
 | Example | Virtual device | Control mode | Power target |
 | --- | --- | --- | --- |
