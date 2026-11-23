@@ -124,6 +124,41 @@ committed forecast definition fails, its worker retries from the durable
 settings before that domain can supply a forecast again.
 The legacy source editor is blocked once installation settings own the roles.
 
+### Saving installation settings
+
+When saved settings change, the acknowledgement confirms the commit and command revocation. Forecast
+restoration and the next planning round can finish separately.
+
+```mermaid
+sequenceDiagram
+    participant Browser
+    participant API as Setup API
+    participant DB as Database
+    participant Planning as Live planning
+    participant Forecast as Forecast workers
+    Browser->>API: PUT /v1/setup with versions
+    API->>API: Validate revisions and shared links
+    alt Revisions and links are valid
+        API->>DB: Commit changed definitions together
+        alt Database write fails
+            DB-->>API: Roll back the changed definitions
+            API-->>Browser: Report the failed save
+        else Commit succeeds
+            DB-->>API: Confirm the commit
+            API->>Planning: Revoke obsolete commands
+            API->>Forecast: Restore changed definitions
+            API-->>Browser: Return settings, devices and warnings
+            par Forecast restore needs a retry
+                Forecast->>DB: Retry from the committed settings
+            and Browser lost the acknowledgement
+                Browser->>API: Reload and compare before retrying
+            end
+        end
+    else Validation fails
+        API-->>Browser: Report the validation error
+    end
+```
+
 ## Modules and responsibilities
 
 | Module | Responsibility |

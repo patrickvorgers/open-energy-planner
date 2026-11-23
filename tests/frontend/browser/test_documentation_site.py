@@ -94,6 +94,7 @@ def test_all_diagrams_render_at_each_reading_width(documentation_page, documenta
         "docs/development/THERMAL-STORAGE",
         "docs/development/ACTIVITY-EVENTS",
         "docs/development/EMS-VISUALIZATION",
+        "docs/development/INSTALLATION-PLANNING",
         "docs/development/STORAGE-MIGRATION-UI",
     )
     for route in routes:
