@@ -23,16 +23,31 @@ freeze an already retained capture, but cannot reconstruct a missing one.
 Subsequent plans do not revise the frozen predictions. Every capture retains its
 forecast documents, issue times, configuration/training versions and digest.
 
-All currently compared alternatives use the same complete measured days. Missing
-hours are unavailable, not zeros. The latest three eligible days within a
-30-day lookback provide evidence. Each day records hourly MAE and absolute daily
-energy error. A challenger must improve hourly MAE on each day by more than both
-5.0% and 0.001 kWh per hour. If multiple challengers qualify, the lowest summed
-MAE wins. A tie with the baseline cannot qualify. Equally scoring eligible
-challengers retain their comparison order, currently Ridge before weather.
-Insufficient or unreadable evidence, no consistent improvement or unavailable
-model inputs retain the baseline. These thresholds are
-conservative product policies, not a statistical accuracy guarantee.
+All compared alternatives use the same measured hours. Missing hours leave a
+day unavailable. Each day records hourly MAE and absolute daily energy error.
+
+Device selection combines complete original forecasts from the last 30 local
+days with up to 13 historical replay days spaced across the past year. An
+original forecast takes precedence for the same day. Historical replay fits
+each candidate on completed outcomes before its simulated origin. It uses
+temperature from a shared original ECMWF IFS run whose supported simulation time
+precedes the target day. Historical temperature observations can support the
+earlier training period. Publication time stays unknown when the provider did
+not supply it. The imported run's actual receipt remains in its source archive.
+Calendar-only devices can replay earlier days from meter history alone.
+
+Device selection minimizes absolute hourly error across all the comparable
+hours. Daily energy error breaks hourly ties, and the weekday profile wins
+an exact tie. A completed live day can update selection as soon as its
+measurements arrive. Usable history can select a model immediately. When
+a model is unavailable for the current horizon, selection uses available
+models with comparable evidence. The weekday profile is the fallback
+when comparison evidence is unavailable.
+
+Whole-house and residual-demand selection retain the latest-three-day gate
+within a 30-day lookback. A challenger must improve hourly MAE by more than
+both 5.0% and 0.001 kWh per hour on each of the three days. If multiple
+challengers qualify, lowest summed hourly MAE wins.
 
 A later bad day, changed measurement boundary or unavailable current model can
 return selection to the baseline. Corrupt evidence is preserved, reported as
@@ -86,6 +101,10 @@ are immutable. The family includes measurement configuration, component boundary
 model identities, timezone and selection policy. Old financial or rolling-window
 weather evidence cannot grant admission to the new daily policy. Existing
 configuration identities, source IDs and original plans are unchanged.
+The demand namespace caches derived historical device predictions separately
+under `device-replay-<family>.json`. A historical cache entry records the
+simulated origin, the archived weather run identity where applicable, the
+training input identity and the common hourly predictions.
 
 Forecast quality shows current model readiness and completed local-day
 comparisons beside the frozen daily view. Planning shows the chosen forecasts

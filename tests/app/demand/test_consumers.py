@@ -528,7 +528,7 @@ def test_residual_filter_retains_components_without_hiding_substantial_conflicts
 
 
 def test_runtime_separation_uses_baselines_and_archives_exact_components(tmp_path):
-    """Complete measured separation is active immediately while learned models await independent daily proof."""
+    """Complete separation and the historically compared device are archived together."""
     store = make_store(tmp_path, DemandStore)
     store.save(config())
     runtime = DemandRuntime(store)
@@ -558,7 +558,10 @@ def test_runtime_separation_uses_baselines_and_archives_exact_components(tmp_pat
     runtime.select_learned(True)
     assert runtime.job(now) is None
     assert runtime.forecast.model == "consumer-composite-v1"
-    assert runtime.consumers.result["devices"][0]["status"] == "collecting_forward_accuracy"
+    ready = runtime.consumers.result["devices"][0]
+    assert ready["status"] == "accuracy_validated"
+    assert ready["forecast"]["model"] == "weekday-hour-v2"
+    assert ready["model_selection"]["windows"][0]["source"] == "historical_replay"
     assert store.documents.read(original_path) == original_components
     runtime.consumers.histories.clear()
     assert runtime.install(runtime.build(runtime.job(now)), now)

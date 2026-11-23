@@ -233,6 +233,7 @@ def predict(
     temperatures=(),
     grid=None,
     weather_version=None,
+    recent=None,
 ):
     """Integrate bounded within-hour rate estimates, preserving hourly energy and known-at chronology.
 
@@ -246,7 +247,7 @@ def predict(
     hour = grid[0][0].replace(minute=0, second=0, microsecond=0)
     rates = {}
     while hour < final:
-        rates[hour] = model.predict(hour, temperature=weather.get(hour))
+        rates[hour] = model.predict(hour, temperature=weather.get(hour), recent=recent)
         hour += timedelta(hours=1)
     slopes = {}
     for hour, rate in rates.items():

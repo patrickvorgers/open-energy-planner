@@ -552,6 +552,17 @@ before midnight. A frozen day cannot be overwritten. The family binds the
 measurement boundary, algorithms and daily-selection policy. Publication history
 supplies control exclusions, so no duplicate intervention archive is introduced.
 
+`device-replay-<family>.json` in the demand namespace holds a checked, mutable
+cache of up to 13 local-day simulations. `checksum` hashes the complete
+`replays` mapping. Each day maps to `key` (SHA-256 of model family, simulated
+origin, original weather run where needed and the chronological training input
+fingerprint), `origin` (aware ISO datetime), `weather_run` (original run digest
+or null for calendar-only models) and `predictions` (an ordered vector of hourly
+nonnegative AC kWh per model, or null when a common prediction is unavailable).
+Measured hours are read independently for scoring, and a live capture for the
+same day takes precedence. The shared document store includes the cache in
+database transfer.
+
 New plan snapshots can contain `load_components`. Each component retains an
 optional Energy `entity_id` (null for household remainder), `forecast_version`,
 original `forecast_steps`, remaining `steps` and `unseparated_entities` on the
