@@ -37,13 +37,16 @@ class SolarStore(SeriesArchive):
 
     def save(self, configuration):
         """Archive configuration before atomically installing its active pointer."""
+        self.write_configuration(configuration)
+        self.current, self.issue = configuration, None
+
+    def write_configuration(self, configuration):
+        """Write the durable revision without changing runtime state."""
         with self.transaction():
             self.archive(
                 "configuration", configuration.version, configuration_document(configuration)
             )
             self.documents.write("current.json", configuration.version)
-
-        self.current, self.issue = configuration, None
 
     def archive_model(self, model):
         """Retain validated native weights once and return detached source-bound model metadata."""

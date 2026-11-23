@@ -23,7 +23,7 @@ from .basis import forecast_usable
 from .curtailment import FeedbackRequestError
 from .ha_forecasts import parse_ha_predictions
 from .notifications import explain_solar_problem, solar_forecast_notifications
-from .wire import parse_configuration
+from .wire import parse_configuration, validate_configuration_dates
 
 SOLAR_WORKER_POLL_SECONDS = 5
 MAX_HA_FORECAST_BODY_BYTES = 32 * BYTES_PER_KIB * BYTES_PER_KIB
@@ -108,25 +108,14 @@ def register(app, runtime, live, lock, persist, snapshot, membership):
         try:
             body = await request.json()
             candidate = parse_configuration(body)
-            if any(
-                source.unrestricted_history_end is not None
-                and datetime.fromisoformat(source.unrestricted_history_end) > datetime.now(UTC)
-                for source in candidate.sources
-            ):
-                raise ValueError("Historical production confirmation cannot cover the future")
-            if any(
-                source.learning_start is not None
-                and datetime.fromisoformat(source.learning_start) > datetime.now(UTC)
-                for source in candidate.sources
-            ):
-                raise ValueError("Solar learning start cannot be in the future")
+            validate_configuration_dates(candidate, datetime.now(UTC))
         except (ValueError, TypeError, KeyError, OverflowError):
             raise web.HTTPBadRequest(text="Invalid solar configuration") from None
         async with lock:
             try:
                 membership.validate_membership("solar", candidate)
                 membership.validate_panel_settings(
-                    candidate, runtime.configuration, datetime.now(UTC)
+                    candidate, runtime.store.current, datetime.now(UTC)
                 )
             except ValueError as error:
                 raise web.HTTPBadRequest(
@@ -138,7 +127,7 @@ def register(app, runtime, live, lock, persist, snapshot, membership):
                         fallback="Cannot validate solar settings. Reload the Home Assistant Energy configuration before saving again.",
                     )
                 ) from None
-            current = runtime.configuration.version if runtime.configuration else None
+            current = runtime.store.current.version if runtime.store.current else None
             if body.get("expected_version") != current:
                 raise web.HTTPConflict(text="Solar configuration changed. Reload before saving")
             if candidate.version != current:
@@ -258,6 +247,12 @@ def register(app, runtime, live, lock, persist, snapshot, membership):
                 activity = None
                 try:
                     async with lock:
+                        if runtime.store.current is not None and runtime.store.issue:
+                            cancellation = await complete_write(
+                                runtime.restore_committed_configuration
+                            )
+                            if cancellation is not None:
+                                raise cancellation
                         recovery = runtime.feedback_restore_job(datetime.now(UTC))
                     if recovery:
                         recovered = await asyncio.to_thread(

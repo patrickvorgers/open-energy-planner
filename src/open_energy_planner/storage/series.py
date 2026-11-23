@@ -33,9 +33,9 @@ class SeriesArchive:
                 self.documents.write(target, value)
 
     @contextmanager
-    def transaction(self):
+    def transaction(self, *related_documents):
         """Serialize concurrent archive writes before starting their shared SQL transaction."""
-        with self._writes, self.documents.transaction():
+        with self._writes, self.documents.transaction(*related_documents):
             yield
 
     def archive_series(self, kind, ref, rows, *, entity=None):

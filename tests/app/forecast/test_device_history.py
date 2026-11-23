@@ -112,7 +112,15 @@ def test_slow_background_replay_does_not_hold_live_prediction():
             replay_binding=lambda: ("current",),
         )
         app = web.Application()
-        build_live = register(app, demand, None, None, None, asyncio.Lock(), None, None)
+        build_live = register(
+            app,
+            demand,
+            live=None,
+            setup_catalogue=None,
+            lock=asyncio.Lock(),
+            persist_then_install=None,
+            snapshot=None,
+        )
         lifecycle = app.cleanup_ctx[-1](app)
         await anext(lifecycle)
         try:

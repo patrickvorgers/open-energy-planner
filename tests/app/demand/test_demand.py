@@ -699,6 +699,32 @@ def test_forecast_projection_uses_the_model_contract_without_concrete_type_check
     assert sum(step.kwh for step in forecast.steps) == 48
 
 
+def test_legacy_demand_save_is_recoverable_after_a_history_read_failure(tmp_path, monkeypatch):
+    """Keep the saved definition and suspend old forecast work until history can be restored."""
+    store = make_store(tmp_path, DemandStore)
+    store.save(config())
+    runtime = DemandRuntime(store)
+    candidate = replace(config(), annual_kwh=4200)
+
+    def fail_restore(_entities):
+        """Simulate a transient read failure after the new configuration is durable."""
+        raise OSError("Injected history read failure")
+
+    with monkeypatch.context() as failure:
+        failure.setattr(runtime.history_import, "restore", fail_restore)
+        with pytest.raises(OSError, match="Injected history read failure"):
+            runtime.save_configuration(candidate)
+        assert store.current == candidate
+        assert store.issue == "demand_configuration_unreadable"
+        assert runtime.job(START) is None
+        assert runtime.request(START) is None
+
+    runtime.restore_committed_configuration()
+    assert store.issue is None
+    assert runtime.configuration == candidate
+    assert runtime.job(START) is not None
+
+
 def test_unreadable_demand_configuration_cannot_silently_restore_upstream_load(tmp_path):
     """A corrupt saved demand pointer blocks current installation planning rather than replacing household load."""
     from types import SimpleNamespace
