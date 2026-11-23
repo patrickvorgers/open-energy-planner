@@ -20,6 +20,7 @@ from open_energy_planner.forecast_selection.calculation.accuracy import (
 
 DAILY_ACCURACY_POLICY = "matched-local-day-demand-v1"
 DEVICE_ACCURACY_POLICY = "matched-local-day-device-replay-v1"
+DEVICE_ERROR_TIE_TOLERANCE_KWH = 1e-9
 
 
 def _best_device_model(forecasts, windows):
@@ -32,14 +33,14 @@ def _best_device_model(forecasts, windows):
     daily = {
         name: fsum(window["daily_energy_error_kwh"][name] for window in windows)
         for name, error in hourly.items()
-        if isclose(error, best_hourly, rel_tol=0, abs_tol=1e-9)
+        if isclose(error, best_hourly, rel_tol=0, abs_tol=DEVICE_ERROR_TIE_TOLERANCE_KWH)
     }
     best_daily = min(daily.values())
     return min(
         (
             name
             for name, error in daily.items()
-            if isclose(error, best_daily, rel_tol=0, abs_tol=1e-9)
+            if isclose(error, best_daily, rel_tol=0, abs_tol=DEVICE_ERROR_TIE_TOLERANCE_KWH)
         ),
         key=lambda name: (name != "baseline", name),
     )

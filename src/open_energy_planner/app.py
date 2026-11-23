@@ -5,7 +5,7 @@ import hmac
 import logging
 import os
 from contextlib import suppress
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from functools import partial
 from uuid import uuid4
 
@@ -42,6 +42,7 @@ from .build_info import RELEASE
 from .demand.api import register as register_demand
 from .demand.runtime import DemandRuntime
 from .demand.storage import DemandStore
+from .forecast_selection.device_history import replay_weather_history_floor
 from .frontend.assets import is_public
 from .frontend.assets import register as register_assets
 from .frontend.session import register as register_session
@@ -1084,7 +1085,7 @@ def create_app(
         """Keep solar history and admit up to a year of device comparison weather."""
         device_start = oldest_demand_history() if device_weather_configured() else None
         if device_start is not None:
-            device_start = max(device_start, datetime.now(UTC) - timedelta(days=366))
+            device_start = max(device_start, replay_weather_history_floor(datetime.now(UTC)))
         return min(
             (
                 instant

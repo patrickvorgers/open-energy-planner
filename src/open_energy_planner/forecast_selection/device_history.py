@@ -1,8 +1,10 @@
 """Replay selected historical device days with original weather and earlier training outcomes."""
 
-from datetime import timedelta
+import logging
+from datetime import UTC, datetime, time, timedelta
 from hashlib import sha256
 from math import fsum
+from weakref import WeakKeyDictionary
 from zoneinfo import ZoneInfo
 
 from open_energy_planner.core.calendar import day_window
@@ -15,11 +17,22 @@ from open_energy_planner.forecast_selection.calculation.accuracy import (
     comparison_hours,
     mean_absolute_error,
 )
+from open_energy_planner.runtime.diagnostics.logging import BackgroundLog
 from open_energy_planner.weather.model import TemperatureHour
 
 REPLAY_BUCKET_DAYS = 28
 REPLAY_BUCKETS = 13
+REPLAY_CALENDAR_LEAD_HOURS = 12
+REPLAY_WEATHER_HISTORY_DAYS = 366
 REPLAY_POLICY = "device-chronological-weather-replay-v1"
+_LOGGER = logging.getLogger(__name__)
+_REPLAY_LOGS = WeakKeyDictionary()
+
+
+def replay_weather_history_floor(now):
+    """Keep the original forecast archive request stable throughout each UTC day."""
+    day = now.astimezone(UTC).date() - timedelta(days=REPLAY_WEATHER_HISTORY_DAYS)
+    return datetime.combine(day, time.min, tzinfo=UTC)
 
 
 def replay_days(now, timezone, runs=()):
@@ -53,7 +66,11 @@ def calendar_replay_days(now, timezone):
         )
     )
     return tuple(
-        (day, day_window(day.isoformat(), timezone)[0] - timedelta(hours=12), None)
+        (
+            day,
+            day_window(day.isoformat(), timezone)[0] - timedelta(hours=REPLAY_CALENDAR_LEAD_HOURS),
+            None,
+        )
         for day in tuple(days)[:REPLAY_BUCKETS]
     )
 
@@ -94,6 +111,9 @@ def replay_scores(documents, configuration, samples, temperatures, windows, mode
     fingerprint = sha256()
     training_end = 0
     results = []
+    logs = _REPLAY_LOGS.setdefault(documents, {})
+    log = logs.setdefault(family, BackgroundLog(_LOGGER, "Device forecast history replay"))
+    attempted_fit = failed = False
     for day, origin, run in sorted(windows):
         while training_end < len(samples) and samples[training_end].start + HOUR <= origin:
             sample = samples[training_end]
@@ -129,6 +149,7 @@ def replay_scores(documents, configuration, samples, temperatures, windows, mode
                 if needs_temperature
                 else ()
             )
+            attempted_fit = True
             try:
                 predictions = _predictions(
                     configuration,
@@ -141,7 +162,12 @@ def replay_scores(documents, configuration, samples, temperatures, windows, mode
                     needs_temperature,
                 )
             except (ImportError, OSError, RuntimeError):
-                # Retry temporary training failures on the next forecast update.
+                if not failed:
+                    log.exception(
+                        "Skipping affected comparison days. Retrying on the next forecast update.",
+                        expected=True,
+                    )
+                failed = True
                 continue
             saved = {
                 "key": key,
@@ -178,6 +204,8 @@ def replay_scores(documents, configuration, samples, temperatures, windows, mode
         )
     if checked != previous:
         documents.write(path, {"replays": checked, "checksum": digest(checked)})
+    if attempted_fit and not failed and log.failure_key is not None:
+        log.success("Historical device forecasts can be evaluated again.")
     return tuple(results)
 
 

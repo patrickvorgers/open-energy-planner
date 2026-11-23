@@ -6,13 +6,30 @@ from open_energy_planner.demand.calculation.forecasting import RidgeDemandModel
 from open_energy_planner.demand.calculation.model import DemandConfiguration, DemandHour, EnergyTerm
 from open_energy_planner.demand.storage import DemandStore
 from open_energy_planner.demand.training import daily_models
-from open_energy_planner.forecast_selection.device_history import replay_days, replay_scores
+from open_energy_planner.forecast_selection.device_history import (
+    replay_days,
+    replay_scores,
+    replay_weather_history_floor,
+)
 from open_energy_planner.weather.model import TemperatureHour, WeatherHour
 from open_energy_planner.weather.run import ForecastWeatherRun
 from tests.database.support.archive import make_store
 
 
-def test_replay_preserves_original_weather_and_cannot_fit_held_out_energy(tmp_path, monkeypatch):
+def test_replay_weather_history_floor_changes_only_at_utc_midnight():
+    """Keep intraday polls from resetting the scheduled weather refresh."""
+    midnight = datetime(2026, 8, 24, tzinfo=UTC)
+    assert replay_weather_history_floor(midnight) == replay_weather_history_floor(
+        midnight + timedelta(hours=23, minutes=59)
+    )
+    assert replay_weather_history_floor(midnight + timedelta(days=1)) == (
+        replay_weather_history_floor(midnight) + timedelta(days=1)
+    )
+
+
+def test_replay_preserves_original_weather_and_cannot_fit_held_out_energy(
+    tmp_path, monkeypatch, caplog
+):
     """Temperature models win independent replay. Corrected held-out energy changes scores only."""
     now = datetime(2026, 8, 24, 12, tzinfo=UTC)
     initialized = now - timedelta(days=4)
@@ -51,16 +68,19 @@ def test_replay_preserves_original_weather_and_cannot_fit_held_out_energy(tmp_pa
 
     with monkeypatch.context() as transient:
         transient.setattr(RidgeDemandModel, "fit", temporarily_unavailable)
-        assert not replay_scores(
-            archive,
-            configuration,
-            tuple(samples),
-            historical_weather,
-            ((day, origin, run),),
-            models,
-            (),
-        )
+        for _ in range(2):
+            assert not replay_scores(
+                archive,
+                configuration,
+                tuple(samples),
+                historical_weather,
+                ((day, origin, run),),
+                models,
+                (),
+            )
+    assert caplog.text.count("Device forecast history replay failed") == 1
 
+    caplog.set_level("INFO", logger=replay_scores.__module__)
     (window,) = replay_scores(
         archive,
         configuration,
@@ -70,6 +90,7 @@ def test_replay_preserves_original_weather_and_cannot_fit_held_out_energy(tmp_pa
         models,
         (),
     )
+    assert "Device forecast history replay recovered" in caplog.text
     assert window["source"] == "historical_replay"
     assert window["hours"] == 24
     assert set(window["mae_kwh"]) == {"baseline", "ridge", "weather"}
@@ -80,9 +101,11 @@ def test_replay_preserves_original_weather_and_cannot_fit_held_out_energy(tmp_pa
         else sample
         for sample in samples
     )
-    (updated,) = replay_scores(
-        archive, configuration, corrected, historical_weather, ((day, origin, run),), models, ()
-    )
+    with monkeypatch.context() as cached:
+        cached.setattr(RidgeDemandModel, "fit", temporarily_unavailable)
+        (updated,) = replay_scores(
+            archive, configuration, corrected, historical_weather, ((day, origin, run),), models, ()
+        )
     assert updated["forecast_version"] == window["forecast_version"]
     assert updated["actual_version"] != window["actual_version"]
     assert not replay_scores(
