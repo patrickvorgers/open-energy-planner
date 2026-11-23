@@ -118,14 +118,22 @@ def test_delayed_background_reload_preserves_newer_installation_ownership(
     before = page.evaluate("window.__installationProbe.config()")
     changed = deepcopy(read_settings(page, url))
     changed["solar"]["version"] = "b" * 64
-    page.route("**/v1/setup", lambda route: route.fulfill(json=changed))
+
+    def stale_read(route):
+        """Return stale settings only to background GETs and let the real save through."""
+        if route.request.method == "GET":
+            route.fulfill(json=changed)
+        else:
+            route.continue_()
+
+    page.route("**/v1/setup", stale_read)
     page.evaluate(
         """({outcome,changed}) => {
         const nativeFetch=window.fetch;
         let configurationReads=0;
         window.reloadHeld=false;
         window.fetch=(path,options)=>{
-            if(String(path).endsWith('v1/setup')&&options.signal&&++configurationReads===2) {
+            if(String(path).endsWith('v1/setup')&&options.method==='GET'&&options.signal&&++configurationReads===2) {
                 window.reloadHeld=true;
                 return new Promise((resolve,reject)=>{window.completeReload=()=>outcome==='failure'?reject(new TypeError('PRIVATE-STAGED-READ')):resolve(new Response(JSON.stringify(changed)));});
             }
@@ -238,9 +246,10 @@ def test_annual_evidence_refresh_preserves_manual_draft_and_revision_guards(app_
     page.unroute("**/v1/setup")
     page.get_by_role("button", name="Save installation", exact=True).click()
     expect(page.locator("#installation-save-state")).to_contain_text("Installation saved.")
-    assert [write["expected_version"] for write in writes] == [
-        before[section]["version"] for section in ("demand", "solar", "installation")
-    ]
+    [write] = writes
+    assert {section: definition["expected_version"] for section, definition in write.items()} == {
+        section: before[section]["version"] for section in ("demand", "solar", "installation")
+    }
     saved = read_settings(page, url)
     assert saved["demand"]["annual_kwh"] == 4300
     assert saved["installation"]["import_limit_w"] == 7250
