@@ -2,6 +2,7 @@
 
 from datetime import UTC, datetime, timedelta
 
+from open_energy_planner.demand.calculation.forecasting import RidgeDemandModel
 from open_energy_planner.demand.calculation.model import DemandConfiguration, DemandHour, EnergyTerm
 from open_energy_planner.demand.storage import DemandStore
 from open_energy_planner.demand.training import daily_models
@@ -11,7 +12,7 @@ from open_energy_planner.weather.run import ForecastWeatherRun
 from tests.database.support.archive import make_store
 
 
-def test_replay_preserves_original_weather_and_cannot_fit_held_out_energy(tmp_path):
+def test_replay_preserves_original_weather_and_cannot_fit_held_out_energy(tmp_path, monkeypatch):
     """Temperature models win independent replay. Corrected held-out energy changes scores only."""
     now = datetime(2026, 8, 24, 12, tzinfo=UTC)
     initialized = now - timedelta(days=4)
@@ -44,6 +45,22 @@ def test_replay_preserves_original_weather_and_cannot_fit_held_out_energy(tmp_pa
         None, configuration, samples, now, temperatures=historical_weather, weather_sensitive=True
     )
     archive = make_store(tmp_path, DemandStore).documents
+
+    def temporarily_unavailable(*args, **kwargs):
+        raise RuntimeError("Training engine temporarily unavailable")
+
+    with monkeypatch.context() as transient:
+        transient.setattr(RidgeDemandModel, "fit", temporarily_unavailable)
+        assert not replay_scores(
+            archive,
+            configuration,
+            tuple(samples),
+            historical_weather,
+            ((day, origin, run),),
+            models,
+            (),
+        )
+
     (window,) = replay_scores(
         archive,
         configuration,

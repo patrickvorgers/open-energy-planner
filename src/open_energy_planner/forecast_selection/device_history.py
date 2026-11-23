@@ -129,16 +129,20 @@ def replay_scores(documents, configuration, samples, temperatures, windows, mode
                 if needs_temperature
                 else ()
             )
-            predictions = _predictions(
-                configuration,
-                prefix,
-                origin,
-                run,
-                hours,
-                models,
-                training_weather,
-                needs_temperature,
-            )
+            try:
+                predictions = _predictions(
+                    configuration,
+                    prefix,
+                    origin,
+                    run,
+                    hours,
+                    models,
+                    training_weather,
+                    needs_temperature,
+                )
+            except (ImportError, OSError, RuntimeError):
+                # Retry temporary training failures on the next forecast update.
+                continue
             saved = {
                 "key": key,
                 "predictions": predictions,
@@ -187,6 +191,7 @@ def _predictions(configuration, training, origin, run, hours, models, weather, n
         temperatures=weather,
         weather_sensitive=needs_temperature,
         include_weather="weather" in models,
+        raise_on_transient_failure=True,
     )
     if not fitted["baseline"].residual_profile or any(
         role not in fitted
