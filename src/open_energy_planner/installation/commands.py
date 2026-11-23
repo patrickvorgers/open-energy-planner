@@ -12,7 +12,8 @@ from ..build_info import RELEASE
 from ..planning_policy import command_deadline
 
 WHOLE_WATT_TOLERANCE = 1e-05
-ZERO_GRID_TOLERANCE_KWH = 1e-07
+CALIBRATION_ENERGY_ROUNDOFF_KWH = 1e-07
+ZERO_GRID_MAX_EXCHANGE_W = 10
 
 
 def plan_document(snapshot, result, costs, now):
@@ -63,9 +64,10 @@ def plan_document(snapshot, result, costs, now):
         zip(problem.intervals, result.plan.flows, strict=True)
     ):
         group = interval.control_group or interval_index
-        # Following is a cost-neutral execution choice only for an independently
-        # validated zero-import/export result. Keep its forecast battery flows,
-        # losses, costs and limits unchanged. Fast physical regulation stays in HA.
+        # Use the same power margin even when replanning shortens the first interval.
+        grid_exchange_w = (
+            (abs(flow.grid_import) + abs(flow.grid_export)) * WATTS_PER_KW / interval.duration_h
+        )
         eligible = {
             battery.device_id
             for battery in problem.batteries
@@ -73,8 +75,7 @@ def plan_document(snapshot, result, costs, now):
             and not battery.calibration_charge
             and battery.calibration_hold_until is None
             and stored[battery.device_id] >= battery.battery.minimum_kwh
-            and abs(flow.grid_import) <= ZERO_GRID_TOLERANCE_KWH
-            and abs(flow.grid_export) <= ZERO_GRID_TOLERANCE_KWH
+            and grid_exchange_w <= ZERO_GRID_MAX_EXCHANGE_W + WHOLE_WATT_TOLERANCE
         }
         # Billing splits must not create a new following/fixed decision inside one original control.
         group_followers.setdefault(group, eligible).intersection_update(eligible)
@@ -93,7 +94,8 @@ def plan_document(snapshot, result, costs, now):
             )
             if (
                 unit.calibration_charge
-                and abs(battery.end_kwh - unit.battery.capacity_kwh) <= ZERO_GRID_TOLERANCE_KWH
+                and abs(battery.end_kwh - unit.battery.capacity_kwh)
+                <= CALIBRATION_ENERGY_ROUNDOFF_KWH
             ):
                 power = -ceil(max(0, -power) - WHOLE_WATT_TOLERANCE)
             if abs(power - round(power)) > WHOLE_WATT_TOLERANCE:
