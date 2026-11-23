@@ -262,11 +262,16 @@ def replay_scores(
                 "origin": origin.isoformat(),
                 "weather_run": run.version if run else None,
             }
-            checked[day.isoformat()] = saved
-            documents.write(path, {"replays": checked, "checksum": digest(checked)})
+            if predictions is None:
+                retain(day, saved)
+                return None
         predictions = saved["predictions"]
         if predictions is None:
             return None
+        actual_version = digest(measured)
+        cached = saved.get("score")
+        if cached is not None and cached["actual_version"] == actual_version:
+            return cached
         if set(predictions) != set(models) or any(
             len(values) != len(hours) for values in predictions.values()
         ):
@@ -274,12 +279,14 @@ def replay_scores(
         for values in predictions.values():
             for value in values:
                 quantity(value)
-        return {
+        result = {
             "day": day.isoformat(),
             "source": "historical_replay",
             "hours": len(hours),
-            "actual_version": digest(measured),
-            "forecast_version": digest(saved),
+            "actual_version": actual_version,
+            "forecast_version": digest(
+                {name: value for name, value in saved.items() if name != "score"}
+            ),
             "mae_kwh": {
                 role: mean_absolute_error(values, measured) for role, values in predictions.items()
             },
@@ -287,6 +294,14 @@ def replay_scores(
                 role: abs(fsum(values) - fsum(measured)) for role, values in predictions.items()
             },
         }
+
+        retain(day, {**saved, "score": result})
+        return result
+
+    def retain(day, entry):
+        """Commit each finished test before any later fit can fail or be interrupted."""
+        checked[day.isoformat()] = entry
+        documents.write(path, {"replays": checked, "checksum": digest(checked)})
 
     results = spread_replays(
         (window for window in windows if window[0] in eligible),

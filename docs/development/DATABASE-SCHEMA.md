@@ -560,9 +560,10 @@ origin, original weather run where needed and the chronological training input
 fingerprint), `origin` (aware ISO datetime), `weather_run` (original run digest
 or null for calendar-only models) and `predictions` (an ordered vector of hourly
 nonnegative AC kWh per model, or null when a common prediction is unavailable).
-Measured hours are read independently for scoring, and a live capture for the
-same day takes precedence. The shared document store includes the cache in
-database transfer.
+A completed entry also retains the scores and measured-hour fingerprint for
+comparison reuse. Corrections can refresh the scores from the same predictions.
+A live capture for the same day takes precedence. The shared document store
+includes the cache in database transfer.
 
 New plan snapshots can contain `load_components`. Each component retains an
 optional Energy `entity_id` (null for household remainder), `forecast_version`,

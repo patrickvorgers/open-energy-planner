@@ -43,8 +43,8 @@ Calendar-only devices can replay earlier days from meter history alone.
 
 An independent background worker evaluates historical days off the live forecast
 path. It finishes an active historical fit on shutdown, retains compatible
-predictions across restarts, and lets the next normal forecast consume completed
-comparison evidence. Changes to prior training measurements, temperatures, the
+predictions and scores across restarts. The next normal forecast consumes
+completed comparison evidence. Changes to prior training measurements, temperatures, the
 original weather run, model identity or replay method version invalidate the
 affected prediction.
 Corrections to held-out measurements update only the comparison. OEP keeps

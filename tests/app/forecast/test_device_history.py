@@ -224,7 +224,20 @@ def test_replay_preserves_original_weather_and_cannot_fit_held_out_energy(
         else sample
         for sample in samples
     )
+    archive.engine.dispose()
     restarted_archive = make_store(tmp_path, DemandStore).documents
+    with monkeypatch.context() as cached:
+        cached.setattr(RidgeDemandModel, "fit", temporarily_unavailable)
+        cached.setattr(f"{replay_scores.__module__}.mean_absolute_error", temporarily_unavailable)
+        assert replay_scores(
+            restarted_archive,
+            configuration,
+            tuple(samples),
+            historical_weather,
+            ((day, origin, run),),
+            models,
+            (),
+        ) == (window,)
     with monkeypatch.context() as cached:
         cached.setattr(RidgeDemandModel, "fit", temporarily_unavailable)
         (updated,) = replay_scores(
@@ -239,7 +252,7 @@ def test_replay_preserves_original_weather_and_cannot_fit_held_out_energy(
     assert updated["forecast_version"] == window["forecast_version"]
     assert updated["actual_version"] != window["actual_version"]
     assert not replay_scores(
-        archive,
+        restarted_archive,
         configuration,
         corrected,
         historical_weather,
@@ -247,3 +260,25 @@ def test_replay_preserves_original_weather_and_cannot_fit_held_out_energy(
         models,
         (day.isoformat(),),
     )
+
+
+def test_replay_replaces_incomplete_measured_day_with_complete_weekend(tmp_path):
+    """Use actual measured-hour admission when the newest Saturday has a gap."""
+    now = datetime(2026, 8, 24, 12, tzinfo=UTC)
+    complete = now.date() - timedelta(days=9)
+    incomplete = complete + timedelta(days=7)
+    configuration = DemandConfiguration("UTC", 0, (EnergyTerm("sensor.device", 1),))
+    windows = tuple(
+        (day, datetime.combine(day, datetime.min.time(), UTC) - timedelta(hours=12), None)
+        for day in (complete, incomplete)
+    )
+    missing = datetime.combine(incomplete, datetime.min.time(), UTC) + timedelta(hours=12)
+    samples = tuple(
+        DemandHour(hour, 0.4, 0.4)
+        for index in range(60 * 24)
+        if (hour := now - timedelta(hours=60 * 24 - index)) != missing
+    )
+    models = daily_models(None, configuration, samples, now, weather_sensitive=False)
+    archive = make_store(tmp_path, DemandStore).documents
+    (result,) = replay_scores(archive, configuration, samples, (), windows, models, ())
+    assert result["day"] == complete.isoformat() and result["hours"] == 24
