@@ -689,7 +689,7 @@ def test_pending_forecast_sqlite_timeout_keeps_bounded_chained_diagnostics(
         writer.close()
     timeout = caught.value.__cause__
     assert str(timeout) == (
-        "Timed out waiting for actual history-trained appliance alternatives and daily baseline selection"
+        "Timed out waiting for actual history-trained appliance alternatives and matched daily model selection"
     )
     retryable = timeout.__cause__
     assert str(retryable) == "Pending forecast captures are not ready."
