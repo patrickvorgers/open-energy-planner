@@ -21,9 +21,7 @@ PUBLIC_VALIDATION_MESSAGES = (
 _LOGGER = logging.getLogger(__name__)
 
 
-def register(
-    app, demand, demand_store, live, setup_catalogue, lock, persist_then_install, snapshot
-):
+def register(app, demand, live, setup_catalogue, lock, persist_then_install, snapshot):
     """Register demand configuration and normalized history admission under the shared app lock."""
 
     async def demand_settings(_request):
@@ -46,11 +44,6 @@ def register(
         if cancellation is not None:
             raise cancellation
         return result
-
-    def save_demand(candidate):
-        """Persist settings and restore their source cohort in the caller-locked off-loop writer."""
-        demand_store.save(candidate)
-        demand.configure(candidate)
 
     def accept_history(body, pending, now, household):
         """Parse and commit one admitted source while the async caller retains its owner lock."""
@@ -86,7 +79,9 @@ def register(
             if body.get("expected_version") != current:
                 raise web.HTTPConflict(text="Demand configuration changed. Reload before saving")
             if candidate.version != current:
-                await persist_then_install(save_demand, candidate, contract_input=False)
+                await persist_then_install(
+                    demand.save_configuration, candidate, contract_input=False
+                )
                 job = demand.job(datetime.now(UTC))
                 result = await build_demand(job)
                 demand.install(result, datetime.now(UTC))

@@ -33,7 +33,7 @@ def validation_route(kind, reject_validation, tmp_path, monkeypatch):
         validate_panel_settings=reject_validation if kind == "solar-panels" else None,
     )
     if kind == "demand":
-        demand_api.register(app, service, None, object(), catalogue, lock, None, None)
+        demand_api.register(app, service, object(), catalogue, lock, None, None)
         return (
             app,
             "PUT",

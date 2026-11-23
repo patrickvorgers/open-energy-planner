@@ -282,9 +282,7 @@ class SetupDiscovery:
                 timezone=self.catalogue.value["timezone"],
             )
             if candidate != self.demand.store.current:
-                await self.persist(
-                    self.demand.store.save, candidate, self.demand.configure, contract_input=False
-                )
+                await self.persist(self.demand.save_configuration, candidate, contract_input=False)
 
     async def discovery(self, request):
         """Accept metadata and compact Recorder endpoints from the integration, never HA credentials or raw state history."""

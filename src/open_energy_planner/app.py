@@ -528,7 +528,6 @@ def create_app(
     build_demand = register_demand(
         app,
         demand,
-        demand_store,
         live,
         setup_catalogue,
         lock,

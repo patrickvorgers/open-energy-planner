@@ -104,7 +104,9 @@ class SolarRuntime:
         """
         with self.configuration_lock:
             self.store.save(configuration)
+            self.store.issue = "solar_configuration_unreadable"
             self.configure(configuration)
+            self.store.issue = None
 
     def restore_committed_configuration(self):
         """Retry active settings restoration while excluding partial notification reads."""
@@ -563,7 +565,7 @@ class SolarRuntime:
                 self.feedback_revision,
                 self.forecast_runs_revision,
             )
-            if self.configuration
+            if self.configuration and not self.store.issue
             else None
         )
 

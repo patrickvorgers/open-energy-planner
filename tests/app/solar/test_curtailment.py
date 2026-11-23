@@ -227,8 +227,6 @@ def test_configuration_restore_suspends_feedback_until_rebinding(tmp_path, monke
     store.save(old)
     runtime = SolarRuntime(store)
     request = runtime.feedback_requests(START)[0]
-    store.save(new)
-    store.issue = "solar_configuration_unreadable"
 
     def fail_restore():
         """Fail after assigning the new version and before replacing old feedback bindings."""
@@ -237,9 +235,12 @@ def test_configuration_restore_suspends_feedback_until_rebinding(tmp_path, monke
     with monkeypatch.context() as failure:
         failure.setattr(runtime, "restore_training_revisions", fail_restore)
         with pytest.raises(OSError, match="Injected training read failure"):
-            runtime.restore_committed_configuration()
+            runtime.save_configuration(new)
+        assert store.current == new
+        assert store.issue == "solar_configuration_unreadable"
         assert runtime.configuration == new
         assert request["entity_id"] in runtime.feedback
+        assert runtime.key(START) is None
         assert runtime.feedback_requests(START) == []
         with pytest.raises(ValueError, match="Invalid or outdated solar curtailment feedback"):
             runtime.receive_feedback(
