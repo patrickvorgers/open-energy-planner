@@ -469,7 +469,13 @@ def create_app(
         live.basis_source = contract_basis
 
     async def persist_then_install(
-        save, candidate, install=None, *, contract_input=True, force_replan=True
+        save,
+        candidate,
+        install=None,
+        *,
+        contract_input=True,
+        force_replan=True,
+        defer_refresh=False,
     ):
         """Save under the caller-held app lock, then install before propagating cancellation.
 
@@ -480,6 +486,8 @@ def create_app(
         pass contract_input=False to retain the existing future-input adapter.
         Explicit contract writes also wake the price owner to admit a newly configured area.
         Background evidence writes use the next planning boundary with force_replan=False.
+        Command-affecting writes that defer refresh must revoke obsolete commands in
+        their install callback before the next planning boundary, as setup does.
         """
         cancellation = await complete_write(save, candidate)
         if install is not None:
@@ -489,11 +497,14 @@ def create_app(
         if live:
             if contract_input:
                 live.basis_source = contract_basis
-            await live.refresh_async(force=force_replan)
+            if defer_refresh:
+                live.replan_requested = True
+            else:
+                await live.refresh_async(force=force_replan)
         _LOGGER.info(
             "Configuration saved (%s). Updated settings are now active%s.",
             type(candidate).__name__,
-            ". Planning prerequisites have been rechecked" if live else "",
+            ". Planning prerequisites have been rechecked" if live and not defer_refresh else "",
         )
         if cancellation is not None:
             raise cancellation
@@ -517,7 +528,6 @@ def create_app(
     build_demand = register_demand(
         app,
         demand,
-        demand_store,
         live,
         setup_catalogue,
         lock,
@@ -540,6 +550,12 @@ def create_app(
                 job = None
                 try:
                     async with lock:
+                        if demand.store.current is not None and demand.store.issue:
+                            cancellation = await complete_write(
+                                demand.restore_committed_configuration
+                            )
+                            if cancellation is not None:
+                                raise cancellation
                         refresh_model_preferences()
                         job = demand.job(datetime.now(UTC))
                     if job is not None:

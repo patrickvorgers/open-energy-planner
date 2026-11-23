@@ -104,7 +104,15 @@ class SolarRuntime:
         """
         with self.configuration_lock:
             self.store.save(configuration)
+            self.store.issue = "solar_configuration_unreadable"
             self.configure(configuration)
+            self.store.issue = None
+
+    def restore_committed_configuration(self):
+        """Retry active settings restoration while excluding partial notification reads."""
+        with self.configuration_lock:
+            self.configure(self.store.current)
+            self.store.issue = None
 
     def configure(self, configuration):
         """Reset model state after persistence, retaining validated unchanged meter cohorts.
@@ -277,6 +285,8 @@ class SolarRuntime:
 
     def feedback_requests(self, now):
         """Request independent ranges so one missing sensor cannot starve another source."""
+        if self.store.issue:
+            return []
         requests = []
         for entity, history in self.feedback.items():
             if entity in self.feedback_issues:
@@ -318,7 +328,8 @@ class SolarRuntime:
             }:
                 raise ValueError("Invalid solar feedback response")
             if (
-                self.configuration is None
+                self.store.issue
+                or self.configuration is None
                 or body["configuration_version"] != self.configuration.version
             ):
                 raise ValueError("Solar feedback configuration changed")
@@ -554,7 +565,7 @@ class SolarRuntime:
                 self.feedback_revision,
                 self.forecast_runs_revision,
             )
-            if self.configuration
+            if self.configuration and not self.store.issue
             else None
         )
 

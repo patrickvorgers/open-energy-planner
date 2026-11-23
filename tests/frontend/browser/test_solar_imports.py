@@ -27,9 +27,9 @@ def connect_solar_setup(page, url):
 
 
 @pytest.mark.parametrize("app_site", [None, "ingress"], indirect=True)
-@pytest.mark.parametrize("failed_write", ["solar", "installation"])
-def test_new_prefilled_solar_source_stays_unsaved_until_all_writes_succeed(app_page, failed_write):
-    """Desktop/mobile confirm a new Energy source without editing prefilled fields and retain retry after partial writes."""
+@pytest.mark.parametrize("failure", ["unavailable", "disconnected"])
+def test_new_prefilled_solar_source_can_retry_a_failed_setup_save(app_page, failure):
+    """Confirm a prefilled Energy source in one save and keep the draft after a failed request."""
     page, url = app_page
     body = discover(page, url)
     page.reload()
@@ -89,28 +89,33 @@ def test_new_prefilled_solar_source_stays_unsaved_until_all_writes_succeed(app_p
     expect(source.get_by_label("Panel capacity (kWp)", exact=True)).to_have_value("1")
     save = page.get_by_role("button", name="Save installation", exact=True)
     expect(save).to_be_enabled()
-    if failed_write == "solar":
+    if failure == "unavailable":
         mode = "ingress" if "/api/hassio_ingress/" in url else "standalone"
         page.screenshot(
             path=f"results/ci/solar-new-source-{page.viewport_size['width']}-{mode}.png",
             full_page=True,
         )
-    pattern = "**/v1/" + failed_write
+    pattern = "**/v1/setup"
+    before_attempt = read_settings(page, url)
 
     def fail_write(route):
-        """Reject only the selected write, retaining real reads and all other persistence boundaries."""
-        if route.request.method == "PUT":
+        """Simulate storage or connection failure without changing the real reads."""
+        if route.request.method != "PUT":
+            route.continue_()
+        elif failure == "unavailable":
             route.fulfill(status=503, body="Fixture storage unavailable")
         else:
-            route.continue_()
+            route.abort()
 
     page.route(pattern, fail_write)
     save.click()
     expect(state).to_contain_text("Save could not be confirmed")
     expect(state).to_contain_text("Unsaved changes")
     expect(save).to_be_enabled()
-    partial = read_settings(page, url)
-    assert len(partial["solar"]["sources"]) == (0 if failed_write == "solar" else 1)
+    expect(source.get_by_label("Inverter AC rating (kW)", exact=True)).to_have_value("3")
+    unchanged = read_settings(page, url)
+    for section in ("installation", "solar", "demand"):
+        assert unchanged[section] == before_attempt[section]
     page.unroute(pattern, fail_write)
     save.click()
     expect(state).to_contain_text("All changes saved")

@@ -64,6 +64,17 @@ class DemandRuntime:
         self.original_weather_runs = ()
         self.original_weather_revision = 0
 
+    def save_configuration(self, configuration):
+        """Persist then restore settings while the caller holds the application lock."""
+        self.store.save(configuration)
+        self.store.issue = "demand_configuration_unreadable"
+        self.restore_committed_configuration()
+
+    def restore_committed_configuration(self):
+        """Restore the saved definition before admitting new forecasting work."""
+        self.configure(self.store.current)
+        self.store.issue = None
+
     def configure(self, configuration):
         """Invalidate incompatible observations/models after a persisted measurement-definition change."""
         self.configuration = configuration
@@ -122,7 +133,7 @@ class DemandRuntime:
 
     def key(self, now):
         """Coalesce quarter boundaries and input-version changes without training on each sensor poll."""
-        if self.configuration is None:
+        if self.configuration is None or self.store.issue:
             return None
         quarter = now.replace(
             minute=(now.minute // FINE_INTERVAL_MINUTES) * FINE_INTERVAL_MINUTES,
