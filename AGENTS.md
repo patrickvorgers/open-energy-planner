@@ -126,7 +126,7 @@ These instructions apply to the entire repository. Read the requirements, releas
 
 ## Documentation
 
-- For every change, review the relevant architecture diagrams in the [architecture overview](docs/development/ARCHITECTURE-OVERVIEW.md), [technical design](design/TECHNICAL-DESIGN.md), and affected domain guides. Update the diagram source and rendered assets in the same change when ownership, boundaries, dependencies, or data flows change. Record in the PR which diagrams were checked and what changed or why they still apply.
+- For every change, review the relevant architecture diagrams in the [architecture overview](docs/development/ARCHITECTURE-OVERVIEW.md), [technical design](design/TECHNICAL-DESIGN.md), and affected domain guides. Update the diagram source and rendered assets in the same change when ownership, boundaries, dependencies, or data flows change. Record in the PR which diagrams were checked and what changed or why they still apply. When writing or updating a workflow guide, assess whether a [sequence diagram](docs/development/DOCUMENTATION-SITE.md#when-a-sequence-diagram-helps) would clarify ordering, acknowledgements, or recovery between components.
 
 - For every added or changed feature, assess whether the documentation site needs an update. Check the beginner route, visible labels, installation and configuration steps, defaults, supported platforms, everyday behavior, limitations and troubleshooting. Update affected canonical guides in the same change. If no update is needed, state the reason in the PR. Reviewers must evaluate this decision. Follow [documentation-site maintenance](docs/development/DOCUMENTATION-SITE.md#maintain-one-source). Keep one maintained source instead of copying reference content into the site.
 
