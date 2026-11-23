@@ -79,8 +79,9 @@ The saved summary and the original plan's **Starting conditions** retain the con
 
 The optimizer, self-consumption reference, expected period costs and measured comparison use this same basis. The estimated value of remaining energy deducts its future discharge wear. Neither the without-battery baseline nor charging alone incurs battery wear.
 
-In **Installation → Batteries**, enable **Can follow zero grid target** for
-each battery whose local controller can follow the shared net meter target.
+In **Installation → Batteries**, select the battery. For a saved installation,
+choose **Edit installation**. Enable **Can follow zero grid target** if the
+local controller can follow the shared net meter target, then save.
 OEP can then select grid following in a suitable plan interval. With the option
 off, OEP still plans the battery with fixed power commands. See the
 [zero-grid examples](virtual-device-sensors.md#zero-grid-examples) for the

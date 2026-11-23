@@ -124,10 +124,11 @@ Both sensors carry these interpretation attributes:
 
 ### Zero-grid examples
 
-In OEP, go to **Installation → Batteries**, select the battery and enable
-**Can follow zero grid target** if your local controller can adjust that
-battery's power from the live net meter reading. Save the installation. With
-the option off, OEP still plans the battery and uses its fixed power commands.
+In OEP, go to **Installation → Batteries** and select the battery. For a saved
+installation, choose **Edit installation**. Enable **Can follow zero grid
+target** if your local controller can adjust that battery's power from the live
+net meter reading, then save. With the option off, OEP still plans the battery
+and uses its fixed power commands.
 
 With the option enabled, OEP can select grid following when the current plan
 expects both zero grid import and zero grid export and the battery meets the
