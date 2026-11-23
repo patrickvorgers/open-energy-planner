@@ -303,6 +303,33 @@ deadlines are never solve timers. Each submission logs its reason and elapsed
 time since the previous submission. The performance chart records actual start
 times, including worker and event-loop scheduling delays.
 
+The clock decides when pending work can run. The final check decides whether a
+completed calculation can publish with the current constraints.
+
+```mermaid
+sequenceDiagram
+    participant Inputs as Home Assistant and forecasts
+    participant Clock as Planning clock
+    participant Planner as Planning coordinator
+    participant Solver
+    participant Archive as Plan archive
+    Clock->>Planner: Start an eligible round
+    Planner->>Solver: Calculate from frozen inputs
+    Inputs->>Planner: Receive a newer meter reading or forecast
+    Note over Planner: Keep the update for the next round
+    Clock->>Planner: Boundary arrives while the solver is busy
+    Note over Planner: Keep the pending request
+    Solver-->>Planner: Return a complete candidate
+    Planner->>Planner: Validate against current publication constraints
+    alt Candidate is still valid
+        Planner->>Archive: Save and publish the complete plan
+    else A hard constraint changed
+        Note over Planner: Discard the candidate and retain the reason
+    end
+    Clock->>Planner: Next eligible boundary with work pending
+    Planner->>Solver: Calculate from the latest usable inputs
+```
+
 Effective-price revision hashing coalesces adjacent segments with the same rates,
 source, published/forecast kind, native resolution and contract period. Moving
 lead-time bucket boundaries or control-grid splits therefore do not masquerade

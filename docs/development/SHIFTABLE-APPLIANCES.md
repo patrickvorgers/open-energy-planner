@@ -240,6 +240,37 @@ Completing or cancelling a request never means physically stopping a running cyc
 Missing completion feedback cannot authorize another run. Pause and plan expiry
 remove authorization while retaining execution evidence.
 
+The claim and the physical start sit on opposite sides of the Home Assistant
+boundary. A timeout leaves the attempt unresolved until there is evidence of
+what happened.
+
+```mermaid
+sequenceDiagram
+    participant App as OEP app
+    participant HA as HA integration
+    participant BP as Blueprint
+    participant Device as Appliance
+    App->>App: Persist a bounded start attempt
+    App-->>HA: Expose the exact attempt and its deadline
+    HA->>BP: Fire the start request
+    BP->>HA: Claim this task and attempt
+    HA->>App: Request a one-time claim
+    App-->>HA: Authorize once with the remaining deadline
+    HA-->>BP: Return the checked claim
+    alt Claim is valid at the physical action
+        BP->>Device: Start the appliance
+        Device-->>BP: Physical start or completion is observed
+        BP->>HA: Report feedback for this attempt
+        HA->>App: Record the exact outcome
+    else Claim is missing, repeated or expired
+        Note over BP,Device: Do not send a start
+    end
+    opt Execution is not confirmed before expiry
+        App->>App: Withdraw the request and retain the unresolved attempt
+        Note over App,BP: Require evidence before another start
+    end
+```
+
 The optional blueprint failure path sends a cancellation action only for the exact
 unknown attempt, then requires a positive cancellation trigger before **Not started**.
 Without that trigger it remains unknown. User-selected actions may contain queues

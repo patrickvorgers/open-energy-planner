@@ -147,6 +147,33 @@ target from the released journal. Before that boundary, no normal request or
 background worker may write to the candidate. Application construction and the
 rolled-back probe may validate it without admitting normal operation.
 
+The recorded release intent is the recovery boundary. The controller keeps
+ordinary requests closed until the selected runtime is reachable.
+
+```mermaid
+sequenceDiagram
+    participant Operator
+    participant Control as Maintenance controller
+    participant App as Application runtime
+    participant Source as Source database
+    participant Target as Target database
+    Operator->>Control: Start the checked transfer with overwrite consent
+    Control->>App: Close admission and drain work
+    Control->>Source: Read the stopped source
+    Control->>Target: Copy and verify the archive
+    alt Transfer stops before release
+        Control-->>Operator: Offer renewed retry or restore the source
+    else Target is verified
+        Control->>Control: Persist release intent for the target
+        Control->>App: Activate and start the selected target
+        alt Selected runtime starts
+            Control->>Control: Reopen ordinary requests
+        else Startup fails or is interrupted
+            Control-->>Operator: Offer retry of the selected target
+        end
+    end
+```
+
 An atomic bootstrap replacement can become visible before flushing its parent
 directory fails. The controller retains that new journal in memory and closes
 normal admission. It never rewrites a release boundary from stale state. Further
