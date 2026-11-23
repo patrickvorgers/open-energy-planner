@@ -155,7 +155,7 @@ def register(
         check_versions(body, required=save)
         physical, pv = parse(body["installation"]), parse_solar(body["solar"])
         validate_configuration_dates(pv, now)
-        catalogue.validate_panel_settings(pv, solar.configuration, now)
+        catalogue.validate_panel_settings(pv, solar.store.current, now)
         catalogue.validate_membership("installation", physical)
         catalogue.validate_membership("solar", pv)
         load = parse_demand(body["demand"])
@@ -292,12 +292,9 @@ def register(
     def restore_forecast_settings(changes):
         """Restore changed forecast owners after durable storage and old-plan revocation."""
         if "demand" in changes:
-            demand.configure(changes["demand"])
-            demand.store.issue = None
+            demand.restore_committed_configuration()
         if "solar" in changes:
-            with solar.configuration_lock:
-                solar.configure(changes["solar"])
-                solar.store.issue = None
+            solar.restore_committed_configuration()
 
     async def preview(request):
         """Check a prospective setup without writing definitions or running a solver."""

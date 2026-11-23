@@ -64,6 +64,11 @@ class DemandRuntime:
         self.original_weather_runs = ()
         self.original_weather_revision = 0
 
+    def restore_committed_configuration(self):
+        """Restore the saved definition before admitting new forecasting work."""
+        self.configure(self.store.current)
+        self.store.issue = None
+
     def configure(self, configuration):
         """Invalidate incompatible observations/models after a persisted measurement-definition change."""
         self.configuration = configuration

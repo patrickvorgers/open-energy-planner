@@ -116,7 +116,7 @@ async def upload(client, body):
 def test_setup_save_rolls_back_all_domains_and_skips_unchanged_forecasts(
     tmp_path, panel_database, monkeypatch
 ):
-    """A late storage failure rolls back setup. A physical-only edit leaves both forecast owners alone."""
+    """Roll back storage failure, retry runtime recovery and skip unchanged forecast owners."""
     from open_energy_planner.demand.runtime import DemandRuntime
     from open_energy_planner.solar.runtime import SolarRuntime
 
@@ -161,9 +161,28 @@ def test_setup_save_rolls_back_all_domains_and_skips_unchanged_forecasts(
                     documents = SqlDocuments(repository.engine, name)
                     assert documents.exists("current.json") is bool(before[name])
 
-            response = await client.put("/v1/setup", json=proposal, headers=HEADERS)
-            assert response.status == 200, await response.text()
-            saved = await response.json()
+            loop = asyncio.get_running_loop()
+            restored = asyncio.Event()
+            restore_attempts = []
+            original_configure = SolarRuntime.configure
+
+            def transient_restore_failure(runtime, configuration):
+                """Fail the first restore after commit, then signal worker recovery."""
+                restore_attempts.append(configuration.version)
+                if len(restore_attempts) == 1:
+                    raise OSError("Injected solar history read failure")
+                original_configure(runtime, configuration)
+                loop.call_soon_threadsafe(restored.set)
+
+            with monkeypatch.context() as failure:
+                failure.setattr(SolarRuntime, "configure", transient_restore_failure)
+                failure.setattr("open_energy_planner.solar.api.SOLAR_WORKER_POLL_SECONDS", 0.02)
+                response = await client.put("/v1/setup", json=proposal, headers=HEADERS)
+                assert response.status == 503
+                await asyncio.wait_for(restored.wait(), 8)
+                assert len(restore_attempts) == 2
+            saved = await settings(client)
+            assert saved["solar"]["version"] == restore_attempts[-1]
             for name, definition in proposal.items():
                 definition["expected_version"] = saved[name]["version"]
             proposal["installation"]["import_limit_w"] = 6000

@@ -184,8 +184,8 @@ class SetupDiscovery:
                     self.contracts.save,
                     replace(current, recorded_at=datetime.now(UTC), bonuses=bonuses),
                 )
-        if self.solar.configuration:
-            current = self.solar.configuration
+        if self.solar.store.current:
+            current = self.solar.store.current
             retained = tuple(
                 follow_panels(
                     source_item,
@@ -275,13 +275,13 @@ class SetupDiscovery:
                     candidate,
                     lambda value: self.live.install_configuration(sources(value)),
                 )
-        if self.demand.configuration:
+        if self.demand.store.current:
             candidate = replace(
-                self.demand.configuration,
+                self.demand.store.current,
                 terms=tuple(EnergyTerm(**energy_term) for energy_term in hints["terms"]),
                 timezone=self.catalogue.value["timezone"],
             )
-            if candidate != self.demand.configuration:
+            if candidate != self.demand.store.current:
                 await self.persist(
                     self.demand.store.save, candidate, self.demand.configure, contract_input=False
                 )

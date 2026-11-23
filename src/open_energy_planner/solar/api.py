@@ -115,7 +115,7 @@ def register(app, runtime, live, lock, persist, snapshot, membership):
             try:
                 membership.validate_membership("solar", candidate)
                 membership.validate_panel_settings(
-                    candidate, runtime.configuration, datetime.now(UTC)
+                    candidate, runtime.store.current, datetime.now(UTC)
                 )
             except ValueError as error:
                 raise web.HTTPBadRequest(
@@ -127,7 +127,7 @@ def register(app, runtime, live, lock, persist, snapshot, membership):
                         fallback="Cannot validate solar settings. Reload the Home Assistant Energy configuration before saving again.",
                     )
                 ) from None
-            current = runtime.configuration.version if runtime.configuration else None
+            current = runtime.store.current.version if runtime.store.current else None
             if body.get("expected_version") != current:
                 raise web.HTTPConflict(text="Solar configuration changed. Reload before saving")
             if candidate.version != current:
@@ -247,6 +247,12 @@ def register(app, runtime, live, lock, persist, snapshot, membership):
                 activity = None
                 try:
                     async with lock:
+                        if runtime.store.current is not None and runtime.store.issue:
+                            cancellation = await complete_write(
+                                runtime.restore_committed_configuration
+                            )
+                            if cancellation is not None:
+                                raise cancellation
                         recovery = runtime.feedback_restore_job(datetime.now(UTC))
                     if recovery:
                         recovered = await asyncio.to_thread(

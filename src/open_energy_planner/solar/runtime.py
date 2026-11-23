@@ -106,6 +106,12 @@ class SolarRuntime:
             self.store.save(configuration)
             self.configure(configuration)
 
+    def restore_committed_configuration(self):
+        """Retry active settings restoration while excluding partial notification reads."""
+        with self.configuration_lock:
+            self.configure(self.store.current)
+            self.store.issue = None
+
     def configure(self, configuration):
         """Reset model state after persistence, retaining validated unchanged meter cohorts.
 

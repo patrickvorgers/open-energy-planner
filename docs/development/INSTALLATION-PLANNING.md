@@ -118,7 +118,9 @@ and PV proposals through `PUT /v1/setup`. The app validates all three revisions
 and the shared links against one current catalogue. Changed definitions retain
 their own versions and commit together. Unchanged definitions keep their active
 forecasts. The response acknowledges storage and command revocation. Forecast
-workers and live planning prepare the next plan separately.
+workers and live planning prepare the next plan separately. If restoring a
+committed forecast definition fails, its worker retries from the durable
+settings before that domain can supply a forecast again.
 The legacy source editor is blocked once installation settings own the roles.
 
 ## Modules and responsibilities

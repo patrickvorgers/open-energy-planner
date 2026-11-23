@@ -82,7 +82,7 @@ def register(
                         fallback="Cannot validate household demand settings. Reload the Home Assistant Energy configuration before saving again.",
                     )
                 ) from None
-            current = demand.configuration.version if demand.configuration else None
+            current = demand.store.current.version if demand.store.current else None
             if body.get("expected_version") != current:
                 raise web.HTTPConflict(text="Demand configuration changed. Reload before saving")
             if candidate.version != current:

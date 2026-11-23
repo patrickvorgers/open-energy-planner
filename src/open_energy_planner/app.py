@@ -549,6 +549,12 @@ def create_app(
                 job = None
                 try:
                     async with lock:
+                        if demand.store.current is not None and demand.store.issue:
+                            cancellation = await complete_write(
+                                demand.restore_committed_configuration
+                            )
+                            if cancellation is not None:
+                                raise cancellation
                         refresh_model_preferences()
                         job = demand.job(datetime.now(UTC))
                     if job is not None:
