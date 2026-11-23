@@ -3,6 +3,7 @@
 import json
 from dataclasses import replace
 from datetime import timedelta
+from threading import Event
 from unittest.mock import patch
 
 import pytest
@@ -541,7 +542,9 @@ def test_runtime_separation_uses_baselines_and_archives_exact_components(tmp_pat
     runtime.consumers.histories["sensor.heat"] = channel("sensor.heat", [0.2] * (35 * 24))
     runtime.data_versions["sensor.house"] = "fixture"
     now = START + timedelta(days=35)
-    assert runtime.install(runtime.build(runtime.job(now)), now)
+    jobs = []
+    assert runtime.install(runtime.build(runtime.job(now), jobs), now)
+    assert runtime.consumers.result["devices"][0]["status"] == "collecting_forward_accuracy"
     assert runtime.candidate.model == "consumer-composite-v1"
     import json
 
@@ -555,6 +558,11 @@ def test_runtime_separation_uses_baselines_and_archives_exact_components(tmp_pat
     )
     original_path = "consumer-forecast-" + runtime.candidate.version + ".json"
     original_components = store.documents.read(original_path)
+    runtime.install_replays(
+        *runtime.evaluate_replays(runtime.replay_binding(), jobs, config().timezone, Event())
+    )
+    now += timedelta(seconds=5)
+    assert runtime.install(runtime.build(runtime.job(now)), now)
     runtime.select_learned(True)
     assert runtime.job(now) is None
     assert runtime.forecast.model == "consumer-composite-v1"

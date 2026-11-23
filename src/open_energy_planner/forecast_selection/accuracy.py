@@ -1,6 +1,6 @@
 """Retain pre-midnight forecasts and select demand models from matched measured local days."""
 
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from math import fsum, isclose
 from zoneinfo import ZoneInfo
 
@@ -188,16 +188,27 @@ def choose_daily(
             if replays is None and len(windows) == MIN_ACCURACY_DAYS:
                 break
         if replays is not None:
+            from .device_history import REPLAY_HISTORY_DAYS, REPLAY_SEASONS, replay_season
+
             live_days = {window["day"] for window in windows}
             windows.extend(
                 window
                 for window in replays
                 if window["day"] < today.isoformat()
+                and (today - date.fromisoformat(window["day"])).days <= REPLAY_HISTORY_DAYS
                 and window["day"] not in live_days
+                and window["day"] not in excluded_dates
+                and "*" not in excluded_dates
                 and set(window["mae_kwh"]) == set(forecasts)
             )
             windows.sort(key=lambda window: window["day"], reverse=True)
-            result.update(completed_windows=len(windows), windows=windows)
+            seasons = dict.fromkeys(REPLAY_SEASONS, 0)
+            for window in windows:
+                if window["source"] == "historical_replay":
+                    seasons[replay_season(date.fromisoformat(window["day"]))] += 1
+            result.update(
+                completed_windows=len(windows), windows=windows, historical_seasons=seasons
+            )
             if windows and len(forecasts) > 1:
                 result.update(
                     selected=_best_device_model(forecasts, windows), status="accuracy_validated"

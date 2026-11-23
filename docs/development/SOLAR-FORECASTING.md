@@ -295,8 +295,9 @@ Each missing or unusable original initialization has an independent retry delay.
 It starts at 15 minutes and doubles to a maximum of 24 hours, with a bounded
 attempt counter. Actual success or a site change clears that run's retry state.
 Other initializations continue importing, and cached/current forecasts remain
-independent. Transport failures and non-404 provider errors retain the separate
-15-minute global history backoff. A delayed old-site failure cannot install retry
+independent. Open-Meteo's HTTP 400 response naming the exact missing ECMWF run
+uses the same per-run retry as HTTP 404. Transport failures and other provider
+errors retain the separate 15-minute global history backoff. A delayed old-site failure cannot install retry
 state for the new site. Restart resets these in-memory retry counters.
 
 ### Direct production model and learned time trend

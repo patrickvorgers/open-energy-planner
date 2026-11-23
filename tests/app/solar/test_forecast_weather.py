@@ -79,6 +79,52 @@ class FrozenRunSession:
         return Response(raw)
 
 
+@pytest.mark.parametrize("reason_kind", ["matching", "other-run", "invalid-query"])
+def test_original_run_http_400_only_skips_provider_confirmed_gap(reason_kind):
+    """Import past the exact ECMWF error while preserving global backoff for other 400s."""
+    newest = RECEIVED.replace(hour=12) - timedelta(days=3)
+    requested = newest.strftime("%Y-%m-%dT%H:%M")
+
+    class RejectedRun(Response):
+        """Deliver a bounded JSON provider error through the normal response parser."""
+
+        def raise_for_status(self):
+            """Raise the same HTTP status for all provider messages."""
+            raise ClientResponseError(None, (), status=400)
+
+    class Session(FrozenRunSession):
+        """Reject the newest original run while retaining older evidence."""
+
+        def get(self, url, **kwargs):
+            """Return either the provider's 400 body or an ordinary original run."""
+            if kwargs["params"]["run"] != requested:
+                return super().get(url, **kwargs)
+            self.calls.append((url, kwargs))
+            stated_run = requested if reason_kind == "matching" else "2026-01-01T12:00"
+            reason = (
+                "Invalid forecast hours"
+                if reason_kind == "invalid-query"
+                else f"The requested model run is not available. Model: ecmwf_ifs, run: {stated_run}Z"
+            )
+            return RejectedRun(json.dumps({"error": True, "reason": reason}).encode())
+
+    session = Session()
+    source = OpenMeteoWeatherSource(session, history_start=lambda: newest - timedelta(days=7))
+    if reason_kind == "matching":
+        runs = asyncio.run(source.import_runs(SITE, RECEIVED))
+        assert runs and max(run.initialized_at for run in runs) == newest - timedelta(days=1)
+        assert source.history_issues[newest] == "forecast_run_missing"
+        assert source.history_retry_after is None
+        asyncio.run(source.import_runs(SITE, RECEIVED + timedelta(minutes=16)))
+        assert sum(kwargs["params"]["run"] == requested for _, kwargs in session.calls) == 2
+    else:
+        with pytest.raises(ClientResponseError) as error:
+            asyncio.run(source.import_runs(SITE, RECEIVED))
+        assert error.value.status == 400
+        assert len(session.calls) == 1
+        assert source.history_retry_after == RECEIVED + timedelta(minutes=15)
+
+
 def snapshot(store, path):
     """Read every retained solar document to prove failed or repeated reads cannot rewrite evidence."""
     return {name: store.documents.read(name) for name in list_documents(path, "solar")}

@@ -106,6 +106,10 @@ export function renderCurrentModel(parent, row, expanded = false) {
             const historical = (learning.windows || []).filter(window => window.source === "historical_replay").length;
             const completed = learning.completed_windows;
             paragraph(`Daily accuracy: ${completed} complete local day${completed === 1 ? "" : "s"}, including ${historical} historical replay${historical === 1 ? "" : "s"}. Selection: ${optionLabel(learning.status)}.`);
+            if (learning.historical_seasons) {
+                const seasons = Object.entries(learning.historical_seasons);
+                paragraph(`Historical test days by season: ${seasons.map(([season, count]) => `${optionLabel(season)}: ${count}`).join(", ")}.`);
+            }
             paragraph("The model with the lowest average hourly error is selected. Each comparison uses the same measured hours. Original forecasts replace replays for the same day when available.");
             if (learning.replay_issue) paragraph("Historical replay evidence is temporarily unavailable.");
         } else {

@@ -27,14 +27,29 @@ All compared alternatives use the same measured hours. Missing hours leave a
 day unavailable. Each day records hourly MAE and absolute daily energy error.
 
 Device selection combines complete original forecasts from the last 30 local
-days with up to 13 historical replay days spaced across the past year. An
-original forecast takes precedence for the same day. Historical replay fits
+days with up to 24 historical replay days across the past year. Each available
+meteorological season can contribute four weekdays and two weekend days. The
+deterministic selection prefers distinct weekdays and alternates colder and
+milder days using the archived forecast temperature. It tries a comparable
+replacement when a candidate has incomplete data, unusable models or published
+control. Missing coverage can leave a season below its target. An original
+forecast takes precedence on the same day. Historical replay fits
 each candidate on completed outcomes before its simulated origin. It uses
 temperature from a shared original ECMWF IFS run whose supported simulation time
 precedes the target day. Historical temperature observations can support the
 earlier training period. Publication time stays unknown when the provider did
 not supply it. The imported run's actual receipt remains in its source archive.
 Calendar-only devices can replay earlier days from meter history alone.
+
+An independent background worker evaluates historical days off the live forecast
+path. It finishes an active historical fit on shutdown, retains compatible
+predictions across restarts, and lets the next normal forecast consume completed
+comparison evidence. Changes to prior training measurements, temperatures, the
+original weather run, model identity or replay method version invalidate the
+affected prediction.
+Corrections to held-out measurements update only the comparison. OEP keeps
+compatible results inside the current historical lookback even when a day drops
+out of the selected sample.
 
 Device selection minimizes absolute hourly error across all the comparable
 hours. Daily energy error breaks hourly ties, and the weekday profile wins

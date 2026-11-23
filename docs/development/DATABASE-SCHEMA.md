@@ -553,7 +553,8 @@ measurement boundary, algorithms and daily-selection policy. Publication history
 supplies control exclusions, so no duplicate intervention archive is introduced.
 
 `device-replay-<family>.json` in the demand namespace holds a checked, mutable
-cache of up to 13 local-day simulations. `checksum` hashes the complete
+cache of evaluated local-day simulations from the last 364 days. Up to 24
+days contribute to model selection at once. `checksum` hashes the complete
 `replays` mapping. Each day maps to `key` (SHA-256 of model family, simulated
 origin, original weather run where needed and the chronological training input
 fingerprint), `origin` (aware ISO datetime), `weather_run` (original run digest

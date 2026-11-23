@@ -1,7 +1,13 @@
 """Use only earlier training and original temperature forecasts in device replays."""
 
-from datetime import UTC, datetime, timedelta
+import asyncio
+from datetime import UTC, date, datetime, timedelta
+from threading import Event
+from types import SimpleNamespace
 
+from aiohttp import web
+
+from open_energy_planner.demand.api import register
 from open_energy_planner.demand.calculation.forecasting import RidgeDemandModel
 from open_energy_planner.demand.calculation.model import DemandConfiguration, DemandHour, EnergyTerm
 from open_energy_planner.demand.storage import DemandStore
@@ -9,11 +15,128 @@ from open_energy_planner.demand.training import daily_models
 from open_energy_planner.forecast_selection.device_history import (
     replay_days,
     replay_scores,
+    replay_season,
     replay_weather_history_floor,
+    spread_replays,
 )
 from open_energy_planner.weather.model import TemperatureHour, WeatherHour
 from open_energy_planner.weather.run import ForecastWeatherRun
 from tests.database.support.archive import make_store
+
+
+def test_replay_spreads_24_days_and_replaces_missing_candidates():
+    """Cover both day types and several weekdays across all meteorological seasons."""
+    first = date(2026, 1, 1)
+    candidates = [(first + timedelta(days=index), None, None) for index in range(365)]
+    rejected = set()
+
+    def score(candidate):
+        """Skip the first candidate in each season/day-type without consulting an error score."""
+        day = candidate[0]
+        group = replay_season(day), day.weekday() >= 5
+        if group not in rejected:
+            rejected.add(group)
+            return None
+        return {"day": day}
+
+    selected = spread_replays(candidates, "UTC", score)
+    assert len(selected) == 24 and len(rejected) == 8
+    for season in ("winter", "spring", "summer", "autumn"):
+        weekdays = {row["day"].weekday() for row in selected if replay_season(row["day"]) == season}
+        assert len(weekdays - {5, 6}) == 4
+        assert {5, 6} <= weekdays
+    rejected.clear()
+    assert spread_replays(reversed(candidates), "UTC", score) == selected
+
+
+def test_replay_spreads_cold_and_mild_original_forecasts():
+    """Use forecast temperatures to cover both regimes for weekdays and weekends."""
+    first = datetime(2026, 1, 1, tzinfo=UTC)
+    candidates = []
+    for index in range(365):
+        start = first + timedelta(days=index)
+        origin = start - timedelta(days=1)
+        temperature = 2 if index // 7 % 2 == 0 else 14
+        run = SimpleNamespace(
+            hours=tuple(
+                WeatherHour(start + timedelta(hours=hour), 0, 0, 0, temperature, 0, origin)
+                for hour in range(24)
+            )
+        )
+        candidates.append((start.date(), origin, run))
+
+    def score(candidate):
+        day, _, run = candidate
+        return {"day": day, "temperature": run.hours[0].celsius}
+
+    selected = spread_replays(candidates, "UTC", score)
+    for season in ("winter", "spring", "summer", "autumn"):
+        for weekend in (False, True):
+            assert {
+                row["temperature"]
+                for row in selected
+                if replay_season(row["day"]) == season and (row["day"].weekday() >= 5) == weekend
+            } == {2, 14}
+
+
+def test_slow_background_replay_does_not_hold_live_prediction():
+    """Finish two live requests while one historical batch is blocked, then install evidence."""
+
+    async def verify():
+        """Exercise the actual app lifecycle queue and off-loop writers."""
+        started = Event()
+        release = Event()
+        installed = asyncio.Event()
+
+        def build(job, replay_jobs):
+            """Produce immediate forecast results and hand off a historical batch."""
+            replay_jobs.append("background")
+            return job[0]
+
+        def evaluate(binding, jobs, timezone, stop):
+            """Hold background testing until both live results have been delivered."""
+            assert jobs == ["background"] and timezone == "UTC" and not stop.is_set()
+            started.set()
+            assert release.wait(5)
+            return binding, {"completed": True}
+
+        def install(binding, evidence):
+            """Confirm only the current result is published to the next live build."""
+            assert binding == ("current",) and evidence == {"completed": True}
+            installed.set()
+
+        demand = SimpleNamespace(
+            build=build,
+            evaluate_replays=evaluate,
+            install_replays=install,
+            replay_binding=lambda: ("current",),
+        )
+        app = web.Application()
+        build_live = register(app, demand, None, None, None, asyncio.Lock(), None, None)
+        lifecycle = app.cleanup_ctx[-1](app)
+        await anext(lifecycle)
+        try:
+            assert (
+                await asyncio.wait_for(
+                    build_live((1, SimpleNamespace(timezone="UTC"), ("current",))), 3
+                )
+                == 1
+            )
+            assert await asyncio.to_thread(started.wait, 3)
+            assert (
+                await asyncio.wait_for(
+                    build_live((2, SimpleNamespace(timezone="UTC"), ("current",))), 3
+                )
+                == 2
+            )
+            assert not installed.is_set()
+            release.set()
+            await asyncio.wait_for(installed.wait(), 3)
+        finally:
+            release.set()
+            await lifecycle.aclose()
+
+    asyncio.run(verify())
 
 
 def test_replay_weather_history_floor_changes_only_at_utc_midnight():
@@ -101,10 +224,17 @@ def test_replay_preserves_original_weather_and_cannot_fit_held_out_energy(
         else sample
         for sample in samples
     )
+    restarted_archive = make_store(tmp_path, DemandStore).documents
     with monkeypatch.context() as cached:
         cached.setattr(RidgeDemandModel, "fit", temporarily_unavailable)
         (updated,) = replay_scores(
-            archive, configuration, corrected, historical_weather, ((day, origin, run),), models, ()
+            restarted_archive,
+            configuration,
+            corrected,
+            historical_weather,
+            ((day, origin, run),),
+            models,
+            (),
         )
     assert updated["forecast_version"] == window["forecast_version"]
     assert updated["actual_version"] != window["actual_version"]

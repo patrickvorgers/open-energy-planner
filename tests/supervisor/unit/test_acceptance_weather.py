@@ -3,6 +3,7 @@
 import asyncio
 import sys
 from datetime import UTC, datetime, timedelta
+from threading import Event
 from types import SimpleNamespace
 
 import pytest
@@ -236,6 +237,16 @@ def test_supervisor_capture_accepts_real_fitted_archives_and_replay_selection(
         TemperatureHour(START + timedelta(hours=hour), value, START)
         for hour, value in enumerate(temperatures)
     ) + tuple(TemperatureHour(now + timedelta(hours=hour), 10, now) for hour in range(49))
+    jobs = []
+    assert runtime.install(runtime.build(runtime.job(now), jobs), now)
+    assert all(
+        row["status"] == "collecting_forward_accuracy"
+        for row in runtime.consumers.document()["result"]["devices"]
+    )
+    runtime.install_replays(
+        *runtime.evaluate_replays(runtime.replay_binding(), jobs, "Europe/Amsterdam", Event())
+    )
+    now += timedelta(seconds=5)
     assert runtime.install(runtime.build(runtime.job(now)), now)
     result = runtime.consumers.document()["result"]
     assert result["status"] == "partial_history"
