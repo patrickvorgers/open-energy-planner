@@ -288,6 +288,36 @@ def test_zero_grid_selection_uses_average_ac_exchange(minutes, grid_power_w, fol
     assert command.devices[0].power_w == (None if follows else min(demand_w, 1000))
 
 
+@pytest.mark.planner_scenario
+def test_zero_grid_selection_checks_every_segment_of_a_control_interval():
+    """Keep fixed power when a tariff split averages 10 W but the second segment exceeds it."""
+    inputs = problem(prices=(1, 2), loads=(1 / 12, 1.015 / 6), pv=(0, 0), initial=1)
+    first, second = inputs.intervals
+    inputs = replace(
+        inputs,
+        intervals=(
+            replace(first, duration_h=1 / 12, control_group="quarter"),
+            replace(
+                second,
+                start=START + timedelta(minutes=5),
+                duration_h=1 / 6,
+                control_group="quarter",
+            ),
+        ),
+        batteries=(replace(inputs.batteries[0], can_follow_grid=True),),
+    )
+    result = solve(inputs)
+    assert [flow.grid_import for flow in result.plan.flows] == pytest.approx([0, 0.0025])
+    snapshot = InputSnapshot("test", "config", START, "measured", "forecast", "price", inputs)
+    envelope = plan_document(snapshot, result, result.plan.costs, START)
+
+    (step,) = Plan.parse(envelope, "config").steps
+    assert step.end == START + timedelta(minutes=15)
+    assert step.command.grid_active is False
+    assert step.command.devices[0].mode == "fixed_power"
+    assert step.command.devices[0].power_w == 1000
+
+
 @pytest.mark.parametrize(
     "grid_active,mode,power",
     [
