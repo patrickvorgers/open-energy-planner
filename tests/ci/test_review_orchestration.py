@@ -29,6 +29,12 @@ LIMITED = (
     "Your current included review allowance is based on your included PR review "
     "attempts over the past 7 days. Your next review will be available in 30 minutes."
 )
+GREPTILE_NO_CREDITS = (
+    "Your organization has run out of review credits. "
+    "[Add credits](https://app.greptile.com/-/switch-tenant?"
+    "tenant=fixture-team&next=%2Fsettings%2Fbilling) to resume code reviews.\n\n"
+    "<!-- greptile-credit-pause:00000000-0000-4000-8000-000000000001 -->"
+)
 
 
 class UserPublisher:
@@ -258,6 +264,13 @@ class GitHubEvidence:
     def reply(self, body):
         """Publish a genuine provider-identity response after the most recent controller command."""
         return self.comment(body, "coderabbitai[bot]")
+
+    def greptile_credit_denial(self):
+        """Publish the observed refusal with GitHub's independent app and bot identities."""
+        row = self.comment(GREPTILE_NO_CREDITS, "greptile-apps[bot]")
+        row["user"]["id"] = 165735046
+        row["performed_via_github_app"] = {"id": 867647}
+        return row
 
     def published_result(self, provider):
         """Publish independently recorded success fields with this fixture's repository and head."""
@@ -2189,6 +2202,134 @@ def test_greptile_check_waits_for_exact_head_summary_publication():
     client.comments.append(comment)
     client.run(minutes=2)
     assert client.state()["phase"] == "complete"
+
+
+def greptile_requested(client):
+    """Reach the actual Greptile command through a confirmed CodeRabbit quota limit."""
+    client.run(explicit=True)
+    client.reply(LIMITED)
+    client.run()
+
+
+@pytest.mark.parametrize("recovery", ["normal", "lost-response", "changed-refusal"])
+def test_greptile_credit_denial_requests_codex_once(recovery):
+    """Recover a published Codex command without ever issuing a second command."""
+    client = GitHubEvidence()
+    greptile_requested(client)
+    denial = client.greptile_credit_denial()
+    if recovery == "normal":
+        client.run(minutes=1)
+    else:
+        client.lose_response = True
+        with pytest.raises(VerificationError, match="response loss"):
+            client.run(minutes=1)
+        assert client.state()["phase"] == "sending"
+        client.lose_response = False
+        if recovery == "changed-refusal":
+            denial["performed_via_github_app"]["id"] = 123
+    client.run(minutes=2)
+    client.run(minutes=3)
+    assert client.state()["phase"] == ("blocked" if recovery == "changed-refusal" else "codex")
+    assert client.provider_commands() == [
+        "@coderabbitai rate limit",
+        "@greptileai review this draft",
+        "@codex review",
+    ]
+
+
+@pytest.mark.parametrize(
+    "evidence",
+    [
+        "old-id",
+        "old-time",
+        "future-time",
+        "wrong-bot",
+        "wrong-app",
+        "edited",
+        "quote",
+        "duplicate",
+        "feedback",
+        "formal-review",
+        "running",
+        "published",
+    ],
+)
+def test_unsafe_greptile_credit_evidence_cannot_start_codex(evidence):
+    """Require a fresh authenticated refusal with no competing review evidence."""
+    client = GitHubEvidence()
+    if evidence == "old-id":
+        client.greptile_credit_denial()
+    greptile_requested(client)
+    if evidence != "old-id":
+        denial = client.greptile_credit_denial()
+        if evidence in {"old-time", "future-time"}:
+            timestamp = NOW + timedelta(minutes=-1 if evidence == "old-time" else 2)
+            denial.update(created_at=timestamp.isoformat(), updated_at=timestamp.isoformat())
+        if evidence == "wrong-bot":
+            denial["user"]["id"] = 999
+        if evidence == "wrong-app":
+            denial["performed_via_github_app"]["id"] = 999
+        if evidence == "edited":
+            denial["updated_at"] = (NOW + timedelta(seconds=1)).isoformat()
+        if evidence == "quote":
+            denial["body"] = "> " + GREPTILE_NO_CREDITS
+        if evidence == "duplicate":
+            client.greptile_credit_denial()
+        if evidence == "feedback":
+            client.comment("Partial review findings", "greptile-apps[bot]")
+        if evidence == "formal-review":
+            client.reviews.append(
+                {
+                    "id": 42,
+                    "user": denial["user"],
+                    "commit_id": HEAD,
+                    "submitted_at": NOW.isoformat(),
+                    "state": "COMMENTED",
+                }
+            )
+        if evidence in {"running", "published"}:
+            summary = client.published_result("greptile")
+            client.comments.remove(summary)
+            if evidence == "running":
+                client.checks[-1].update(status="in_progress", conclusion=None)
+    client.run(minutes=1)
+    assert client.provider_commands() == [
+        "@coderabbitai rate limit",
+        "@greptileai review this draft",
+    ]
+
+
+@pytest.mark.parametrize("change", ["replace-marker", "another-command", "review-published"])
+def test_greptile_credit_fallback_rechecks_before_outbox_publication(monkeypatch, change):
+    """Stop when the refusal or competing evidence changes after recording intent."""
+    client = GitHubEvidence()
+    greptile_requested(client)
+    denial = client.greptile_credit_denial()
+    post = client.post
+
+    def publish_after_intent(path, payload):
+        result = post(path, payload)
+        if client.state()["phase"] == "sending" and client.state()["target"] == "codex":
+            if change == "replace-marker":
+                denial["body"] = denial["body"].replace("000000000001", "000000000002")
+            elif change == "another-command":
+                client.comment("@kody start-review", "developer", "User")
+            else:
+                client.reviews.append(
+                    {
+                        "id": 42,
+                        "user": denial["user"],
+                        "commit_id": HEAD,
+                        "submitted_at": NOW.isoformat(),
+                        "state": "COMMENTED",
+                    }
+                )
+        return result
+
+    monkeypatch.setattr(client, "post", publish_after_intent)
+    with pytest.raises(VerificationError):
+        client.run(minutes=1)
+    assert "@codex review" not in client.provider_commands()
 
 
 @pytest.mark.parametrize(
