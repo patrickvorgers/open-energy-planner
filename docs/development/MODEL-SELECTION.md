@@ -44,12 +44,12 @@ Calendar-only devices can replay earlier days from meter history alone.
 An independent background worker evaluates historical days off the live forecast
 path. It finishes an active historical fit on shutdown, retains compatible
 predictions and scores across restarts. The next normal forecast consumes
-completed comparison evidence. Changes to prior training measurements, temperatures, the
-original weather run, model identity or replay method version invalidate the
-affected prediction.
-Corrections to held-out measurements update only the comparison. OEP keeps
-compatible results inside the current historical lookback even when a day drops
-out of the selected sample.
+completed comparison evidence. A day with missing or corrected measurements drops
+out of model selection until a score matches all its current measured hours.
+The background worker recalculates that score from the stored predictions. It
+refits the predictions if their earlier training data, forecast weather, model
+identity or replay method changed. Compatible results are retained inside the
+historical lookback even when a day drops out of the selected sample.
 
 Device selection minimizes absolute hourly error across all the comparable
 hours. Daily energy error breaks hourly ties, and the weekday profile wins

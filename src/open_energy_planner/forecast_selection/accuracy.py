@@ -191,16 +191,26 @@ def choose_daily(
             from .device_history import REPLAY_HISTORY_DAYS, REPLAY_SEASONS, replay_season
 
             live_days = {window["day"] for window in windows}
-            windows.extend(
-                window
-                for window in replays
-                if window["day"] < today.isoformat()
-                and (today - date.fromisoformat(window["day"])).days <= REPLAY_HISTORY_DAYS
-                and window["day"] not in live_days
-                and window["day"] not in excluded_dates
-                and "*" not in excluded_dates
-                and set(window["mae_kwh"]) == set(forecasts)
-            )
+            for window in replays:
+                day_text = window["day"]
+                day = date.fromisoformat(day_text)
+                if (
+                    not 0 < (today - day).days <= REPLAY_HISTORY_DAYS
+                    or day_text in live_days
+                    or day_text in excluded_dates
+                    or "*" in excluded_dates
+                    or set(window["mae_kwh"]) != set(forecasts)
+                ):
+                    continue
+                hours, _ = comparison_hours(day, timezone)
+                measured = [actual.get(hour) for hour in hours]
+                # Drop a corrected day while its replacement score is computed off the live path.
+                if (
+                    window["hours"] == len(hours)
+                    and all(value is not None for value in measured)
+                    and digest(measured) == window["actual_version"]
+                ):
+                    windows.append(window)
             windows.sort(key=lambda window: window["day"], reverse=True)
             seasons = dict.fromkeys(REPLAY_SEASONS, 0)
             for window in windows:
