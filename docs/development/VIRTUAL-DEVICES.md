@@ -22,7 +22,20 @@ Without a usable command, on expiry or explicit pause, command entities are `una
 
 The wizard asks **Can follow zero grid target** for each battery. Enable only when the user's physical automation/controller can implement it, whether on the battery, its hybrid inverter or another local controller. This is permission/capability, not an always-on strategy and not a claim that Energy metadata reveals physical control support.
 
-The current app enables following only for permitted batteries in a validated optimal/feasible interval with both expected grid import and export within `1e-7 kWh` of zero. This is an execution choice preserving the independently validated battery flows, losses, SoC limits and economic outcome. Nonzero grid charging/export remains fixed-power control. A zero net total created by simultaneous import/export is not sufficient. The grid owns the authoritative goal. There is no separate battery grid setpoint, designated physical executor or cell-balancing mode. Other batteries can retain fixed commands. Fast fluctuations, controller coordination and physical protection stay in HA/local equipment. Subsequent measured SoC informs replanning.
+For a validated plan, the app adds the magnitudes of expected grid import and
+export, then divides by the interval duration to calculate average AC grid
+exchange. Grid following is eligible at up to 10 W, equivalent to 2.5 Wh in a
+15-minute interval. The same watt limit applies to a partial interval. Every
+segment of the same control group must meet the limit. The selected battery
+must permit following, start at or above its reserve and be outside calibration
+charging or hold.
+
+This selection changes the execution mode and keeps the validated forecast
+flows, losses, state of charge and costs in the plan. The Grid device publishes
+the shared 0 W goal. Batteries outside the selection retain their fixed
+commands. Fast regulation, coordination between physical controllers and
+equipment protection stay in Home Assistant or local equipment. Subsequent
+measured state of charge informs replanning.
 
 This bounded policy does not claim a general robust-control optimization or guarantee physically exact zero. Broader following decisions at binding physical limits remain product work. Both independent numerical and actual-HA transition tests protect the supported behavior.
 

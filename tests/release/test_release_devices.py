@@ -247,6 +247,77 @@ def test_zero_grid_execution_preserves_optimal_flows_and_costs(permission, futur
     assert envelope["independent_costs"]["cash_cost"] == pytest.approx(1)
 
 
+@pytest.mark.planner_scenario
+@pytest.mark.parametrize(
+    ("minutes", "grid_power_w", "follows"),
+    [
+        (15, 4, True),
+        (15, 10, True),
+        (15, 11, False),
+        (5, 10, True),
+        (5, 11, False),
+        (15, -10, True),
+        (15, -11, False),
+    ],
+)
+def test_zero_grid_selection_uses_average_ac_exchange(minutes, grid_power_w, follows):
+    """Use demand above battery output for import and surplus fixed solar for export."""
+    duration_h = minutes / 60
+    demand_w = 1000 + grid_power_w if grid_power_w > 0 else 0
+    inputs = problem(
+        prices=(1,),
+        loads=(demand_w * duration_h / 1000,),
+        pv=(max(-grid_power_w, 0) * duration_h / 1000,),
+        initial=1,
+    )
+    inputs = replace(
+        inputs,
+        intervals=(replace(inputs.intervals[0], duration_h=duration_h),),
+        batteries=(replace(inputs.batteries[0], can_follow_grid=True),),
+    )
+    result = solve(inputs)
+    snapshot = InputSnapshot("test", "config", START, "measured", "forecast", "price", inputs)
+    envelope = plan_document(snapshot, result, result.plan.costs, START)
+
+    flow = result.plan.flows[0]
+    assert flow.grid_import == pytest.approx(max(grid_power_w, 0) * duration_h / 1000)
+    assert flow.grid_export == pytest.approx(max(-grid_power_w, 0) * duration_h / 1000)
+    command = Plan.parse(envelope, "config").steps[0].command
+    assert command.grid_active is follows
+    assert command.devices[0].mode == ("follow_grid_target" if follows else "fixed_power")
+    assert command.devices[0].power_w == (None if follows else min(demand_w, 1000))
+
+
+@pytest.mark.planner_scenario
+def test_zero_grid_selection_checks_every_segment_of_a_control_interval():
+    """Keep fixed power when a tariff split averages 10 W but the second segment exceeds it."""
+    inputs = problem(prices=(1, 2), loads=(1 / 12, 1.015 / 6), pv=(0, 0), initial=1)
+    first, second = inputs.intervals
+    inputs = replace(
+        inputs,
+        intervals=(
+            replace(first, duration_h=1 / 12, control_group="quarter"),
+            replace(
+                second,
+                start=START + timedelta(minutes=5),
+                duration_h=1 / 6,
+                control_group="quarter",
+            ),
+        ),
+        batteries=(replace(inputs.batteries[0], can_follow_grid=True),),
+    )
+    result = solve(inputs)
+    assert [flow.grid_import for flow in result.plan.flows] == pytest.approx([0, 0.0025])
+    snapshot = InputSnapshot("test", "config", START, "measured", "forecast", "price", inputs)
+    envelope = plan_document(snapshot, result, result.plan.costs, START)
+
+    (step,) = Plan.parse(envelope, "config").steps
+    assert step.end == START + timedelta(minutes=15)
+    assert step.command.grid_active is False
+    assert step.command.devices[0].mode == "fixed_power"
+    assert step.command.devices[0].power_w == 1000
+
+
 @pytest.mark.parametrize(
     "grid_active,mode,power",
     [
