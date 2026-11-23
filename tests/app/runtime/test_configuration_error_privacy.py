@@ -24,7 +24,9 @@ def validation_route(kind, reject_validation, tmp_path, monkeypatch):
     app = web.Application()
     lock = asyncio.Lock()
     service = SimpleNamespace(
-        configuration=None, job=lambda _now: None, feedback_restore_job=lambda _now: None
+        store=SimpleNamespace(current=None, issue=None),
+        job=lambda _now: None,
+        feedback_restore_job=lambda _now: None,
     )
     catalogue = SimpleNamespace(
         validate_membership=reject_validation,
