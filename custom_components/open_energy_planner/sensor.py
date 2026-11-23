@@ -104,9 +104,9 @@ class PlannerSensor(PlannerEntity, SensorEntity):
         if self.key == "plan_generated_at":
             return self.coordinator.schedule.plan.generated_at
         if self.key == "mode":
-            return "zero_grid" if command.grid_active else "inactive"
+            return command.grid_control_mode
         if self.key == "target":
-            return 0 if command.grid_active else None
+            return 0 if command.grid_control_mode == "zero_grid" else None
         return None
 
     @property
@@ -133,7 +133,7 @@ class PlannerSensor(PlannerEntity, SensorEntity):
         if self.key == "mode":
             return None
         return {
-            "applicable": command.grid_active,
+            "applicable": command.grid_control_mode == "zero_grid",
             "mode": command.mode,
             "measurement_side": "grid_ac",
         }

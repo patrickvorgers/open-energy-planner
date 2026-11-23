@@ -59,8 +59,75 @@ def test_documentation_plan_contains_real_solar_storage_and_daily_variation(app_
         values = next(series["values"] for series in groups if series["name"] == label)
         assert any(value is not None and abs(value) > 0.01 for value in values), label
     expect(page.locator("#ems-costs > dl dd").first).not_to_have_text("- EUR")
-    capture(page, "planning-example", ".optimizer-scenario")
+    expect(page.locator(".grid-mode-block:visible").first).to_be_visible()
+    destination = Path("results/ci/documentation-examples")
+    destination.mkdir(parents=True, exist_ok=True)
+    page.evaluate("document.fonts.ready")
+    size = page.viewport_size
+    panel = page.locator(".optimizer-scenario")
+    if size["width"] == 390:
+        page.set_viewport_size({**size, "height": 1100})
+    panel.evaluate('node => node.scrollIntoView({block: "center"})')
+    panel.screenshot(path=str(destination / f"planning-example-{page.viewport_size['width']}.png"))
+    if size["width"] == 390:
+        page.set_viewport_size(size)
     capture(page, "planning-scenarios", ".scenario-card:has(#self-consumption-chart)")
+
+
+@pytest.mark.parametrize("app_site", ["documentation"], indirect=True)
+def test_optimizer_grid_strip_matches_selected_plan_and_chart_window(app_page):
+    """Exercise actual plan reads, aligned clipping, full period labels and responsive inspection."""
+    page, url = app_page
+    page.clock.install(time=START)
+    authenticate(page, url, "/overview")
+    chart = page.locator("#plan-chart")
+    legend = page.locator("#plan-chart-legend")
+    expect(legend.get_by_text("Zero on the meter", exact=True)).to_have_count(1)
+    blocks = page.locator(".grid-mode-block:visible")
+    first = blocks.first
+    expect(first).to_be_visible()
+    assert blocks.count() > 1
+    assert (
+        blocks.nth(1).bounding_box()["x"]
+        > first.bounding_box()["x"] + first.bounding_box()["width"]
+    )
+    geometry = chart.evaluate("""canvas => {
+        const chart = Chart.getChart(canvas), rect = canvas.getBoundingClientRect();
+        const {x} = chart.scales;
+        return [rect.x + x.getPixelForValue(Date.UTC(2026, 10, 4, 6)),
+            rect.x + x.getPixelForValue(Date.UTC(2026, 10, 4, 9)), rect.y + chart.chartArea.bottom];
+    }""")
+    full = first.bounding_box()
+    assert [full["x"], full["x"] + full["width"], full["y"]] == pytest.approx(geometry, abs=1)
+
+    page.clock.set_fixed_time(START.replace(hour=1, minute=30))
+    page.get_by_role("button", name="Next 6 hours", exact=True).click()
+    expect(blocks).to_have_count(1)
+    assert first.bounding_box()["width"] == pytest.approx(full["width"] * 4, abs=2)
+    assert first.bounding_box()["x"] + first.bounding_box()["width"] == pytest.approx(
+        chart.evaluate(
+            "canvas => canvas.getBoundingClientRect().x + Chart.getChart(canvas).chartArea.right"
+        ),
+        abs=1,
+    )
+    if page.viewport_size["width"] == 390:
+        first.tap()
+    else:
+        first.scroll_into_view_if_needed()
+        first.focus()
+    tooltip = page.locator("#plan-chart-grid-mode-tooltip")
+    expect(tooltip.locator("strong")).to_have_text("Zero on the meter")
+    expect(tooltip.locator("span")).to_have_text("06:00–09:00")
+    expect(tooltip).to_be_visible()
+    page.keyboard.press("Escape")
+    expect(tooltip).to_be_hidden()
+    page.get_by_role("button", name="Next 24 hours", exact=True).click()
+    assert blocks.count() > 1
+    page.locator('[data-hours="0"]').click()
+    assert blocks.count() > 1
+    page.locator("#plan-version").select_option("documentation-inactive")
+    expect(blocks).to_have_count(0)
+    expect(legend.get_by_text("Zero on the meter", exact=True)).to_have_count(1)
 
 
 def test_documentation_installation_shows_saved_limits_and_real_source_relationships(app_page):

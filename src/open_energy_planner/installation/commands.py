@@ -138,7 +138,7 @@ def plan_document(snapshot, result, costs, now):
         step = {
             "start": interval.start.isoformat(),
             "end": (interval.start + timedelta(hours=interval.duration_h)).isoformat(),
-            "grid_active": bool(followers),
+            "grid_control_mode": "zero_grid" if followers else "inactive",
             "devices": commands,
         }
         if (
@@ -146,7 +146,7 @@ def plan_document(snapshot, result, costs, now):
             and interval.control_group is not None
             and interval.control_group == previous_group
             and steps[-1]["end"] == step["start"]
-            and all(steps[-1][key] == step[key] for key in ("devices", "grid_active"))
+            and all(steps[-1][key] == step[key] for key in ("devices", "grid_control_mode"))
         ):
             steps[-1]["end"] = step["end"]
         else:
@@ -155,13 +155,15 @@ def plan_document(snapshot, result, costs, now):
     if problem.ev_work:
         compact = []
         for step in steps:
-            if compact and all(compact[-1][key] == step[key] for key in ("devices", "grid_active")):
+            if compact and all(
+                compact[-1][key] == step[key] for key in ("devices", "grid_control_mode")
+            ):
                 compact[-1]["end"] = step["end"]
             else:
                 compact.append(step)
         steps = compact
     return {
-        "schema": 2,
+        "schema": 3,
         "release": RELEASE,
         "plan_id": str(uuid4()),
         "config_revision": snapshot.config_revision,

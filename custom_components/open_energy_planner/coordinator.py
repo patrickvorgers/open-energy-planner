@@ -183,7 +183,7 @@ class PlanCoordinator:
                     "available": command is not None,
                     "status": self.projection.status,
                     "mode": command.mode if command else None,
-                    "grid_active": command.grid_active if command else None,
+                    "grid_control_mode": command.grid_control_mode if command else None,
                     "devices": {
                         device_item.device_id: {
                             "kind": device_item.kind,

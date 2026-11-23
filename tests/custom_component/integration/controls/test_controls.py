@@ -622,8 +622,8 @@ def test_real_ha_unchanged_state_report_updates_freshness():
     asyncio.run(scenario())
 
 
-def test_large_schema2_snapshot_and_ordinary_response_size_limits():
-    """A full snapshot accepts a >256 KiB schema-2 plan. Control receipts and ordinary settings retain the smaller bound."""
+def test_large_snapshot_and_ordinary_response_size_limits():
+    """A full snapshot accepts a >256 KiB plan. Control receipts and ordinary settings retain the smaller bound."""
     import json
 
     from custom_components.open_energy_planner.client import LocalClient
@@ -633,7 +633,7 @@ def test_large_schema2_snapshot_and_ordinary_response_size_limits():
         """Serve real chunked HTTP responses and preserve the bounded per-response contract."""
         now = dt_util.utcnow()
         plan = command_plan(now, powers=(0, 0))
-        plan.update(schema=2, device_commands=True, input_snapshot={"evidence": "x" * 300000})
+        plan["input_snapshot"] = {"evidence": "x" * 300000}
         for step in plan["steps"]:
             step["devices"] = {"battery": {"kind": "battery", "power_w": 0}}
         data = {"plan": plan, "enabled": True}
@@ -1249,7 +1249,6 @@ def test_multi_device_zero_grid_modes_keep_power_enabled_but_inapplicable():
             ]
             now = dt_util.utcnow()
             plan = command_plan(now, powers=(0, None, 0))
-            plan.update(schema=2, device_commands=True)
             for index, step in enumerate(plan["steps"]):
                 step["devices"] = {
                     "follower": {

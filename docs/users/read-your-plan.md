@@ -42,7 +42,7 @@ These are net grid flows, not a whole-installation balance.
 Its legend uses the same names and order as the three scenario charts above.
 All three lines are solid. Positive power is import and negative power is export.
 
-[![A populated synthetic Planning view showing energy supply and use, battery state and the boundary between days.](../assets/planning-example.png)](../assets/planning-example.png)
+[![A populated synthetic Planning view showing energy flows, battery state and blue Zero on the meter periods.](../assets/planning-example.png)](../assets/planning-example.png)
 
 *Read the colored flows together with battery SoC. The example contains actual calculated flows from synthetic inputs. It is a teaching scenario, not a prediction for your household.*
 
@@ -51,6 +51,8 @@ All three lines are solid. Positive power is import and negative power is export
 Above zero is supply to the modeled balance: used solar, grid import and battery discharge. Below zero is use: household demand, grid export, battery charge and conversion losses. These signs describe this chart's balance. They are not interchangeable with every device's command sign.
 
 The complete balance sums to zero before visual rounding or hiding series. Lines show SoC on the right axis. Bars show mean kW per quarter. Partial quarters identify their covered period in the tooltip.
+
+The blue **Zero on the meter** strip above the Optimizer time labels marks when the selected plan schedules that mode. Gaps mean it is inactive. Point to a blue block, focus it with the keyboard or tap it to see the full planned time range. The strip follows the visible chart range. Its schedule describes planned control, while the bars show expected energy flows.
 
 ### Read the battery plan
 

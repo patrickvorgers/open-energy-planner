@@ -84,11 +84,11 @@ Implementation update: [installation planning](../docs/development/INSTALLATION-
 now connects physical settings, existing cached forecasts, prices/contracts and
 measured independent battery states without an injected test basis. Separate grid,
 PV, battery and converter components compose local DC buses around one household
-AC bus in the existing HiGHS adapter. Independent validation precedes schema-2
+AC bus in the existing HiGHS adapter. Independent validation precedes schema-3
 per-device commands. The app owns the complete setup/editing wizard, settings, calculations and graph
 compilation. The integration supplies read-only HA metadata/history, exposes an app
 link and automatically reconciles capability-driven entities after its one-time
-installation. No source, PV or battery wizard remains in HA. New calculations and HA execution require the current installation model and schema-2 per-device commands. Synthetic development inputs use the same model and projection. Original schema-1 plans remain immutable readable archive evidence. They are never reactivated as executable plans or retained as a second solver implementation.
+installation. No source, PV or battery wizard remains in HA. New calculations and HA execution require the current installation model and schema-3 per-device commands. Synthetic development inputs use the same model and projection. Original schema-1 plans remain immutable readable archive evidence. They are never reactivated as executable plans or retained as a second solver implementation.
 
 Energy dashboard membership is authoritative. The HA metadata adapter supplies source identities independently of state/history availability. The app projects exactly those devices, preserving saved settings by Energy meter identity. New sources have stable `setup_required` virtual devices until their necessary ratings/bindings are confirmed. Removed sources disappear from the live catalogue automatically. The publication readiness gate rejects incompatible installation/household definitions. Immutable historical evidence remains untouched. Settings APIs validate membership as well as the wizard, and a production restart waits for initial Energy discovery.
 
@@ -1001,7 +1001,7 @@ Automatic VS Code setup uses pinned compatible runtimes, simulated HA and no pro
 | 6. History/comparison | Permanent archive/reference/plan and savings UI | Exact old-plan reconstruction, date selection preserves reference, visible corrections |
 | 7. Release | Mobile/desktop flows, restore and both installable artifacts | All gates/joint versions pass and both artifacts are available |
 
-Current planning uses the installation path for measured device states, cached forecasts, contract inputs, joint device work and schema-2 publication. The milestone matrix is a delivery framework, not a claim that an old one-battery proof is the current runtime. Storage, validity, versioning, restore and data-rights gates remain acceptance requirements. Every feature needs applicable tests and a release criterion. Source implementation alone does not establish full-chain acceptance.
+Current planning uses the installation path for measured device states, cached forecasts, contract inputs, joint device work and schema-3 publication. The milestone matrix is a delivery framework, not a claim that an old one-battery proof is the current runtime. Storage, validity, versioning, restore and data-rights gates remain acceptance requirements. Every feature needs applicable tests and a release criterion. Source implementation alone does not establish full-chain acceptance.
 
 ## 12. Maintenance and release validation
 

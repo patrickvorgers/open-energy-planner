@@ -86,6 +86,7 @@ def test_pause_insight_and_fresh_resume():
         "fractional_watts",
         "boolean_schema",
         "old_schema",
+        "boolean_grid_schema",
         "missing_devices",
         "validity",
         "empty",
@@ -121,6 +122,8 @@ def test_bad_document_does_not_replace_good_plan(mutation):
         bad["schema"] = True
     elif mutation == "old_schema":
         bad["schema"] = 1
+    elif mutation == "boolean_grid_schema":
+        bad["schema"] = 2
     elif mutation == "missing_devices":
         del bad["steps"][0]["devices"]
     elif mutation == "naive":

@@ -237,10 +237,10 @@ def test_zero_grid_execution_preserves_optimal_flows_and_costs(permission, futur
     parsed = Plan.parse(envelope, "config")
     assert result.plan.costs.cash_cost == pytest.approx(1)
     first, second = parsed.steps
-    assert first.command.grid_active is False
+    assert first.command.grid_control_mode == "inactive"
     assert first.command.devices[0].mode == "fixed_power"
     assert first.command.devices[0].power_w == -1000
-    assert second.command.grid_active is permission
+    assert second.command.grid_control_mode == ("zero_grid" if permission else "inactive")
     assert second.command.devices[0].mode == ("follow_grid_target" if permission else "fixed_power")
     assert second.command.devices[0].power_w == (None if permission else 1000)
     assert envelope["expected_flows"][1]["batteries"][0]["discharge_kwh"] == pytest.approx(1)
@@ -283,7 +283,7 @@ def test_zero_grid_selection_uses_average_ac_exchange(minutes, grid_power_w, fol
     assert flow.grid_import == pytest.approx(max(grid_power_w, 0) * duration_h / 1000)
     assert flow.grid_export == pytest.approx(max(-grid_power_w, 0) * duration_h / 1000)
     command = Plan.parse(envelope, "config").steps[0].command
-    assert command.grid_active is follows
+    assert command.grid_control_mode == ("zero_grid" if follows else "inactive")
     assert command.devices[0].mode == ("follow_grid_target" if follows else "fixed_power")
     assert command.devices[0].power_w == (None if follows else min(demand_w, 1000))
 
@@ -313,25 +313,27 @@ def test_zero_grid_selection_checks_every_segment_of_a_control_interval():
 
     (step,) = Plan.parse(envelope, "config").steps
     assert step.end == START + timedelta(minutes=15)
-    assert step.command.grid_active is False
+    assert step.command.grid_control_mode == "inactive"
     assert step.command.devices[0].mode == "fixed_power"
     assert step.command.devices[0].power_w == 1000
 
 
 @pytest.mark.parametrize(
-    "grid_active,mode,power",
+    "grid_control_mode,mode,power",
     [
-        (False, "follow_grid_target", None),
+        ("inactive", "follow_grid_target", None),
+        ("zero_grid", "fixed_power", 0),
+        ("zero_grid", "follow_grid_target", 500),
+        ("unknown", "fixed_power", 0),
         (True, "fixed_power", 0),
-        (True, "follow_grid_target", 500),
     ],
 )
-def test_protocol_rejects_conflicting_grid_and_device_modes(grid_active, mode, power):
+def test_protocol_rejects_conflicting_grid_and_device_modes(grid_control_mode, mode, power):
     """A follower cannot retain a numeric target, omit the grid goal or conflict with a fixed device mode."""
     from tests.ha_contract.support.commands import command_plan
 
-    envelope = command_plan(START, powers=(None if grid_active else 0,))
-    envelope.update(schema=2, device_commands=True)
+    envelope = command_plan(START)
+    envelope["steps"][0]["grid_control_mode"] = grid_control_mode
     envelope["steps"][0]["devices"] = {
         "battery": {"kind": "battery", "mode": mode, "power_w": power}
     }

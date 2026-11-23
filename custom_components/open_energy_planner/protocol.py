@@ -237,15 +237,15 @@ def device_commands(body):
 
 @dataclass(frozen=True)
 class Command:
-    """Represent grid activation and the validated commands for each device."""
+    """Represent the grid control mode and the validated commands for each device."""
 
-    grid_active: bool
+    grid_control_mode: str
     devices: tuple[DeviceCommand, ...] = ()
 
     @property
     def mode(self):
         """Expose fixed-power or grid-following mode without interpreting device-specific control."""
-        return "follow_grid_target" if self.grid_active else "fixed_power"
+        return "follow_grid_target" if self.grid_control_mode == "zero_grid" else "fixed_power"
 
 
 @dataclass(frozen=True)
@@ -440,7 +440,7 @@ class Plan:
         """
         if not isinstance(document, dict) or document.get("release") != RELEASE:
             raise ValueError("Release mismatch or invalid plan")
-        if type(document.get("schema")) is not int or document["schema"] != 2:
+        if type(document.get("schema")) is not int or document["schema"] != 3:
             raise ValueError("Unsupported plan schema")
         if document.get("device_commands") is not True:
             raise ValueError("Plan schema does not match command capabilities")
@@ -458,19 +458,16 @@ class Plan:
             if not isinstance(raw, dict):
                 raise ValueError("Invalid step")  # noqa: TRY004 - Preserve the existing ValueError validation contract.
             start, end = timestamp(raw.get("start")), timestamp(raw.get("end"))
-            active = raw.get("grid_active")
-            if type(active) is not bool or start >= end:
-                raise ValueError("Invalid interval or grid activation")
+            grid_control_mode = raw.get("grid_control_mode")
+            if grid_control_mode not in ("zero_grid", "inactive") or start >= end:
+                raise ValueError("Invalid interval or grid control mode")
             if steps and start != steps[-1].end:
                 raise ValueError("Plan intervals must be contiguous")
             devices = device_commands(raw.get("devices"))
-            if (
-                any(
-                    device_item.kind == "battery" and device_item.mode == "follow_grid_target"
-                    for device_item in devices
-                )
-                != active
-            ):
+            if any(
+                device_item.kind == "battery" and device_item.mode == "follow_grid_target"
+                for device_item in devices
+            ) != (grid_control_mode == "zero_grid"):
                 raise ValueError("Grid command and battery follower modes disagree")
             if steps and tuple(
                 (device_item.device_id, device_item.kind) for device_item in devices
@@ -479,7 +476,7 @@ class Plan:
                 for device_item in steps[0].command.devices
             ):
                 raise ValueError("Plan device capabilities changed within one revision")
-            steps.append(Step(start, end, Command(active, devices)))
+            steps.append(Step(start, end, Command(grid_control_mode, devices)))
         validate_ev_context(document.get("ev_context"), steps)
         validate_thermal_context(document.get("thermal_context"), steps)
         made, until = (

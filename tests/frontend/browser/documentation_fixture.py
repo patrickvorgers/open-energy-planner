@@ -23,8 +23,8 @@ from open_energy_planner.storage.adapters.lifecycle.sqlalchemy import SqlPlanRep
 START = datetime(2026, 11, 4, tzinfo=UTC)
 
 
-@lru_cache(maxsize=2)
-def _validated_example(two_batteries=False):
+@lru_cache(maxsize=3)
+def _validated_example(two_batteries=False, *, grid_follow=True):
     """Solve and independently validate the fixed teaching example once per process.
 
     A 4-kW midday solar curve, morning/evening household peaks and higher evening
@@ -81,7 +81,14 @@ def _validated_example(two_batteries=False):
                 0,
             )
         )
-    batteries = (BatteryState("battery", "hybrid", Battery(10, 4, 1, 3000, 3000, 0.95, 0.95)),)
+    batteries = (
+        BatteryState(
+            "battery",
+            "hybrid",
+            Battery(10, 4, 1, 3000, 3000, 0.95, 0.95),
+            can_follow_grid=grid_follow,
+        ),
+    )
     inverters = (SolarInverter("hybrid", 5000, 0.96, True),)
     pv_units = (PVUnit("roof", "hybrid", False),)
     if two_batteries:
@@ -143,6 +150,15 @@ def seed(directory, *, two_batteries=False):
     document, schedule = _validated_example(two_batteries)
     repository = SqlPlanRepository(directory)
     try:
+        if not two_batteries:
+            original, _ = _validated_example(grid_follow=False)
+            inactive = deepcopy(original)
+            inactive.update(
+                plan_id="documentation-inactive",
+                generated_at=(START - timedelta(minutes=5)).isoformat(),
+            )
+            repository.state["plan"] = inactive
+            repository.save()
         repository.state["plan"] = deepcopy(document)
         repository.save()
         ContractStore(SqlDocuments(repository.engine, "contracts")).save(schedule)
