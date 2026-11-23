@@ -251,11 +251,12 @@ sequenceDiagram
     participant BP as Blueprint
     participant Device as Appliance
     App->>App: Persist a bounded start attempt
-    App-->>HA: Expose the exact attempt and its deadline
+    HA->>App: Read current start requests
+    App-->>HA: Return the attempt and deadline
     HA->>BP: Fire the start request
     BP->>HA: Claim this task and attempt
     HA->>App: Request a one-time claim
-    App-->>HA: Authorize once with the remaining deadline
+    App-->>HA: Return authorization or rejection
     HA-->>BP: Return the checked claim
     alt Claim is valid at the physical action
         BP->>Device: Start the appliance
@@ -266,7 +267,7 @@ sequenceDiagram
         Note over BP,Device: Do not send a start
     end
     opt Execution is not confirmed before expiry
-        App->>App: Withdraw the request and retain the unresolved attempt
+        App->>App: Withdraw and retain the attempt
         Note over App,BP: Require evidence before another start
     end
 ```

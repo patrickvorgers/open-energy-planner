@@ -153,11 +153,11 @@ ordinary requests closed until the selected runtime is reachable.
 ```mermaid
 sequenceDiagram
     participant Operator
-    participant Control as Maintenance controller
-    participant App as Application runtime
+    participant Control as Maintenance
+    participant App as Runtime
     participant Source as Source database
     participant Target as Target database
-    Operator->>Control: Start the checked transfer with overwrite consent
+    Operator->>Control: Start with overwrite consent
     Control->>App: Close admission and drain work
     Control->>Source: Read the stopped source
     Control->>Target: Copy and verify the archive
@@ -165,7 +165,7 @@ sequenceDiagram
         Control-->>Operator: Offer renewed retry or restore the source
     else Target is verified
         Control->>Control: Persist release intent for the target
-        Control->>App: Activate and start the selected target
+        Control->>App: Start the selected target
         alt Selected runtime starts
             Control->>Control: Reopen ordinary requests
         else Startup fails or is interrupted

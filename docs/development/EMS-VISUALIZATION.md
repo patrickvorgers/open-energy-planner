@@ -308,23 +308,23 @@ completed calculation can publish with the current constraints.
 
 ```mermaid
 sequenceDiagram
-    participant Inputs as Home Assistant and forecasts
+    participant Inputs as Input updates
     participant Clock as Planning clock
-    participant Planner as Planning coordinator
+    participant Planner
     participant Solver
     participant Archive as Plan archive
     Clock->>Planner: Start an eligible round
     Planner->>Solver: Calculate from frozen inputs
     Inputs->>Planner: Receive a newer meter reading or forecast
-    Note over Planner: Keep the update for the next round
+    Note over Planner: Queue the update
     Clock->>Planner: Boundary arrives while the solver is busy
-    Note over Planner: Keep the pending request
+    Note over Planner: Keep work pending
     Solver-->>Planner: Return a complete candidate
     Planner->>Planner: Validate against current publication constraints
     alt Candidate is still valid
         Planner->>Archive: Save and publish the complete plan
     else A hard constraint changed
-        Note over Planner: Discard the candidate and retain the reason
+        Note over Planner: Record the rejection
     end
     Clock->>Planner: Next eligible boundary with work pending
     Planner->>Solver: Calculate from the latest usable inputs

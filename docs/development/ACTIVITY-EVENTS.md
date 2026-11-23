@@ -156,10 +156,10 @@ after reconnecting.
 sequenceDiagram
     participant Browser as Activity page
     participant Events as Events API
-    participant Stream as Process event buffer
+    participant Stream as Event buffer
     Browser->>Events: GET /v1/events
-    Events->>Stream: Capture a snapshot and its cursor together
-    Events-->>Browser: Return live state and the current cursor
+    Events->>Stream: Capture snapshot and cursor
+    Events-->>Browser: Return live state and cursor
     Browser->>Events: Poll with the cursor
     Events-->>Browser: Return newer changes or wait
     Note over Browser,Events: Transport disconnects or the app restarts
