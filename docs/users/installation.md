@@ -79,7 +79,13 @@ The saved summary and the original plan's **Starting conditions** retain the con
 
 The optimizer, self-consumption reference, expected period costs and measured comparison use this same basis. The estimated value of remaining energy deducts its future discharge wear. Neither the without-battery baseline nor charging alone incurs battery wear.
 
-Enable **Can follow zero grid target** only if your own controller or automation can implement that mode. It is a capability permission, not a promise of physically exact zero grid exchange.
+In **Installation → Batteries**, select the battery. For a saved installation,
+choose **Edit installation**. Enable **Can follow zero grid target** if the
+local controller can follow the shared net meter target, then save.
+OEP can then select grid following in a suitable plan interval. With the option
+off, OEP still plans the battery with fixed power commands. See the
+[zero-grid examples](virtual-device-sensors.md#zero-grid-examples) for the
+Home Assistant signals with one or two batteries.
 
 ### Periodic battery calibration
 

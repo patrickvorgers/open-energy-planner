@@ -76,8 +76,9 @@ part of this sensor reference.
 Without a usable command, `applicable` is false and the command sensors are
 unavailable.
 
-The grid goal does not choose a physical executor. Coordinate multiple batteries
-or inverters in your own controller so they do not compete for the same setpoint.
+There is one Grid device for the installation. Each participating battery follows
+the same grid target. See [zero-grid examples](#zero-grid-examples) for how to use
+the Grid and battery signals together.
 
 ## Solar
 
@@ -121,9 +122,38 @@ Both sensors carry these interpretation attributes:
 | `grid_device` | `grid` while following the grid goal, otherwise empty. Points to the authoritative goal, not a second battery setpoint. |
 | `measurement_side` | `battery_terminal_dc`. Identifies the battery-side DC power boundary. |
 
-Grid following appears only when configured as a supported capability and selected
-by the plan. It is not an always-on battery strategy. See the
-[zero-grid contract](../development/VIRTUAL-DEVICES.md#zero-grid-selection).
+### Zero-grid examples
+
+In OEP, go to **Installation → Batteries** and select the battery. For a saved
+installation, choose **Edit installation**. Enable **Can follow zero grid
+target** if your local controller can adjust that battery's power from the live
+net meter reading, then save. With the option off, OEP still plans the battery
+and uses its fixed power commands.
+
+With the option enabled, OEP can select grid following when the current plan
+expects both zero grid import and zero grid export and the battery meets the
+reserve and calibration conditions. The Grid mode becomes `zero_grid` when at
+least one battery is following. The battery's own mode identifies whether it
+participates in this interval.
+
+| Example | Virtual device | Control mode | Power target |
+| --- | --- | --- | --- |
+| One battery selected to follow | Grid | `zero_grid` | `0 W` at the shared net meter |
+| One battery selected to follow | Battery | `follow_grid_target` | `unknown` |
+| Two batteries, one selected to follow | Grid | `zero_grid` | `0 W` at the shared net meter |
+| Two batteries, one selected to follow | Battery A | `follow_grid_target` | `unknown` |
+| Two batteries, one selected to follow | Battery B | `fixed_power` | For example, `+500 W` DC discharge |
+
+In the second example, Battery B applies its fixed target. The local controller
+uses the live net meter reading to adjust Battery A for any remaining import
+or export, within its operating limits. If OEP selects both batteries to
+follow, coordinate their response in the local controller so they share the
+correction. For example, a measured 1,000 W import calls for about 1,000 W of
+additional AC supply in total. Independent controllers that each try to supply
+the full 1,000 W can overshoot.
+
+See the [zero-grid contract](../development/VIRTUAL-DEVICES.md#zero-grid-selection)
+for the detailed selection rules.
 
 ## Consumption and cycles: forecast consumers
 
