@@ -113,6 +113,78 @@ async def upload(client, body):
     return await settings(client)
 
 
+def test_setup_save_rolls_back_all_domains_and_skips_unchanged_forecasts(
+    tmp_path, panel_database, monkeypatch
+):
+    """A late storage failure rolls back setup. A physical-only edit leaves both forecast owners alone."""
+    from open_energy_planner.demand.runtime import DemandRuntime
+    from open_energy_planner.solar.runtime import SolarRuntime
+
+    async def scenario():
+        """Exercise authenticated setup and rollback on each shared database backend."""
+        app = create_app(tmp_path, TOKEN, source="home_assistant", database_url=panel_database)
+        async with TestClient(TestServer(app)) as client:
+            metadata = setup_metadata()
+            before = await upload(client, metadata)
+            proposal = {
+                "installation": {
+                    "grid_power_entity": "sensor.grid",
+                    "import_limit_w": 5000,
+                    "export_limit_w": 4000,
+                    "batteries": [],
+                    "inverters": [],
+                },
+                "demand": {
+                    "annual_kwh": 3500,
+                    "timezone": metadata["timezone"],
+                    "terms": metadata["suggestions"]["terms"],
+                },
+                "solar": {"sources": [], "inverters": []},
+            }
+            for name, definition in proposal.items():
+                definition["expected_version"] = before[name]["version"] if before[name] else None
+
+            def reject_write(_store, _candidate):
+                """Fail after the other domains have written to the open transaction."""
+                raise OSError("Injected solar configuration failure")
+
+            with monkeypatch.context() as failure:
+                failure.setattr(SolarStore, "write_configuration", reject_write)
+                response = await client.put("/v1/setup", json=proposal, headers=HEADERS)
+                assert response.status == 503
+            unchanged = await settings(client)
+            for name in proposal:
+                assert unchanged[name] == before[name]
+                with closing(
+                    SqlPlanRepository(tmp_path, database_url=panel_database)
+                ) as repository:
+                    documents = SqlDocuments(repository.engine, name)
+                    assert documents.exists("current.json") is bool(before[name])
+
+            response = await client.put("/v1/setup", json=proposal, headers=HEADERS)
+            assert response.status == 200, await response.text()
+            saved = await response.json()
+            for name, definition in proposal.items():
+                definition["expected_version"] = saved[name]["version"]
+            proposal["installation"]["import_limit_w"] = 6000
+
+            def reject_reconfigure(_runtime, _candidate):
+                """Fail if a physical edit tries to rebuild an unchanged forecast domain."""
+                raise AssertionError("Unchanged forecast configuration was reinstalled")
+
+            monkeypatch.setattr(DemandRuntime, "configure", reject_reconfigure)
+            monkeypatch.setattr(SolarRuntime, "configure", reject_reconfigure)
+            response = await client.put("/v1/setup", json=proposal, headers=HEADERS)
+            assert response.status == 200, await response.text()
+            changed = await response.json()
+            assert changed["installation"]["import_limit_w"] == 6000
+            assert changed["demand"] == saved["demand"]
+            assert changed["solar"] == saved["solar"]
+            assert "plan" not in changed and "settlement_request" not in changed
+
+    asyncio.run(scenario())
+
+
 def test_follow_update_outage_unlink_and_relink_preserve_converter_and_originals(
     tmp_path, panel_database
 ):

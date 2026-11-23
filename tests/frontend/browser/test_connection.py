@@ -126,8 +126,8 @@ def test_app_confirms_discovered_home_assistant_once_without_copying_credentials
     )
 
 
-def test_app_wizard_recovers_authentication_and_partially_saved_configuration(app_page):
-    """Wrong tokens are rejected. A final-save network failure retains edits and the confirmed demand/PV revisions for a safe retry."""
+def test_app_wizard_recovers_authentication_and_retries_configuration(app_page):
+    """Wrong tokens are rejected. A setup network failure retains all edits for a safe retry."""
     page, url = app_page
     discover(page, url)
     page.get_by_label("Installation API token").fill("wrong-token")
@@ -138,25 +138,25 @@ def test_app_wizard_recovers_authentication_and_partially_saved_configuration(ap
     page.get_by_role("button", name="Continue", exact=True).click()
     page.get_by_role("button", name="Continue", exact=True).click()
     expect(page.get_by_role("heading", name="Review your installation", exact=True)).to_be_visible()
-    page.route("**/v1/installation", lambda route: route.abort())
+    page.route(
+        "**/v1/setup",
+        lambda route: route.abort() if route.request.method == "PUT" else route.continue_(),
+    )
     with page.expect_event(
         "requestfailed",
-        predicate=lambda request: (
-            request.url.endswith("/v1/installation") and request.method == "PUT"
-        ),
+        predicate=lambda request: request.url.endswith("/v1/setup") and request.method == "PUT",
     ):
         page.get_by_role("button", name="Save installation", exact=True).click()
     expect(page.locator("#status")).to_contain_text("Your edits are retained")
     expect(page.locator("#installation-save-state")).to_contain_text("Unsaved changes")
-    partial = read_settings(page, url)
-    assert partial["demand"]["annual_kwh"] == 3500 and partial["solar"]["version"]
-    assert partial["installation"] is None
-    page.unroute("**/v1/installation")
+    unchanged = read_settings(page, url)
+    assert all(unchanged[name] is None for name in ("demand", "solar", "installation"))
+    page.unroute("**/v1/setup")
     page.get_by_role("button", name="Save installation", exact=True).click()
     expect(page.locator("#status")).to_contain_text("Installation saved.")
     saved = read_settings(page, url)
-    assert saved["demand"]["version"] == partial["demand"]["version"]
-    assert saved["solar"]["version"] == partial["solar"]["version"]
+    assert saved["demand"]["annual_kwh"] == 3500 and saved["solar"]["version"]
+    assert saved["installation"]["version"]
 
 
 @pytest.mark.parametrize("app_site", ["ingress"], indirect=True)

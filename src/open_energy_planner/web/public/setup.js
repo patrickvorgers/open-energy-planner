@@ -915,7 +915,7 @@ async function load(refresh = false, discard = false, signal) {
     $("allow-feed-in").checked = config.installation?.export_limit_w !== 0;
     delete $("export").dataset.previousLimit;
     const estimate = config.annual_estimate;
-    $("annual").value = estimate?.annual_kwh ?? config.demand?.annual_kwh ?? "";
+    $("annual").value = config.demand?.annual_kwh ?? estimate?.annual_kwh ?? "";
     $("annual-field").hidden = Boolean(estimate || config.demand);
     $("grid-field").hidden = Boolean($("grid").value);
     $("timezone").value = catalogue.data.timezone;
@@ -1091,18 +1091,14 @@ $("save").onclick = async () => {
         }
         let message = "Settings saved.";
         if (step !== 4 && (!layout.wizard || step === 3) && installationDirty()) {
-            const body = definitions();
-            await api("/v1/setup/preview", "POST", body);
-            const demand = await api("/v1/demand", "PUT", body.demand);
-            config.demand = {...config.demand, version: demand.configuration.version};
-            const solar = await api("/v1/solar", "PUT", body.solar);
-            config.solar = solar.configuration;
-            const result = await api("/v1/installation", "PUT", body.installation);
-            config.installation = result.installation.configuration;
+            const result = await api("/v1/setup", "PUT", definitions());
+            config.demand = result.demand;
+            config.solar = result.solar;
+            config.installation = result.installation;
             if (config.installation.export_limit_w === 0) delete $("export").dataset.previousLimit;
             pendingSolarSources = [];
             installationBaseline = JSON.stringify(installationValues());
-            message = `Installation saved. Home Assistant will provision ${(result.installation.devices || []).length} virtual device(s).${result.installation.warnings?.length ? " Fixed PV may exceed the configured export limit. Check the Home Assistant notification." : ""}`;
+            message = `Installation saved. Home Assistant will provision ${result.devices.length} virtual device(s).${result.warnings.length ? " Fixed PV may exceed the configured export limit. Check the Home Assistant notification." : ""}`;
         }
         if (requestedStrategy !== null && $("strategy").value !== requestedStrategy) {
             await api("/v1/strategy", "PUT", {strategy: $("strategy").value, expected_strategy: requestedStrategy});

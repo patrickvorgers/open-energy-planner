@@ -469,7 +469,13 @@ def create_app(
         live.basis_source = contract_basis
 
     async def persist_then_install(
-        save, candidate, install=None, *, contract_input=True, force_replan=True
+        save,
+        candidate,
+        install=None,
+        *,
+        contract_input=True,
+        force_replan=True,
+        defer_refresh=False,
     ):
         """Save under the caller-held app lock, then install before propagating cancellation.
 
@@ -489,11 +495,14 @@ def create_app(
         if live:
             if contract_input:
                 live.basis_source = contract_basis
-            await live.refresh_async(force=force_replan)
+            if defer_refresh:
+                live.replan_requested = True
+            else:
+                await live.refresh_async(force=force_replan)
         _LOGGER.info(
             "Configuration saved (%s). Updated settings are now active%s.",
             type(candidate).__name__,
-            ". Planning prerequisites have been rechecked" if live else "",
+            ". Planning prerequisites have been rechecked" if live and not defer_refresh else "",
         )
         if cancellation is not None:
             raise cancellation

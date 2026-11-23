@@ -48,7 +48,8 @@ Confirm aggregate import/export limits in kW. Annual whole-home consumption is e
 sources and zero batteries are valid. Each battery keeps its own SoC/power
 sensors, capacity, limits and standalone/hybrid connection. Existing definitions
 open in the same wizard for later editing, preserving stable device identities.
-An interrupted save reloads the independent stores' current revisions on retry.
+After a lost save response, reload the confirmed settings before retrying a
+version conflict.
 
 The app serves static HTML/CSS/JavaScript without another frontend service. The
 shell contains no installation data. Direct standalone access authenticates data
@@ -112,11 +113,12 @@ discharge-positive watts at the battery DC terminal.
 Installation changes use a compare-and-set version, an immutable archived
 definition and an atomic active-settings reference. A matching measurement
 generation is installed after persistence. Restart re-derives that generation
-from authoritative installation settings. Separate demand and PV definitions
-retain their own versions and commits. The wizard is not a database transaction
-across all three stores. Its read-only preview rejects invalid installation
-ratings/links before it writes the independent forecast definitions. New plans
-require a complete coherent combination, not a partially configured installation.
+from authoritative installation settings. The wizard saves installation, demand
+and PV proposals through `PUT /v1/setup`. The app validates all three revisions
+and the shared links against one current catalogue. Changed definitions retain
+their own versions and commit together. Unchanged definitions keep their active
+forecasts. The response acknowledges storage and command revocation. Forecast
+workers and live planning prepare the next plan separately.
 The legacy source editor is blocked once installation settings own the roles.
 
 ## Modules and responsibilities
