@@ -486,6 +486,8 @@ def create_app(
         pass contract_input=False to retain the existing future-input adapter.
         Explicit contract writes also wake the price owner to admit a newly configured area.
         Background evidence writes use the next planning boundary with force_replan=False.
+        Command-affecting writes that defer refresh must revoke obsolete commands in
+        their install callback before the next planning boundary, as setup does.
         """
         cancellation = await complete_write(save, candidate)
         if install is not None:

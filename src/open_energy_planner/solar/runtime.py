@@ -283,6 +283,8 @@ class SolarRuntime:
 
     def feedback_requests(self, now):
         """Request independent ranges so one missing sensor cannot starve another source."""
+        if self.store.issue:
+            return []
         requests = []
         for entity, history in self.feedback.items():
             if entity in self.feedback_issues:
@@ -324,7 +326,8 @@ class SolarRuntime:
             }:
                 raise ValueError("Invalid solar feedback response")
             if (
-                self.configuration is None
+                self.store.issue
+                or self.configuration is None
                 or body["configuration_version"] != self.configuration.version
             ):
                 raise ValueError("Solar feedback configuration changed")

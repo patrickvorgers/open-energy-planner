@@ -75,7 +75,7 @@ def test_learning_start_uses_ha_midnight_and_preserves_future_or_stale_drafts(ap
         "request",
         lambda request: (
             writes.append(request.url)
-            if request.method == "PUT" and "/v1/solar" in request.url
+            if request.method == "PUT" and request.url.endswith(("/v1/setup", "/v1/solar"))
             else None
         ),
     )
@@ -103,7 +103,7 @@ def test_learning_start_uses_ha_midnight_and_preserves_future_or_stale_drafts(ap
     ) as stale:
         save.click()
     assert stale.value.status == 409
-    assert writes == []
+    assert writes == [url + "/v1/setup"]
     expect(cutoff).to_have_value("2025-04-01")
     expect(page.locator("#installation-save-state")).to_contain_text("Unsaved changes")
     assert (

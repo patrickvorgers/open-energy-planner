@@ -48,8 +48,9 @@ Confirm aggregate import/export limits in kW. Annual whole-home consumption is e
 sources and zero batteries are valid. Each battery keeps its own SoC/power
 sensors, capacity, limits and standalone/hybrid connection. Existing definitions
 open in the same wizard for later editing, preserving stable device identities.
-After a lost save response, reload the confirmed settings before retrying a
-version conflict.
+If a save cannot be confirmed, including a lost connection or an HTTP 503,
+reload and compare the saved settings before retrying. The app may have stored
+the changes before it encountered the error.
 
 The app serves static HTML/CSS/JavaScript without another frontend service. The
 shell contains no installation data. Direct standalone access authenticates data

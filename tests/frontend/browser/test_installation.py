@@ -1230,6 +1230,30 @@ def test_app_wizard_preserves_multiple_converters_and_hybrid_battery(app_page, w
             ).get_attribute("aria-describedby")
     finish(page)
     before = read_settings(page, url)
+    # Legacy clients can save exact watt values and a different order from discovery.
+    reversed_solar = {
+        "sources": before["solar"]["sources"][::-1],
+        "inverters": [
+            {**inverter, "ac_limit_w": 1001} if inverter["inverter_id"] == "shed" else inverter
+            for inverter in reversed(before["solar"]["inverters"])
+        ],
+        "expected_version": before["solar"]["version"],
+    }
+    response = page.request.put(
+        url + "/v1/solar", headers={"Authorization": f"Bearer {TOKEN}"}, data=reversed_solar
+    )
+    assert response.ok, response.text()
+    physical = {**before["installation"], "import_limit_w": 1001}
+    physical["expected_version"] = physical.pop("version")
+    response = page.request.put(
+        url + "/v1/installation", headers={"Authorization": f"Bearer {TOKEN}"}, data=physical
+    )
+    assert response.ok, response.text()
+    before = read_settings(page, url)
+    assert before["solar"]["sources"] == reversed_solar["sources"]
+    assert before["solar"]["inverters"] == reversed_solar["inverters"]
+    page.reload()
+    connect(page)
     assert len(before["installation"]["batteries"]) == 2
     assert before["installation"]["batteries"][0]["inverter_id"] == "roof"
     assert before["installation"]["batteries"][0]["recover_reserve"] is True
@@ -1294,6 +1318,7 @@ def test_app_wizard_preserves_multiple_converters_and_hybrid_battery(app_page, w
     after = read_settings(page, url)
     assert after["solar"] == before["solar"]
     assert after["demand"] == before["demand"]
+    assert after["installation"]["import_limit_w"] == 1001
     before = after
     assert before["installation"]["batteries"][0]["minimum_soc"] == 10.04
     installation_area(page, 2, edit=True)
@@ -1334,9 +1359,15 @@ def test_app_wizard_preserves_multiple_converters_and_hybrid_battery(app_page, w
     page.get_by_role("button", name="Save installation", exact=True).click()
     expect(page.locator("#installation-save-state")).to_contain_text("All changes saved")
     after = read_settings(page, url)
-    assert after["solar"]["sources"][0]["source_id"] == before["solar"]["sources"][0]["source_id"]
-    assert after["solar"]["sources"][0]["capacity_w"] == 4000
-    assert after["solar"]["sources"][0]["can_curtail"] is True
+    roof = next(
+        source for source in after["solar"]["sources"] if source["entity_id"] == "sensor.roof"
+    )
+    original_roof = next(
+        source for source in before["solar"]["sources"] if source["entity_id"] == "sensor.roof"
+    )
+    assert roof["source_id"] == original_roof["source_id"]
+    assert roof["capacity_w"] == 4000
+    assert roof["can_curtail"] is True
     assert after["installation"]["batteries"] == before["installation"]["batteries"]
     for name in ("installation", "solar"):
         assert (
@@ -1385,7 +1416,7 @@ def test_app_wizard_preserves_multiple_converters_and_hybrid_battery(app_page, w
     retained = read_settings(page, url)
     assert len(retained["solar"]["sources"]) == 1
     assert len(retained["installation"]["batteries"]) == 1
-    assert retained["solar"]["sources"][0]["source_id"] == after["solar"]["sources"][0]["source_id"]
+    assert retained["solar"]["sources"][0]["source_id"] == roof["source_id"]
     # A removed hybrid creates an unconfirmed converter draft. Saving strategy must not persist it.
     reduced["suggestions"]["solar_sources"] = []
     reduced["suggestions"]["solar_configurations"] = []

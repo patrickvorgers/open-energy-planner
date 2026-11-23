@@ -559,6 +559,15 @@ function values(node) {
         ]),
     );
 }
+/** Keep retained records in their saved order and append newly discovered records. */
+function savedOrder(records, saved = [], key) {
+    const position = new Map(saved.map((record, index) => [record[key], index]));
+    return records.sort((a, b) => (position.get(a[key]) ?? saved.length) - (position.get(b[key]) ?? saved.length));
+}
+/** Carry exact stored watts through the kW editor when the value is unchanged. */
+function watts(kilowatts, savedWatts) {
+    return kilowatts === savedWatts / 1000 ? savedWatts : kilowatts * 1000;
+}
 function definitions() {
     const inverters = new Map();
     const insert = (i) => {
@@ -583,9 +592,10 @@ function definitions() {
         });
         if (!panels.length) throw new Error("Add at least one panel group for this production meter.");
         const unchangedManual = !old.panels?.length && JSON.stringify(panels) === JSON.stringify(originalPanels);
+        const savedWatts = config.solar?.inverters.find(inverter => inverter.inverter_id === old.inverter_id)?.ac_limit_w;
         insert({
             inverter_id: v.inverter_id,
-            ac_limit_w: v.rating * 1000,
+            ac_limit_w: watts(v.rating, savedWatts),
             efficiency: v.efficiency,
             hybrid: v.hybrid,
         });
@@ -613,16 +623,13 @@ function definitions() {
             id = old.device_id;
         let converter;
         if (v.connection === "standalone") {
+            const saved = config.installation?.inverters.find(i => i.inverter_id === old.inverter_id);
             converter = {
                 inverter_id:
-                    old.inverter_id &&
-                    !(config.installation?.inverters || []).find(
-                        (i) => i.inverter_id === old.inverter_id,
-                    )?.hybrid
+                    old.inverter_id && !saved?.hybrid
                         ? old.inverter_id
                         : `inv_${id}`,
-                ac_limit_w:
-                    (v.rating || Math.max(v.charge, v.discharge)) * 1000,
+                ac_limit_w: watts(v.rating || Math.max(v.charge, v.discharge), saved?.ac_limit_w),
                 efficiency: v.efficiency,
                 hybrid: false,
             };
@@ -646,8 +653,8 @@ function definitions() {
             power_inverted: v.power_inverted,
             can_follow_grid: v.can_follow_grid,
             capacity_kwh: v.capacity_kwh,
-            charge_limit_w: v.charge * 1000,
-            discharge_limit_w: v.discharge * 1000,
+            charge_limit_w: watts(v.charge, old.charge_limit_w),
+            discharge_limit_w: watts(v.discharge, old.discharge_limit_w),
             minimum_soc: v.minimum_soc,
             recover_reserve: v.recover_reserve,
             calibration_enabled: v.calibration_enabled,
@@ -664,16 +671,17 @@ function definitions() {
             grid_power_inverted: $("grid-invert").checked,
             grid_export_entity: $("export-energy").value.trim() || null,
             additional_grid_export_entities: (config.catalogue.data.suggestions.settlement?.exports || []).slice(1),
-            import_limit_w: Number($("import").value) * 1000,
-            export_limit_w: $("allow-feed-in").checked ? Number($("export").value) * 1000 : 0,
-            batteries,
-            inverters: [...used.values()],
+            import_limit_w: watts(Number($("import").value), config.installation?.import_limit_w),
+            export_limit_w: $("allow-feed-in").checked ? watts(Number($("export").value), config.installation?.export_limit_w) : 0,
+            batteries: savedOrder(batteries, config.installation?.batteries, "device_id"),
+            inverters: savedOrder([...used.values()], config.installation?.inverters, "inverter_id"),
             expected_version: config.installation?.version ?? null,
         },
         solar: {
-            sources,
-            inverters: [...inverters.values()].filter((i) =>
-                sources.some((s) => s.inverter_id === i.inverter_id),
+            sources: savedOrder(sources, config.solar?.sources, "entity_id"),
+            inverters: savedOrder(
+                [...inverters.values()].filter(i => sources.some(s => s.inverter_id === i.inverter_id)),
+                config.solar?.inverters, "inverter_id",
             ),
             expected_version: config.solar?.version ?? null,
         },

@@ -217,6 +217,49 @@ def test_configuration_and_runtime_reject_a_delayed_reply_after_sensor_change(tm
     assert runtime.feedback == {}
 
 
+def test_configuration_restore_suspends_feedback_until_rebinding(tmp_path, monkeypatch):
+    """A partly restored definition cannot request or accept feedback for a removed sensor."""
+    configuration = plant()
+    old_source = replace(configuration.sources[0], curtailment_entity_id="binary_sensor.old")
+    old = replace(configuration, sources=(old_source,))
+    new = replace(old, sources=(replace(old_source, curtailment_entity_id="binary_sensor.new"),))
+    store = make_store(tmp_path, SolarStore)
+    store.save(old)
+    runtime = SolarRuntime(store)
+    request = runtime.feedback_requests(START)[0]
+    store.save(new)
+    store.issue = "solar_configuration_unreadable"
+
+    def fail_restore():
+        """Fail after assigning the new version and before replacing old feedback bindings."""
+        raise OSError("Injected training read failure")
+
+    with monkeypatch.context() as failure:
+        failure.setattr(runtime, "restore_training_revisions", fail_restore)
+        with pytest.raises(OSError, match="Injected training read failure"):
+            runtime.restore_committed_configuration()
+        assert runtime.configuration == new
+        assert request["entity_id"] in runtime.feedback
+        assert runtime.feedback_requests(START) == []
+        with pytest.raises(ValueError, match="Invalid or outdated solar curtailment feedback"):
+            runtime.receive_feedback(
+                {
+                    "configuration_version": new.version,
+                    "start": request["start"],
+                    "feedback": {
+                        "entity_id": request["entity_id"],
+                        "checked_until": request["end"],
+                        "readings": [],
+                    },
+                },
+                START,
+            )
+    runtime.restore_committed_configuration()
+    [recovered] = runtime.feedback_requests(START)
+    assert recovered["entity_id"] == "binary_sensor.new"
+    assert recovered["configuration_version"] == new.version
+
+
 def test_multiple_empty_sensor_histories_keep_independent_source_boundaries(tmp_path):
     """Equal empty observation sets cannot collide or let one sensor extend another's checked range."""
     configuration = plant(count=2)
