@@ -172,7 +172,7 @@ def test_only_disposable_context_contains_weather_bootstrap(tmp_path, monkeypatc
 
 
 @pytest.mark.parametrize("additional_ready", [False, True])
-def test_supervisor_capture_accepts_real_fitted_archives_without_forward_promotion(
+def test_supervisor_capture_accepts_real_fitted_archives_and_replay_selection(
     tmp_path, monkeypatch, additional_ready
 ):
     """Actual 31-day training archives Ridge/weather while short laundry stays in the household remainder."""
@@ -241,6 +241,13 @@ def test_supervisor_capture_accepts_real_fitted_archives_without_forward_promoti
     assert result["status"] == "partial_history"
     assert set(result["separated_entities"]) == set(entities[:2] + extra_entities)
     assert all(record["forecast"]["model"] == "weekday-hour-v2" for record in result["devices"])
+    heat_pump, dishwasher = (
+        next(record for record in result["devices"] if record["entity_id"] == entity)
+        for entity in entities[:2]
+    )
+    assert heat_pump["status"] == "collecting_forward_accuracy"
+    assert dishwasher["status"] == "accuracy_validated"
+    assert dishwasher["model_selection"]["windows"][0]["source"] == "historical_replay"
     # Measured heat + .1-kWh/h dishwasher + .3-kWh/h remainder must remain one household boundary.
     assert sum(step.kwh for step in runtime.forecast.steps) == pytest.approx(
         sum(step["kwh"] for step in result["residual"]["steps"])

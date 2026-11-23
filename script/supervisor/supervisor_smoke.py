@@ -175,11 +175,11 @@ def pending_model_forecasts():
 
 
 def model_history():
-    """Require real fitted candidates while original forward-day evidence keeps baseline selection.
+    """Require real fitted candidates and confirm that compared days support model selection.
 
     The disposable lab has 31 complete history days. Laundry has insufficient
     history and stays inside the household remainder. Heat-pump weather fitting
-    must still succeed, independently of its deliberately unpromoted selection.
+    must succeed even while the baseline is used pending comparable days.
     """
     setup = app_request("setup")
     estimate = setup["annual_estimate"]
@@ -200,7 +200,7 @@ def model_history():
         )
 
     def trained():
-        """Wait for archived Ridge/weather fits and the corresponding unpromoted partial composition."""
+        """Check fitted alternatives, the selected forecast and the partial household composition."""
         result = app_request("consumers").get("result") or {}
         records = {row["entity_id"]: row for row in result.get("devices", [])}
         archives = pending_model_forecasts()
@@ -208,18 +208,23 @@ def model_history():
         for entity in sorted(required):
             record = records.get(entity, {})
             forecast = record.get("forecast") or {}
+            baseline = record.get("baseline_forecast") or {}
             selection = record.get("model_selection") or {}
             alternatives = next(
                 (
                     row
                     for row in archives
                     if row.get("baseline", {}).get("configuration_version")
-                    == forecast.get("configuration_version")
-                    and row.get("baseline", {}).get("version") == forecast.get("version")
+                    == baseline.get("configuration_version")
+                    and row.get("baseline", {}).get("version") == baseline.get("version")
                 ),
                 {},
             )
             weather = alternatives.get("weather") or {}
+            selected = selection.get("selected")
+            active = alternatives.get(selected) or {}
+            windows = selection.get("windows") or []
+            status = record.get("status")
             observed[entity] = {
                 "model": forecast.get("model"),
                 "trained": bool(forecast.get("training_version")),
@@ -227,11 +232,19 @@ def model_history():
                 "ridge": forecast_ready(alternatives.get("ridge") or {}, "ridge-v2", archived=True),
             }
             if not (
-                record.get("status") == "collecting_forward_accuracy"
-                and selection.get("selected") == "baseline"
-                and selection.get("completed_windows") == 0
-                and record.get("weather_features_used") is False
-                and forecast_ready(forecast, "weekday-hour-v2")
+                (
+                    status == "collecting_forward_accuracy"
+                    and selected == "baseline"
+                    and not windows
+                    or status == "accuracy_validated"
+                    and bool(windows)
+                )
+                and selection.get("completed_windows") == len(windows)
+                and (selected != "baseline" or record.get("weather_features_used") is False)
+                and bool(active)
+                and forecast_ready(forecast, active["model"])
+                and forecast.get("version") == active.get("version")
+                and forecast_ready(baseline, "weekday-hour-v2")
                 and observed[entity]["ridge"]
             ):
                 ready = False
@@ -266,7 +279,8 @@ def model_history():
 
     try:
         wait_for(
-            trained, "actual history-trained appliance alternatives and daily baseline selection"
+            trained,
+            "actual history-trained appliance alternatives and matched daily model selection",
         )
     except RuntimeError as error:
         raise RuntimeError(
