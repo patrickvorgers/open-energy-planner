@@ -18,10 +18,10 @@ def test_cancelled_history_request_keeps_owner_lock_until_commit_and_install(tmp
     owners = {}
     register = app_module.register_demand
 
-    def capture(*args):
+    def capture(app, runtime, live, catalogue, lock, *callbacks):
         """Retain the real runtime and asyncio lock without replacing any production route."""
-        owners["runtime"], owners["lock"] = args[1], args[5]
-        return register(*args)
+        owners["runtime"], owners["lock"] = runtime, lock
+        return register(app, runtime, live, catalogue, lock, *callbacks)
 
     monkeypatch.setattr(app_module, "register_demand", capture)
 

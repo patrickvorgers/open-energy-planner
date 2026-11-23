@@ -35,6 +35,11 @@ class DemandStore:
 
     def save(self, configuration):
         """Archive settings before publishing their pointer. Callers serialize writes."""
+        self.write_configuration(configuration)
+        self.current, self.issue = configuration, None
+
+    def write_configuration(self, configuration):
+        """Write the durable revision without changing runtime state."""
         with self.documents.transaction():
             target = f"configuration-{configuration.version}.json"
             if self.documents.exists(target):
@@ -44,8 +49,6 @@ class DemandStore:
             else:
                 self.documents.write(target, asdict(configuration))
             self.documents.write("current.json", configuration.version)
-
-        self.current, self.issue = configuration, None
 
     def archive(self, forecast):
         """Retain the exact issued prediction and its weather reference."""

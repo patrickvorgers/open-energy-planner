@@ -353,8 +353,7 @@ Price sources, and Home Assistant. Edit installation unlocks the selected
 configuration area. Save and Cancel occupy the same sticky toolbar. Area changes
 are locked while editing or saving. Source selectors change the view without
 creating an unsaved configuration change. Cancel reloads confirmed app settings
-without requesting a new HA catalogue refresh. It does not undo an independent
-write that already succeeded.
+without requesting a new HA catalogue refresh.
 
 Home Assistant discovery, pairing and refresh retain their existing workflows.
 Unavailable or incomplete Energy configuration prevents advancing the wizard.
@@ -414,11 +413,12 @@ Missing required ratings remain unavailable. A single battery shows its planning
 reserve with one decimal. Multiple batteries retain their individual reserves
 in their summaries rather than acquiring a misleading aggregate percentage.
 
-The existing demand, solar, installation and strategy APIs remain independently
-versioned. A partial failure retains the remaining draft and the revisions already
-confirmed by successful writes. This change introduces no database schema or
-atomic cross-endpoint transaction. Physical execution remains owned by user HA
-automations and equipment.
+Save installation sends one setup request with independently versioned demand,
+solar and physical definitions. The app validates them together and commits only
+the changed definitions in one transaction. A storage failure retains the full
+draft. A separate strategy or price preference save retains its own confirmation
+and version checks. Physical execution remains owned by user HA automations and
+equipment.
 
 ## Shared date selection
 

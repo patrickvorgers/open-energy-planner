@@ -516,11 +516,13 @@ def test_saved_zero_export_ends_the_unsaved_limit_cache(app_page, outcome):
 
         def fail_installation_response(route):
             """Optionally commit the real write before losing its acknowledgement."""
+            if route.request.method != "PUT":
+                return route.continue_()
             if outcome == "uncertain":
                 assert route.fetch().ok
             route.fulfill(status=503)
 
-        page.route("**/v1/installation", fail_installation_response)
+        page.route("**/v1/setup", fail_installation_response)
     page.get_by_role("button", name="Save installation", exact=True).click()
     confirmed = outcome in ("success", "strategy-failed")
     if outcome == "success":
@@ -1088,8 +1090,8 @@ def test_missing_energy_capacity_directs_user_to_home_assistant(app_page):
     assert read_settings(page, url)["installation"] is None
 
 
-def test_installation_partial_save_retains_draft_and_retries_its_own_saved_revision(app_page):
-    """A solar-write failure after demand persistence retains the draft, locks editing in flight and retries safely."""
+def test_installation_failed_save_retains_draft_and_retries(app_page):
+    """A failed setup save retains the draft, locks editing in flight and retries safely."""
     page, url = app_page
     discover(page, url)
     connect(page)
@@ -1097,29 +1099,32 @@ def test_installation_partial_save_retains_draft_and_retries_its_own_saved_revis
     page.get_by_role("button", name="Continue", exact=True).click()
     page.get_by_role("button", name="Continue", exact=True).click()
     pending = []
-    page.route("**/v1/solar", lambda route: pending.append(route))
+    page.route(
+        "**/v1/setup",
+        lambda route: pending.append(route) if route.request.method == "PUT" else route.continue_(),
+    )
     with page.expect_request(
-        lambda request: request.url.endswith("/v1/solar") and request.method == "PUT"
+        lambda request: request.url.endswith("/v1/setup") and request.method == "PUT"
     ):
         page.get_by_role("button", name="Save installation", exact=True).click()
     expect(page.locator("#installation-save-bar")).to_have_attribute("data-save-state", "saving")
     expect(page.locator("#annual")).to_be_disabled()
     expect(page.locator("#discard-installation")).to_be_disabled()
-    pending[0].fulfill(status=503, body="Solar storage unavailable")
+    pending[0].fulfill(status=503, body="Installation storage unavailable")
     expect(page.locator("#installation-save-state")).to_contain_text("Your edits are retained")
     expect(page.locator("#installation-save-state")).to_contain_text("Unsaved changes")
     expect(page.locator("#annual")).to_have_value("3500")
     expect(page.locator("#annual")).to_be_enabled()
-    partial = read_settings(page, url)
-    assert partial["demand"]["version"] and partial["solar"] is None
+    unchanged = read_settings(page, url)
+    assert all(unchanged[name] is None for name in ("demand", "solar", "installation"))
     assert_floating_save_bar(page)
     for identity in ("grid", "export-energy", "grid-invert"):
         expect(page.locator("#" + identity)).to_be_disabled()
-    page.unroute("**/v1/solar")
+    page.unroute("**/v1/setup")
     page.get_by_role("button", name="Save installation", exact=True).click()
     expect(page.locator("#installation-save-state")).to_contain_text("All changes saved")
     saved = read_settings(page, url)
-    assert saved["demand"]["version"] == partial["demand"]["version"]
+    assert saved["demand"]["version"]
     assert saved["installation"]["version"] and saved["solar"]["version"]
 
 
@@ -1225,6 +1230,30 @@ def test_app_wizard_preserves_multiple_converters_and_hybrid_battery(app_page, w
             ).get_attribute("aria-describedby")
     finish(page)
     before = read_settings(page, url)
+    # Legacy clients can save exact watt values and a different order from discovery.
+    reversed_solar = {
+        "sources": before["solar"]["sources"][::-1],
+        "inverters": [
+            {**inverter, "ac_limit_w": 1001} if inverter["inverter_id"] == "shed" else inverter
+            for inverter in reversed(before["solar"]["inverters"])
+        ],
+        "expected_version": before["solar"]["version"],
+    }
+    response = page.request.put(
+        url + "/v1/solar", headers={"Authorization": f"Bearer {TOKEN}"}, data=reversed_solar
+    )
+    assert response.ok, response.text()
+    physical = {**before["installation"], "import_limit_w": 1001}
+    physical["expected_version"] = physical.pop("version")
+    response = page.request.put(
+        url + "/v1/installation", headers={"Authorization": f"Bearer {TOKEN}"}, data=physical
+    )
+    assert response.ok, response.text()
+    before = read_settings(page, url)
+    assert before["solar"]["sources"] == reversed_solar["sources"]
+    assert before["solar"]["inverters"] == reversed_solar["inverters"]
+    page.reload()
+    connect(page)
     assert len(before["installation"]["batteries"]) == 2
     assert before["installation"]["batteries"][0]["inverter_id"] == "roof"
     assert before["installation"]["batteries"][0]["recover_reserve"] is True
@@ -1262,9 +1291,35 @@ def test_app_wizard_preserves_multiple_converters_and_hybrid_battery(app_page, w
     expect(minimum).to_have_value("10.0")
     expect(page.locator("#installation-save-state")).to_contain_text("Unsaved changes")
     expect(page.get_by_role("button", name="Save installation", exact=True)).to_be_enabled()
+    writes = []
+
+    def record_settings_write(request):
+        """Capture only the installation settings write path under test."""
+        path = urlsplit(request.url).path
+        if request.method in ("POST", "PUT") and path in {
+            "/v1/setup",
+            "/v1/setup/preview",
+            "/v1/installation",
+            "/v1/demand",
+            "/v1/solar",
+        }:
+            writes.append((request.method, path))
+
+    page.on("request", record_settings_write)
     page.get_by_role("button", name="Save installation", exact=True).click()
     expect(page.locator("#installation-save-state")).to_contain_text("All changes saved")
-    before = read_settings(page, url)
+    expect(page.get_by_role("button", name="Edit installation", exact=True)).to_be_enabled()
+    if wear_rate == "0.025":
+        page.screenshot(
+            path=f"results/ci/setup-save-confirmation-{page.viewport_size['width']}.png"
+        )
+    page.remove_listener("request", record_settings_write)
+    assert writes == [("PUT", "/v1/setup")]
+    after = read_settings(page, url)
+    assert after["solar"] == before["solar"]
+    assert after["demand"] == before["demand"]
+    assert after["installation"]["import_limit_w"] == 1001
+    before = after
     assert before["installation"]["batteries"][0]["minimum_soc"] == 10.04
     installation_area(page, 2, edit=True)
     page.locator("#installation-battery").select_option("0")
@@ -1272,7 +1327,7 @@ def test_app_wizard_preserves_multiple_converters_and_hybrid_battery(app_page, w
     minimum.fill("")
     minimum.press("Tab")
     with page.expect_request(
-        lambda request: request.url.endswith("/v1/setup/preview") and request.method == "POST"
+        lambda request: request.url.endswith("/v1/setup") and request.method == "PUT"
     ) as preview:
         page.get_by_role("button", name="Save installation", exact=True).click()
     assert preview.value.post_data_json["installation"]["batteries"][0]["minimum_soc"] is None
@@ -1297,13 +1352,32 @@ def test_app_wizard_preserves_multiple_converters_and_hybrid_battery(app_page, w
     item = page.locator("#solar-rows > fieldset").first
     item.get_by_label("Panel capacity (kWp)", exact=True).fill("4")
     item.get_by_label("Allow proposed solar on/off commands", exact=True).check()
+    rating = item.get_by_label("Inverter AC rating (kW)", exact=True)
+    if not rating.is_visible():
+        item.get_by_text("Shared inverter settings", exact=True).click()
+    rating.fill("3.5")
     page.get_by_role("button", name="Save installation", exact=True).click()
     expect(page.locator("#installation-save-state")).to_contain_text("All changes saved")
     after = read_settings(page, url)
-    assert after["solar"]["sources"][0]["source_id"] == before["solar"]["sources"][0]["source_id"]
-    assert after["solar"]["sources"][0]["capacity_w"] == 4000
-    assert after["solar"]["sources"][0]["can_curtail"] is True
+    roof = next(
+        source for source in after["solar"]["sources"] if source["entity_id"] == "sensor.roof"
+    )
+    original_roof = next(
+        source for source in before["solar"]["sources"] if source["entity_id"] == "sensor.roof"
+    )
+    assert roof["source_id"] == original_roof["source_id"]
+    assert roof["capacity_w"] == 4000
+    assert roof["can_curtail"] is True
     assert after["installation"]["batteries"] == before["installation"]["batteries"]
+    for name in ("installation", "solar"):
+        assert (
+            next(
+                inverter["ac_limit_w"]
+                for inverter in after[name]["inverters"]
+                if inverter["inverter_id"] == "roof"
+            )
+            == 3500
+        )
     # Energy membership changes are reflected without a second add/remove editor.
     reduced = discover(page, url, devices=True)
     reduced["suggestions"]["solar_sources"] = ["sensor.roof"]
@@ -1342,7 +1416,7 @@ def test_app_wizard_preserves_multiple_converters_and_hybrid_battery(app_page, w
     retained = read_settings(page, url)
     assert len(retained["solar"]["sources"]) == 1
     assert len(retained["installation"]["batteries"]) == 1
-    assert retained["solar"]["sources"][0]["source_id"] == after["solar"]["sources"][0]["source_id"]
+    assert retained["solar"]["sources"][0]["source_id"] == roof["source_id"]
     # A removed hybrid creates an unconfirmed converter draft. Saving strategy must not persist it.
     reduced["suggestions"]["solar_sources"] = []
     reduced["suggestions"]["solar_configurations"] = []

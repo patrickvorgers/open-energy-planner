@@ -129,6 +129,10 @@ class InstallationStore:
 
     def save(self, settings):
         """Persist a whole revision without rewriting any previous plan/configuration evidence."""
+        self.install_configuration(settings, self.write_configuration(settings))
+
+    def write_configuration(self, settings):
+        """Persist settings and their calibration state for later installation."""
         if self.calibration.issue and any(
             battery.calibration_enabled for battery in settings.batteries
         ):
@@ -146,6 +150,10 @@ class InstallationStore:
             if progress != self.calibration.persisted or self.calibration.issue:
                 self.calibration.write(progress)
 
+        return progress
+
+    def install_configuration(self, settings, progress):
+        """Install settings and calibration state after their transaction commits."""
         self.current, self.issue = settings, None
         self.calibration.install(progress)
         self.calibration.issue = None

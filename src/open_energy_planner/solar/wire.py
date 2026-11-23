@@ -2,6 +2,7 @@
 
 import json
 from dataclasses import asdict, fields
+from datetime import datetime
 
 from open_energy_planner.solar.calculation.model import (
     MAX_SOLAR_POWER_W,
@@ -29,6 +30,21 @@ def parse_configuration(body):
         tuple(parse_source(source) for source in sources),
         tuple(SolarInverter(**inverter) for inverter in inverters),
     )
+
+
+def validate_configuration_dates(configuration, now):
+    """Reject learning and historical production dates beyond the current instant."""
+    if any(
+        source.unrestricted_history_end is not None
+        and datetime.fromisoformat(source.unrestricted_history_end) > now
+        for source in configuration.sources
+    ):
+        raise ValueError("Historical production confirmation cannot cover the future")
+    if any(
+        source.learning_start is not None and datetime.fromisoformat(source.learning_start) > now
+        for source in configuration.sources
+    ):
+        raise ValueError("Solar learning start cannot be in the future")
 
 
 def parse_import(body):
