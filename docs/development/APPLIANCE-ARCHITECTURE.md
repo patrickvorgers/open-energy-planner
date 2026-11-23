@@ -179,8 +179,10 @@ is never itself an exclusion reason.
 
 Production admission uses the shared preserved local-day accuracy policy in
 [automatic forecast model selection](MODEL-SELECTION.md). The measurement
-boundary and candidate algorithms identify the comparison family. Financial
-shadow comparisons do not gate household or device-model admission.
+boundary and candidate algorithms identify the comparison family. Each device
+uses matched historical replays and original live forecasts to rank its usable
+candidates. Fits normally update once per local day. Available new weather and
+recent metered use update the predictions from the fitted models.
 
 Current status and waiting reasons appear beside the fixed daily device graph.
 The component model label does not claim household activation. Startup profiles
@@ -198,8 +200,8 @@ The demand namespace retains the historical `consumer-weather-model-*`,
 `consumer-weather-window-*`, `consumer-weather-assessment-*` and
 `consumer-weather-selection-*` documents. The retained `weather_learning.py`
 comparison helper can still write these research archives. Production component
-selection uses `forecast_selection/accuracy.py` and its `accuracy-pending-*` and
-`accuracy-day-*` evidence instead. Old weather pointers cannot authorize production
+selection uses `forecast_selection/accuracy.py`, its `accuracy-pending-*` and
+`accuracy-day-*` evidence and derived `device-replay-*` history. Old weather pointers cannot authorize production
 selection. See the [database dictionary](DATABASE-SCHEMA.md) for retained contracts.
 
 Cycle start claims check expiry when the durable operation actually executes,

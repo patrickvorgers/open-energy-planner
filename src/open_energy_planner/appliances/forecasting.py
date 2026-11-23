@@ -7,7 +7,11 @@ from zoneinfo import ZoneInfo
 
 from open_energy_planner.appliances.sources import SOURCE_OWNERSHIP_UNAVAILABLE, validate_membership
 from open_energy_planner.core.units import HOURS_PER_DAY
-from open_energy_planner.demand.calculation.forecasting import MIN_PROFILE_TRAINING_DAYS, predict
+from open_energy_planner.demand.calculation.forecasting import (
+    MIN_PROFILE_TRAINING_DAYS,
+    RECENT_HISTORY_HOURS,
+    predict,
+)
 from open_energy_planner.demand.calculation.model import (
     DemandConfiguration,
     DemandForecast,
@@ -282,6 +286,8 @@ def build_components(
     controlled_days=None,
     grid=None,
     weather_version=None,
+    replay_windows=(),
+    calendar_windows=(),
 ):
     """Build household demand from its remainder and ready disjoint consumers exactly once.
 
@@ -332,6 +338,7 @@ def build_components(
                 learner=item["entity_id"],
                 grid=grid,
                 weather_version=weather_version,
+                replay_windows=replay_windows if item["weather_sensitive"] else calendar_windows,
                 excluded_dates=("*",)
                 if control_history_unavailable
                 else controlled_days.get(item["entity_id"], ()),
@@ -475,6 +482,7 @@ def component(
     excluded_dates=(),
     grid=None,
     weather_version=None,
+    replay_windows=None,
 ):
     """Select suitable models by preserved daily accuracy, retaining a measured weekday baseline.
 
@@ -505,6 +513,7 @@ def component(
         provide promotion evidence. Unreadable comparison evidence keeps the baseline.
     """
     from open_energy_planner.forecast_selection.accuracy import choose_daily
+    from open_energy_planner.forecast_selection.device_history import replay_scores
 
     if not component_history_ready(configuration, samples):
         raise ValueError("At least seven complete days covering every hour are required")
@@ -529,6 +538,16 @@ def component(
         )
     }
     weather = temperatures if weather_sensitive else ()
+    recent = None
+    if replay_windows is not None:
+        # A new measured hour updates a feature without changing the saved fit.
+        measured = samples[-RECENT_HISTORY_HOURS:]
+        if (
+            len(measured) == RECENT_HISTORY_HOURS
+            and measured[-1].start - measured[0].start == timedelta(hours=RECENT_HISTORY_HOURS - 1)
+            and measured[-1].start + timedelta(hours=1) <= now
+        ):
+            recent = sum(sample.residual_kwh for sample in measured) / RECENT_HISTORY_HOURS
     for kind in ("ridge", "weather"):
         if kind not in fitted:
             continue
@@ -542,10 +561,20 @@ def component(
                 temperatures=weather,
                 grid=grid,
                 weather_version=weather_version,
+                recent=recent,
             )
             models[kind], forecasts[kind] = candidate, prediction
         except (ValueError, ImportError, OSError):
             pass
+    replays = None
+    replay_issue = False
+    if replay_windows is not None:
+        try:
+            replays = replay_scores(
+                documents, configuration, samples, weather, replay_windows, models, excluded_dates
+            )
+        except (OSError, ValueError, TypeError, KeyError):
+            replays, replay_issue = (), True
     selection = choose_daily(
         documents,
         [
@@ -566,7 +595,10 @@ def component(
         {sample.start: sample.residual_kwh for sample in samples},
         now,
         excluded_dates=excluded_dates,
+        replays=replays,
     )
+    if replay_issue:
+        selection["replay_issue"] = "historical_evidence_unavailable"
     chosen = selection["selected"]
     selection["selected_model"] = models[chosen].model_id
     if "weather" in models:

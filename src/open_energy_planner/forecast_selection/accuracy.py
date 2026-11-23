@@ -1,7 +1,7 @@
 """Retain pre-midnight forecasts and select demand models from matched measured local days."""
 
 from datetime import datetime, timedelta
-from math import fsum
+from math import fsum, isclose
 from zoneinfo import ZoneInfo
 
 from open_energy_planner.core.calendar import day_window
@@ -19,6 +19,31 @@ from open_energy_planner.forecast_selection.calculation.accuracy import (
 )
 
 DAILY_ACCURACY_POLICY = "matched-local-day-demand-v1"
+DEVICE_ACCURACY_POLICY = "matched-local-day-device-replay-v1"
+DEVICE_ERROR_TIE_TOLERANCE_KWH = 1e-9
+
+
+def _best_device_model(forecasts, windows):
+    """Rank paired hourly totals and daily errors without switching on floating-point noise."""
+    hourly = {
+        name: fsum(window["hours"] * window["mae_kwh"][name] for window in windows)
+        for name in forecasts
+    }
+    best_hourly = min(hourly.values())
+    daily = {
+        name: fsum(window["daily_energy_error_kwh"][name] for window in windows)
+        for name, error in hourly.items()
+        if isclose(error, best_hourly, rel_tol=0, abs_tol=DEVICE_ERROR_TIE_TOLERANCE_KWH)
+    }
+    best_daily = min(daily.values())
+    return min(
+        (
+            name
+            for name, error in daily.items()
+            if isclose(error, best_daily, rel_tol=0, abs_tol=DEVICE_ERROR_TIE_TOLERANCE_KWH)
+        ),
+        key=lambda name: (name != "baseline", name),
+    )
 
 
 def read_capture(documents, path, family, day, timezone):
@@ -49,8 +74,10 @@ def read_capture(documents, path, family, day, timezone):
     return record
 
 
-def choose_daily(documents, identity, timezone, forecasts, actual, now, *, excluded_dates=()):
-    """Choose a challenger only after three matching complete local-day improvements.
+def choose_daily(
+    documents, identity, timezone, forecasts, actual, now, *, excluded_dates=(), replays=None
+):
+    """Rank device models from matched replay and live days, or apply the household gate.
 
     Forecasts map model roles to original forecast documents. Baseline is always
     required. Refresh tomorrow's pending capture until midnight. Freeze it on
@@ -60,7 +87,7 @@ def choose_daily(documents, identity, timezone, forecasts, actual, now, *, exclu
     Archive corruption keeps the baseline and remains untouched for diagnosis.
     """
     result = {
-        "policy": DAILY_ACCURACY_POLICY,
+        "policy": DAILY_ACCURACY_POLICY if replays is None else DEVICE_ACCURACY_POLICY,
         "selected": "baseline",
         "status": "collecting_forward_accuracy"
         if len(forecasts) > 1
@@ -74,6 +101,13 @@ def choose_daily(documents, identity, timezone, forecasts, actual, now, *, exclu
     }
     if documents is None:
         return {**result, "status": "forward_archive_required"}
+    if replays is not None:
+        for field in (
+            "required_windows",
+            "required_relative_benefit_percent",
+            "required_absolute_benefit_kwh",
+        ):
+            result.pop(field)
     family = digest([DAILY_ACCURACY_POLICY, identity, timezone, sorted(forecasts)])
     prefix = "accuracy-day-" + family + "-"
     pointer = "accuracy-pending-" + family + ".json"
@@ -141,6 +175,7 @@ def choose_daily(documents, identity, timezone, forecasts, actual, now, *, exclu
             windows.append(
                 {
                     "day": day.isoformat(),
+                    **({"source": "live", "hours": len(hours)} if replays is not None else {}),
                     "mae_kwh": scores,
                     "actual_version": digest(values),
                     "forecast_version": digest(record),
@@ -150,8 +185,24 @@ def choose_daily(documents, identity, timezone, forecasts, actual, now, *, exclu
                     },
                 }
             )
-            if len(windows) == MIN_ACCURACY_DAYS:
+            if replays is None and len(windows) == MIN_ACCURACY_DAYS:
                 break
+        if replays is not None:
+            live_days = {window["day"] for window in windows}
+            windows.extend(
+                window
+                for window in replays
+                if window["day"] < today.isoformat()
+                and window["day"] not in live_days
+                and set(window["mae_kwh"]) == set(forecasts)
+            )
+            windows.sort(key=lambda window: window["day"], reverse=True)
+            result.update(completed_windows=len(windows), windows=windows)
+            if windows and len(forecasts) > 1:
+                result.update(
+                    selected=_best_device_model(forecasts, windows), status="accuracy_validated"
+                )
+            return result
         result.update(completed_windows=len(windows), windows=windows)
         if len(windows) == MIN_ACCURACY_DAYS and len(forecasts) > 1:
             eligible = [

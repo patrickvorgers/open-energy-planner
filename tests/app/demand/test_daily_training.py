@@ -94,6 +94,38 @@ def test_same_day_weather_and_quarters_refresh_predictions_without_fitting(
     assert original.steps != updated.steps
 
 
+def test_new_device_measurement_refreshes_recent_input_without_refitting(
+    demand_store, configuration, fit_counts
+):
+    """Hourly meter input updates a selected device prediction using the same fitted coefficients."""
+    earlier = samples_before(NOW, hours=55 * 24)
+    samples = tuple(
+        DemandHour(row.start, 0.15 + index * 0.001, 0.15 + index * 0.001)
+        for index, row in enumerate(earlier)
+    )
+    replay_day = (NOW - timedelta(days=5)).date()
+    replays = ((replay_day, NOW - timedelta(days=6), None),)
+    options = {
+        "documents": demand_store.documents,
+        "learner": "sensor.house",
+        "replay_windows": replays,
+    }
+    original_model, original, original_selection, _ = component(
+        configuration, samples, (), NOW, False, **options
+    )
+    assert original_selection["selected"] == "ridge"
+    original_calls = [learner.call_count for learner in fit_counts]
+    latest = samples + (DemandHour(NOW, 5.0, 5.0),)
+    updated_model, updated, selection, _ = component(
+        configuration, latest, (), NOW + timedelta(hours=1), False, **options
+    )
+    assert selection["selected"] == "ridge"
+    assert original_model == updated_model
+    assert [learner.call_count for learner in fit_counts] == original_calls
+    original_steps = {step.start: step.kwh for step in original.steps}
+    assert updated.steps[0].kwh != pytest.approx(original_steps[updated.steps[0].start])
+
+
 def test_restart_restores_all_three_native_free_model_archives(
     demand_store, configuration, fit_counts
 ):

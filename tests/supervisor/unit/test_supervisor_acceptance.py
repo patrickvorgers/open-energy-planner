@@ -136,6 +136,8 @@ def test_supervisor_cli_failure_response_is_bounded(monkeypatch):
     [
         None,
         "promoted",
+        "validated_replay",
+        "validated_without_replay",
         "weather_missing",
         "fabricated_laundry",
         "short_setup",
@@ -155,7 +157,7 @@ def test_supervisor_cli_failure_response_is_bounded(monkeypatch):
 def test_example_model_acceptance_retains_baseline_and_fitted_candidates(
     monkeypatch, invalid, setup_days
 ):
-    """Require fitted archived alternatives without admitting them before actual forward daily evidence."""
+    """Require archived alternatives and comparable evidence for a validated choice."""
     from copy import deepcopy
 
     baseline = {
@@ -179,6 +181,8 @@ def test_example_model_acceptance_retains_baseline_and_fitted_candidates(
         }
         for name in ("heat_pump", "dishwasher")
     ]
+    for record in records:
+        record["baseline_forecast"] = record["forecast"]
     archives = [
         {
             "baseline": record["forecast"],
@@ -231,6 +235,15 @@ def test_example_model_acceptance_retains_baseline_and_fitted_candidates(
         archives[0]["baseline"] = {**archives[0]["baseline"], "version": "older-original"}
     elif invalid == "promoted":
         records[0]["model_selection"]["selected"] = "weather"
+    elif invalid in ("validated_replay", "validated_without_replay"):
+        records[0]["status"] = "accuracy_validated"
+        records[0]["forecast"] = archives[0]["weather"]
+        records[0]["weather_features_used"] = True
+        records[0]["model_selection"].update(
+            selected="weather",
+            completed_windows=1,
+            windows=[{"source": "historical_replay"}] if invalid == "validated_replay" else [],
+        )
     elif invalid in {"weather_missing", "pending_weather"}:
         del archives[0]["weather"]
     elif invalid == "fabricated_laundry":
@@ -260,7 +273,7 @@ def test_example_model_acceptance_retains_baseline_and_fitted_candidates(
         return result
 
     monkeypatch.setattr(supervisor_smoke, "wait_for", wait_for_models)
-    if invalid not in (None, "pending_weather", "additional_ready"):
+    if invalid not in (None, "pending_weather", "additional_ready", "validated_replay"):
         with pytest.raises(AssertionError):
             supervisor_smoke.model_history()
     else:
@@ -676,7 +689,7 @@ def test_pending_forecast_sqlite_timeout_keeps_bounded_chained_diagnostics(
         writer.close()
     timeout = caught.value.__cause__
     assert str(timeout) == (
-        "Timed out waiting for actual history-trained appliance alternatives and daily baseline selection"
+        "Timed out waiting for actual history-trained appliance alternatives and matched daily model selection"
     )
     retryable = timeout.__cause__
     assert str(retryable) == "Pending forecast captures are not ready."

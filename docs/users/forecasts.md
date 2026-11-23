@@ -27,22 +27,21 @@ The startup estimate includes the household's normal background use. There is no
 
 If a heat pump or another consumer is weather-sensitive, select that option under **Settings > Appliances** when appropriate. Weather sensitivity affects prediction. It does not authorize temperature control or cycle scheduling.
 
-For these selected devices, a nonlinear weather candidate learns from completed
-hourly consumption, outdoor temperature, local time, weekday, season and the
-preceding day's measured consumption. The measured weekday profile and Ridge
-regression remain available as simpler alternatives. Devices without weather
-sensitivity retain their existing forecasting behavior.
+For each selected device, OEP can compare the weekday profile and Ridge.
+Temperature-sensitive devices also use outdoor temperature and can compare
+XGBoost. The learned models use completed hourly consumption, local time,
+weekday, season and the preceding 24 measured hours. OEP can update a forecast
+with recent measurements or a new weather forecast using the same fitted
+model. It normally refits once per Home Assistant local day.
 
-After at least 28 days of usable paired consumption and temperature history,
-the candidate saves predictions for a future day. Later measurements score those
-original predictions. Three nonoverlapping complete days must each improve mean
-absolute hourly error against the measured weekday baseline by more than 5.0% and
-0.001 kWh per hour. These are forward comparisons, not training fit or a random
-split. Among qualifying alternatives, the lowest mean error is selected. A tie
-with the baseline cannot qualify. If qualifying learned models tie, Ridge takes
-precedence over the weather model. Insufficient evidence, inconsistent improvement
-or unavailable inputs retain the baseline. Household and device models use the same local-day
-accuracy principle. Measurement separation does not wait for ML selection.
+On a new installation, OEP can select a model from historical comparisons as
+soon as it has enough training history and a complete comparable test day.
+Each replay trains on earlier data and predicts the test day using an archived
+weather forecast when temperature is required. Later, each complete measured
+day can add a comparison with the forecasts originally saved for that day.
+The model with the lowest average hourly error is selected. The day-total
+error breaks a tie. Until there is usable comparison evidence, the weekday
+profile remains available. Measurement separation can already use that profile.
 
 Under **Insights > Forecast quality > Devices**, expand **Current model and
 learning** to see the component's model, pending day, comparison errors and why

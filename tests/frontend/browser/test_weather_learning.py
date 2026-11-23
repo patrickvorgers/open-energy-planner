@@ -14,7 +14,12 @@ from tests.frontend.browser.quality_helpers import show_hour
 @pytest.mark.parametrize("app_site", [None, "ingress"], indirect=True)
 @pytest.mark.parametrize(
     "status",
-    ["collecting_forward_accuracy", "no_consistent_accuracy_benefit", "accuracy_validated"],
+    [
+        "collecting_forward_accuracy",
+        "no_consistent_accuracy_benefit",
+        "accuracy_validated",
+        "historical_replay",
+    ],
 )
 def test_weather_candidate_waiting_rejected_and_validated_are_separate_from_activation(
     app_page, status
@@ -120,6 +125,25 @@ def test_weather_candidate_waiting_rejected_and_validated_are_separate_from_acti
             }
         },
     }
+    if status == "historical_replay":
+        device = body["current_models"]["consumers"]["result"]["devices"][0]
+        device.pop("weather_learning")
+        device.update(
+            status="accuracy_validated",
+            forecast={"model": "xgboost-weather-v1"},
+            model_selection={
+                "status": "accuracy_validated",
+                "completed_windows": 1,
+                "windows": [
+                    {
+                        "day": "2026-10-25",
+                        "source": "historical_replay",
+                        "mae_kwh": {"baseline": 0.14, "ridge": 0.09, "weather": 0.04},
+                        "daily_energy_error_kwh": {"baseline": 1.15, "ridge": 0.8, "weather": 0.24},
+                    }
+                ],
+            },
+        )
     page.route(
         "**/v1/forecast-quality/days",
         lambda route: route.fulfill(json={"days": ["2026-10-26"], "next_before": None}),
@@ -143,24 +167,29 @@ def test_weather_candidate_waiting_rejected_and_validated_are_separate_from_acti
     page.get_by_text("Current model and learning", exact=True).click()
     details = page.locator(".quality-current-model")
     expect(page.locator(".quality-current-summary")).to_contain_text("Component forecast model")
-    expect(details).to_contain_text("Shadow waiting for decision evidence")
-    expect(details).to_contain_text(
-        "Home Assistant retains control of operating mode, comfort and safety."
-    )
-    expect(details).to_contain_text("Excluded comparison")
-    expect(details).to_contain_text("5.0%")
-    expect(details).to_contain_text("0.001 kWh per hour")
-    expect(details).to_contain_text("816 of 840 measured hours")
-    expect(details).to_contain_text("A complete preceding day of measurements is unavailable")
-    if status == "collecting_forward_accuracy":
-        expect(details).to_contain_text("2 of 3 complete forward days")
-        expect(details).to_contain_text("Collecting later measurements")
-    elif validated:
-        expect(details).to_contain_text(
-            "Household activation still requires the existing decision comparison."
-        )
+    if status == "historical_replay":
+        expect(details).to_contain_text("1 complete local day, including 1 historical replay")
+        expect(details).to_contain_text("(historical replay)")
+        expect(details).to_contain_text("Absolute daily energy error")
     else:
-        expect(details).to_contain_text("The simpler model is retained")
+        expect(details).to_contain_text("Shadow waiting for decision evidence")
+        expect(details).to_contain_text(
+            "Home Assistant retains control of operating mode, comfort and safety."
+        )
+        expect(details).to_contain_text("Excluded comparison")
+        expect(details).to_contain_text("5.0%")
+        expect(details).to_contain_text("0.001 kWh per hour")
+        expect(details).to_contain_text("816 of 840 measured hours")
+        expect(details).to_contain_text("A complete preceding day of measurements is unavailable")
+        if status == "collecting_forward_accuracy":
+            expect(details).to_contain_text("2 of 3 complete forward days")
+            expect(details).to_contain_text("Collecting later measurements")
+        elif validated:
+            expect(details).to_contain_text(
+                "Household activation still requires the existing decision comparison."
+            )
+        else:
+            expect(details).to_contain_text("The simpler model is retained")
     expect(page.locator("#quality-charts h2")).to_have_text("Heat pump")
     expect(show_hour(page)).to_contain_text("Original weekday profile")
     page.locator("#quality-chart-0").press("Escape")

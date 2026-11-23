@@ -42,6 +42,7 @@ from .build_info import RELEASE
 from .demand.api import register as register_demand
 from .demand.runtime import DemandRuntime
 from .demand.storage import DemandStore
+from .forecast_selection.device_history import replay_weather_history_floor
 from .frontend.assets import is_public
 from .frontend.assets import register as register_assets
 from .frontend.session import register as register_session
@@ -1074,10 +1075,27 @@ def create_app(
         """Enable solar weather and original-run work when PV has at least one source."""
         return bool(solar.configuration and solar.configuration.sources)
 
-    def oldest_solar_history():
-        """Bound original-run import by the oldest loaded solar hour, if any."""
+    def device_weather_configured():
+        """Use shared original weather for selected temperature-sensitive devices."""
+        return demand.configuration is not None and any(
+            item["weather_sensitive"] for item in demand.consumers.selected
+        )
+
+    def oldest_original_run_history():
+        """Keep solar history and admit up to a year of device comparison weather."""
+        device_start = oldest_demand_history() if device_weather_configured() else None
+        if device_start is not None:
+            device_start = max(device_start, replay_weather_history_floor(datetime.now(UTC)))
         return min(
-            (item.hours[0].start for item in solar.histories.values() if item.hours), default=None
+            (
+                instant
+                for instant in (
+                    device_start,
+                    *(item.hours[0].start for item in solar.histories.values() if item.hours),
+                )
+                if instant is not None
+            ),
+            default=None,
         )
 
     def receive_live_weather(location, rows, service, reference, until, received_at):
@@ -1093,11 +1111,14 @@ def create_app(
 
     async def receive_original_runs(location, runs):
         """Commit a partial cohort without withdrawing missing runs, even during cancellation."""
-        cancellation = await complete_write(
-            partial(solar.set_forecast_runs, authoritative=False), location, runs
-        )
-        if cancellation:
-            raise cancellation
+        if device_weather_configured():
+            demand.set_original_weather_runs(runs)
+        if solar_configured():
+            cancellation = await complete_write(
+                partial(solar.set_forecast_runs, authoritative=False), location, runs
+            )
+            if cancellation:
+                raise cancellation
 
     register_solar(app, solar, live, lock, persist_then_install, snapshot, setup_catalogue)
     register_live_weather(
@@ -1106,10 +1127,10 @@ def create_app(
         lock,
         live_weather_factory,
         weather_store,
-        oldest_solar_history,
+        oldest_original_run_history,
         lambda: solar_configured() or demand.configuration is not None,
         receive_live_weather,
-        solar_configured,
+        lambda: solar_configured() or device_weather_configured(),
         receive_original_runs,
         solar_api.SOLAR_WORKER_POLL_SECONDS,
     )

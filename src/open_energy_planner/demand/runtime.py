@@ -61,6 +61,8 @@ class DemandRuntime:
         }
         self.consumers = ConsumerForecasts(store.documents)
         self.weather_location = None
+        self.original_weather_runs = ()
+        self.original_weather_revision = 0
 
     def configure(self, configuration):
         """Invalidate incompatible observations/models after a persisted measurement-definition change."""
@@ -137,6 +139,7 @@ class DemandRuntime:
             self.learned_preferred,
             self.consumers.key(),
             self.weather_location,
+            self.original_weather_revision,
         )
 
     def request(self, now):
@@ -210,10 +213,27 @@ class DemandRuntime:
         """Revoke old-site predictions before planning accepts observations from a new site."""
         if self.weather_location is not None and self.weather_location != location:
             self.weather(())
+            self.set_original_weather_runs(())
             self.set_live_weather((), None, None)
             self.forecast = self.candidate = self.baseline = self.last_key = None
             self.consumers.result = None
         self.weather_location = location
+
+    def set_original_weather_runs(self, runs, now=None):
+        """Publish the new immutable shared cohort for historical device evaluation."""
+        from open_energy_planner.forecast_selection.device_history import replay_days
+
+        received = tuple(runs)
+        if received == self.original_weather_runs:
+            return
+        if self.configuration:
+            now = now or datetime.now(UTC)
+            timezone = self.configuration.timezone
+            if replay_days(now, timezone, received) != replay_days(
+                now, timezone, self.original_weather_runs
+            ):
+                self.original_weather_revision += 1
+        self.original_weather_runs = received
 
     def set_live_weather(self, temperatures, version, valid_until):
         """Use the exact shared weather reference and its provider validity deadline."""
@@ -260,6 +280,7 @@ class DemandRuntime:
             self.candidate_features,
             self.live_weather_ref(now),
             self.live_weather_until,
+            self.original_weather_runs,
         )
 
     def reuse_forecast(self, key, now):
@@ -298,7 +319,7 @@ class DemandRuntime:
         self.issue = "demand_forecast_update_failed"
         return True
 
-    def control_days(self, now):
+    def control_days(self, now, historical_days=()):
         """Reuse committed publication history instead of maintaining a second intervention archive.
 
         Reads the current configuration timezone and selected consumers. The
@@ -332,8 +353,11 @@ class DemandRuntime:
         result = {}
         today = now.astimezone(ZoneInfo(self.configuration.timezone)).date()
         try:
-            for offset in range(1, MAX_ACCURACY_LOOKBACK_DAYS + 1):
-                day = today - timedelta(days=offset)
+            days = set(historical_days) | {
+                today - timedelta(days=offset)
+                for offset in range(1, MAX_ACCURACY_LOOKBACK_DAYS + 1)
+            }
+            for day in sorted(days):
                 start, end = day_window(day.isoformat(), self.configuration.timezone)
                 for entity in controlled_consumers(self.plans, start, end):
                     result.setdefault(entity, []).append(day.isoformat())
@@ -367,6 +391,7 @@ class DemandRuntime:
             previous_features,
             weather_reference,
             weather_until,
+            original_weather_runs,
         ) = job
         grid = live_forecast_grid(now, temperatures) if weather_reference else None
         projection = {"grid": grid, "weather_version": weather_reference}
@@ -423,8 +448,22 @@ class DemandRuntime:
             build_components,
             component_history_ready,
         )
+        from open_energy_planner.forecast_selection.device_history import (
+            calendar_replay_days,
+            replay_days,
+        )
 
-        controlled_days = self.control_days(now)
+        device_replays = (
+            replay_days(now, configuration.timezone, original_weather_runs) if consumers[1] else ()
+        )
+        calendar_replays = (
+            calendar_replay_days(now, configuration.timezone)
+            if any(not row["weather_sensitive"] for row in consumers[1])
+            else ()
+        )
+        controlled_days = self.control_days(
+            now, {window[0] for window in (*device_replays, *calendar_replays)}
+        )
         composite, consumer_result = build_components(
             configuration,
             histories,
@@ -433,6 +472,8 @@ class DemandRuntime:
             consumers,
             documents=self.store.documents,
             controlled_days=controlled_days,
+            replay_windows=device_replays,
+            calendar_windows=calendar_replays,
             **projection,
         )
         consumer_features = "consumers:" + consumers[0]

@@ -265,8 +265,9 @@ must match the candidate selected for activation.
 
 Production activation uses the shared [local-day accuracy selection](MODEL-SELECTION.md).
 The last available forecasts before local midnight are retained and compared
-with matching later measurements. Each of three eligible recent days must show
-a material accuracy gain before a learned model replaces its measured baseline.
+with matching later measurements. The three-day material-gain requirement
+applies to household and residual demand. A separately measured device uses
+comparable historical and live prediction errors to choose its own model.
 The injected chronological financial scorer above remains an isolated research
 seam. It is not the production selection criterion.
 

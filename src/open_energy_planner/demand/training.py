@@ -159,6 +159,7 @@ def daily_models(
     include_weather=True,
     boundary=None,
     learner="household",
+    raise_on_transient_failure=False,
 ):
     """Reuse daily baseline and learned models while new weather still refreshes predictions.
 
@@ -168,6 +169,7 @@ def daily_models(
     when imports arrive. A new day with unchanged eligible data reuses the exact
     existing coefficients. Successful fits replace the learner's latest row.
     Transient fitting failures leave that row and its usable models intact.
+    Historical replay can request the error so it never archives a failed fit.
     """
     now = aware(now)
     local = now.astimezone(ZoneInfo(configuration.timezone))
@@ -227,6 +229,8 @@ def daily_models(
         if "ridge" in previous:
             models["ridge"] = previous["ridge"]
     except (ImportError, OSError, RuntimeError):
+        if raise_on_transient_failure:
+            raise
         ridge_log.exception(
             "Retaining usable models. Retrying on the next forecast update.", expected=True
         )
@@ -245,6 +249,8 @@ def daily_models(
             if "weather" in previous:
                 models["weather"] = previous["weather"]
         except (ImportError, OSError, RuntimeError):
+            if raise_on_transient_failure:
+                raise
             weather_log.exception(
                 "Retaining usable models. Retrying on the next forecast update.", expected=True
             )

@@ -83,6 +83,50 @@ def test_restart_does_not_reconstruct_a_missing_day(tmp_path):
     assert result["completed_windows"] == 0
 
 
+def test_device_chooses_from_history_and_rechecks_after_one_live_day(tmp_path):
+    """A completed live day replaces its replay and can change the best device model."""
+    documents = make_store(tmp_path, DemandStore).documents
+    replay_day = (START + timedelta(days=1)).date().isoformat()
+    replays = (
+        {
+            "day": (START - timedelta(days=1)).date().isoformat(),
+            "source": "historical_replay",
+            "hours": 24,
+            "mae_kwh": {"baseline": 0.3, "candidate": 0.0},
+            "daily_energy_error_kwh": {"baseline": 7.2, "candidate": 0.0},
+        },
+    )
+    initial = choose_daily(documents, "washer", "UTC", forecasts(START), {}, START, replays=replays)
+    assert initial["selected"] == "candidate"
+    assert initial["completed_windows"] == 1
+    assert "required_windows" not in initial
+    later = START + timedelta(days=2)
+    measured = {hour: 0.5 for hour in measurements(later)}
+    reevaluated = choose_daily(
+        documents,
+        "washer",
+        "UTC",
+        forecasts(later),
+        measured,
+        later,
+        replays=({**replays[0], "day": replay_day},),
+    )
+    assert reevaluated["selected"] == "baseline"
+    assert [window["source"] for window in reevaluated["windows"]] == ["live"]
+
+
+def test_device_selects_from_a_single_complete_original_day_without_replay(tmp_path):
+    """A device does not wait for three new days when its first usable evidence is live."""
+    documents = make_store(tmp_path, DemandStore).documents
+    choose_daily(documents, "oven", "UTC", forecasts(START), {}, START, replays=())
+    later = START + timedelta(days=2)
+    result = choose_daily(
+        documents, "oven", "UTC", forecasts(later), measurements(later), later, replays=()
+    )
+    assert result["selected"] == "candidate"
+    assert result["completed_windows"] == 1
+
+
 def test_latest_pre_midnight_forecast_is_used(tmp_path):
     """An improved evening forecast replaces the morning pending capture, never a frozen day."""
     store = make_store(tmp_path, DemandStore)

@@ -102,13 +102,21 @@ export function renderCurrentModel(parent, row, expanded = false) {
     }
     if (row.dailySelection) {
         const learning = row.dailySelection;
-        paragraph(`Daily accuracy: ${learning.completed_windows} of ${learning.required_windows} complete local days. Selection: ${optionLabel(learning.status)}.`);
-        paragraph("Original forecasts are frozen before midnight in the Home Assistant timezone. Models use the same measured hours. Missing measurements do not count as zero consumption. A simpler profile remains active until another model consistently improves accuracy.");
-        paragraph(`Each compared day must improve the baseline by more than ${percentage(learning.required_relative_benefit_percent)} and ${learning.required_absolute_benefit_kwh?.toLocaleString(undefined, {maximumFractionDigits: 3}) ?? "Unknown"} kWh per hour.`);
+        if (learning.required_windows == null) {
+            const historical = (learning.windows || []).filter(window => window.source === "historical_replay").length;
+            const completed = learning.completed_windows;
+            paragraph(`Daily accuracy: ${completed} complete local day${completed === 1 ? "" : "s"}, including ${historical} historical replay${historical === 1 ? "" : "s"}. Selection: ${optionLabel(learning.status)}.`);
+            paragraph("The model with the lowest average hourly error is selected. Each comparison uses the same measured hours. Original forecasts replace replays for the same day when available.");
+            if (learning.replay_issue) paragraph("Historical replay evidence is temporarily unavailable.");
+        } else {
+            paragraph(`Daily accuracy: ${learning.completed_windows} of ${learning.required_windows} complete local days. Selection: ${optionLabel(learning.status)}.`);
+            paragraph("Original forecasts are frozen before midnight in the Home Assistant timezone. Models use the same measured hours. Missing measurements do not count as zero consumption. A simpler profile remains active until another model consistently improves accuracy.");
+            paragraph(`Each compared day must improve the baseline by more than ${percentage(learning.required_relative_benefit_percent)} and ${learning.required_absolute_benefit_kwh?.toLocaleString(undefined, {maximumFractionDigits: 3}) ?? "Unknown"} kWh per hour.`);
+        }
         if (learning.pending_until) paragraph(`Pending measured day ends: ${when(learning.pending_until)}`);
         for (const window of learning.windows || []) {
             const errors = Object.entries(window.mae_kwh).map(([model, value]) => `${optionLabel(model)}: ${value.toLocaleString(undefined, {maximumFractionDigits: 4})} kWh`).join(", ");
-            paragraph(`${dateLabel(window.day)}: Mean absolute hourly error: ${errors}.`);
+            paragraph(`${dateLabel(window.day)}${window.source === "historical_replay" ? " (historical replay)" : ""}: Mean absolute hourly error: ${errors}.`);
             const totals = Object.entries(window.daily_energy_error_kwh || {}).map(([model, value]) => `${optionLabel(model)}: ${value.toLocaleString(undefined, {maximumFractionDigits: 4})} kWh`).join(", ");
             if (totals) paragraph(`${dateLabel(window.day)}: Absolute daily energy error: ${totals}.`);
         }
