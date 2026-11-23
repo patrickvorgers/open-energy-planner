@@ -34,6 +34,9 @@ def archives(request, tmp_path):
         for step, active in zip(original["steps"], (False, True), strict=True):
             step.pop("grid_control_mode")
             step["grid_active"] = active
+        historical = {**original, "plan_id": "historical"}
+        with engine.begin() as connection:
+            repository._write_plan(connection, historical)
         repository.state["plan"] = original
         repository.save()
         with engine.begin() as connection:
@@ -50,9 +53,9 @@ def test_conversion_preserves_active_plan_original_and_detached_context(archives
     """Migrate both boolean modes, preserving every other value and sharing the active plan ID."""
     engine, repository, original = archives
     old_context = repository.get_context("detached")
-    assert convert_archive(engine) == (1, 2)
+    assert convert_archive(engine) == (2, 3)
     assert repository.get_plan(original["plan_id"]) == original
-    assert convert_archive(engine, apply=True) == (1, 2)
+    assert convert_archive(engine, apply=True) == (2, 3)
     assert convert_archive(engine, apply=True) == (0, 0)
     expected = deepcopy(original)
     expected["schema"] = 3
@@ -62,7 +65,13 @@ def test_conversion_preserves_active_plan_original_and_detached_context(archives
     reopened = SqlPlanRepository(tmp_path, engine=engine)
     assert reopened.state["plan"] == expected
     assert reopened.get_plan(original["plan_id"]) == expected
+    historical = reopened.get_plan("historical")
+    assert historical == {**expected, "plan_id": "historical"}
     assert [step.command.grid_control_mode for step in Plan.parse(expected, "demo-1").steps] == [
+        "inactive",
+        "zero_grid",
+    ]
+    assert [step.command.grid_control_mode for step in Plan.parse(historical, "demo-1").steps] == [
         "inactive",
         "zero_grid",
     ]

@@ -11,6 +11,7 @@ from open_energy_planner.core.units import FULL_SOC_PERCENT, WATTS_PER_KW
 from ..build_info import RELEASE
 from ..planning_policy import command_deadline
 
+PLAN_SCHEMA_VERSION = 3
 WHOLE_WATT_TOLERANCE = 1e-05
 CALIBRATION_ENERGY_ROUNDOFF_KWH = 1e-07
 ZERO_GRID_MAX_EXCHANGE_W = 10
@@ -163,7 +164,7 @@ def plan_document(snapshot, result, costs, now):
                 compact.append(step)
         steps = compact
     return {
-        "schema": 3,
+        "schema": PLAN_SCHEMA_VERSION,
         "release": RELEASE,
         "plan_id": str(uuid4()),
         "config_revision": snapshot.config_revision,

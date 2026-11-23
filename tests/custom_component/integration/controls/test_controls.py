@@ -259,8 +259,6 @@ def test_ev_native_controls_explicit_identity_blueprint_and_local_withdrawal(
             now = dt_util.utcnow()
             plan = command_plan(now, powers=(0, 0))
             plan["config_revision"] = coordinator.schedule.config_revision
-            plan["device_commands"] = True
-            plan["schema"] = 2
             nonce = coordinator.ev["points"][0]["actual"]["session_id"]
             plan["ev_context"] = {
                 "revision": coordinator.ev["revision"],
@@ -749,8 +747,6 @@ def test_actual_ha_reconciles_per_device_capabilities_and_expires_targets():
             ]
             now = dt_util.utcnow()
             plan = command_plan(now, powers=(0, 0))
-            plan["device_commands"] = True
-            plan["schema"] = 2
             for step in plan["steps"]:
                 step["devices"] = {
                     "store_a": {"kind": "battery", "power_w": -500},
