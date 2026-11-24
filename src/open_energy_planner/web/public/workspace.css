@@ -169,6 +169,7 @@
 .chart-tooltip .chart-tooltip-unit { white-space:nowrap; }
 .chart-tooltip-title { margin:0 0 8px; font-weight:700; }
 .chart-tooltip-explanation { margin:8px 0 0; padding-top:8px; border-top:1px solid #ffffff40; white-space:pre-line; }
+.chart-tooltip-day-benefit { margin:4px 0 8px; font-weight:600; }
 
 /* Dated rule editors must remain readable inside the mobile workspace. */
 #contract-editor { display:grid; gap:20px; }

@@ -2,6 +2,7 @@
 
 from datetime import datetime, timedelta
 from pathlib import Path
+from urllib.parse import parse_qs, urlsplit
 
 import pytest
 from playwright.sync_api import expect
@@ -22,6 +23,26 @@ def scenario_snapshots(page, url):
         "self-consumption-chart": comparison["scenarios"]["self_consumption"]["chart"],
         "reference-chart": comparison["scenarios"]["without_battery"]["chart"],
     }
+
+
+def expect_day_benefit(page, url, tooltip, chart, start, end):
+    """Compare the displayed amount with the owning scenario's original financial slice."""
+    line = tooltip.locator(".chart-tooltip-day-benefit")
+    if chart == "reference-chart":
+        expect(line).to_have_count(0)
+        return
+    plan_id = page.locator("#plan-version").input_value()
+    result = page.request.get(
+        url + f"/v1/plans/{plan_id}/comparison",
+        params={"start": start.isoformat(), "end": end.isoformat()},
+        headers={"Authorization": "Bearer " + TOKEN},
+    )
+    assert result.ok
+    scenario = "optimizer" if chart == "plan-chart" else "self_consumption"
+    benefit = result.json()["scenarios"][scenario]["benefit_vs_without_battery"]
+    if abs(benefit) < 0.005:
+        benefit = 0
+    expect(line).to_have_text(f"Expected benefit versus without battery: {benefit:,.2f} EUR")
 
 
 @pytest.mark.parametrize("app_site", ["device_planning"], indirect=True)
@@ -51,6 +72,7 @@ def test_all_planning_dates_expose_daily_energy(app_page):
         expect(tooltip).to_contain_text("kWh")
         expect(tooltip).not_to_contain_text("SoC")
         expect(tooltip).to_contain_text("Totals cover this complete calendar day.")
+        expect_day_benefit(page, url, tooltip, identity, START, START + timedelta(days=1))
         snapshot = snapshots[identity]
         # The fixture starts at UTC midnight. Read independently archived kWh, not chart means.
         expected_import = sum(
@@ -104,6 +126,7 @@ def test_all_planning_dates_expose_daily_energy(app_page):
             "Expected energy totals: 11/4/2026"
         )
         expect(tooltip).to_contain_text("Partial day. Totals cover only the shown planned period.")
+        expect_day_benefit(page, url, tooltip, identity, START, START + timedelta(hours=6))
         expect(tooltip.locator(".chart-tooltip-period")).to_be_in_viewport()
         expect(tooltip.locator(".chart-tooltip-period")).to_contain_text("From ")
         base = tooltip.locator("tr").filter(has_text="Household base: AC").locator("td").nth(1)
@@ -123,6 +146,51 @@ def test_all_planning_dates_expose_daily_energy(app_page):
         expect(tooltip).to_contain_text("Totals include all flows, including hidden series.")
         heading.press("Escape")
     assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+
+
+@pytest.mark.parametrize("app_site", ["device_planning"], indirect=True)
+@pytest.mark.parametrize("available", [True, False])
+def test_delayed_day_benefit_stays_with_its_own_date(app_page, available):
+    """A late first-day result leaves a second-day loss or missing comparison intact."""
+    page, url = app_page
+    page.clock.set_fixed_time(START)
+    page.goto(url + "/overview")
+    page.get_by_label("Installation API token", exact=True).fill(TOKEN)
+    page.get_by_role("button", name="Connect", exact=True).click()
+    expect(page.locator("#ems-costs")).to_contain_text("Expected benefit versus without battery")
+    queued = []
+
+    def comparison(route):
+        """Hold the first date and supply a distinct outcome for the selected second day."""
+        start = datetime.fromisoformat(parse_qs(urlsplit(route.request.url).query)["start"][0])
+        if start == START:
+            queued.append(route)
+        elif available:
+            route.fulfill(json={"scenarios": {"optimizer": {"benefit_vs_without_battery": -1.25}}})
+        else:
+            route.fulfill(status=503)
+
+    page.route("**/comparison?start=**", comparison)
+    card = page.locator("#plan-chart").locator("..")
+    card.evaluate("element => element.scrollIntoView({block:'center'})")
+    first, second = [
+        card.get_by_role("button", name="Expected energy totals for").nth(i) for i in (0, 1)
+    ]
+    tooltip = page.locator("#plan-chart-tooltip")
+    line = tooltip.locator(".chart-tooltip-day-benefit")
+    with page.expect_request("**/comparison?start=**"):
+        first.focus()
+    expect(line).to_contain_text("Loading")
+    second.focus()
+    amount = "-1.25 EUR" if available else "Unavailable"
+    expect(line).to_have_text(f"Expected benefit versus without battery: {amount}")
+    with page.expect_response(lambda item: queued[0].request.url == item.url):
+        [old] = queued
+        old.fulfill(json={"scenarios": {"optimizer": {"benefit_vs_without_battery": 99}}})
+    expect(tooltip.locator(".chart-tooltip-title")).to_have_text(
+        "Expected energy totals: 11/5/2026"
+    )
+    expect(line).to_have_text(f"Expected benefit versus without battery: {amount}")
 
 
 @pytest.mark.parametrize("app_site", ["device_planning"], indirect=True)
@@ -154,6 +222,9 @@ def test_switching_planning_dates_keeps_the_new_summary_open(app_page, identity)
     )
     expect(first).not_to_have_attribute("aria-describedby", identity + "-tooltip")
     expect(second).to_have_attribute("aria-describedby", identity + "-tooltip")
+    expect_day_benefit(
+        page, url, tooltip, identity, START + timedelta(days=1), START + timedelta(days=2)
+    )
     expected_import = sum(
         flow["grid_import"]
         for interval, flow in zip(
