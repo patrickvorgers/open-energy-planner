@@ -4,7 +4,7 @@
   <img src="src/open_energy_planner/web/public/icons/app.svg" alt="Open Energy Planner" width="88" height="88">
 </p>
 
-Open Energy Planner (OEP) is a local **energy management system (EMS) for Home Assistant**.
+Open Energy Planner (OEP) is a local **home energy management system (HEMS) for Home Assistant**.
 
 **Start with the Energy dashboard you already configured.** OEP detects the grid, solar, battery and individual device energy sources you set up in Home Assistant. Review those sources and add planning details such as your electricity contract and equipment limits. OEP uses your existing energy history to learn household demand as enough measurements become available.
 
@@ -72,7 +72,7 @@ The [first-plan guide](docs/users/first-plan.md) walks through configuration wit
 
 ## What makes OEP different?
 
-OEP brings the following choices together in one Home Assistant workflow. These are implemented capabilities, not a claim that every other EMS lacks them.
+OEP brings the following energy management system (EMS) capabilities together in one Home Assistant workflow.
 
 | What you already have or need | How OEP uses it | What you can do with it |
 |---|---|---|
