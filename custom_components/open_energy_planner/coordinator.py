@@ -953,38 +953,36 @@ class PlanCoordinator:
                         or self.ev_intent_generation != ev_intent_at_request
                     ):
                         return
-                for pending, bridge, endpoint in (
+                for domain, bridge, endpoint in (
                     (
-                        data.get("bonus_history", {}).get("request"),
+                        "bonus_history",
                         self.history_bridge,
                         "/v1/history",
                     ),
                     (
-                        data.get("demand", {}).get("request"),
+                        "demand",
                         self.demand_history_bridge,
                         "/v1/demand/history",
                     ),
                     (
-                        data.get("solar", {}).get("request"),
+                        "solar",
                         self.solar_history_bridge,
                         "/v1/solar/history",
                     ),
                 ):
                     if self.closed:
                         return
+                    pending = data.get(domain, {}).get("request")
                     if pending:
                         try:
                             historical = await bridge.capture(pending)
                             if historical is not None:
                                 receipt = await self.client.request("POST", endpoint, historical)
-                                if (
-                                    endpoint == "/v1/history"
-                                    and not self.closed
-                                    and "issue" in receipt
-                                ):
-                                    self.service_diagnostics["bonus_history"] = {
-                                        "issue": receipt["issue"]
-                                    }
+                                diagnostics = receipt.get("diagnostics")
+                                if domain == "bonus_history" and "issue" in receipt:
+                                    diagnostics = {"issue": receipt["issue"]}
+                                if not self.closed and isinstance(diagnostics, dict):
+                                    self.service_diagnostics[domain] = diagnostics
                                     self._update_snapshot_notification(self.service_diagnostics)
                         except (
                             InstallationMismatchError,

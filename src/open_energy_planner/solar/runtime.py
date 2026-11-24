@@ -1154,12 +1154,18 @@ class SolarRuntime:
             "model", self.baseline.model if self.baseline else None
         )
 
+    def history_diagnostics(self):
+        """Expose only actionable source and Recorder issues needed by Home Assistant."""
+        return {
+            "issue": self.issue,
+            "history_issues": dict(self.history_issues),
+        }
+
     def ha_history(self, now):
         """Expose requested history and curtailment feedback independently of forecast diagnostics."""
         return {
+            **self.history_diagnostics(),
             "feedback_requests": self.feedback_requests(now),
-            "issue": self.issue,
-            "history_issues": dict(self.history_issues),
             "request": self.request(now),
         }
 

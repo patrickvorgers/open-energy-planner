@@ -750,7 +750,7 @@ def create_app(
     async def snapshot(request):
         """Dispatch once the snapshot's app-owned services have been registered."""
         if request.headers.get("X-OEP-View") == "commands":
-            if request.method == "GET":
+            if request.method in {"GET", "HEAD"}:
                 raise web.HTTPNotFound()
             return web.json_response(
                 {"accepted": True, "instance_id": repository.state["instance_id"]}
