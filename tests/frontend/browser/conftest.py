@@ -1,10 +1,12 @@
 """Own isolated app sites and responsive browser contexts, sharing only the Chromium process."""
 
 import asyncio
+import json
 import shutil
 from contextlib import asynccontextmanager, closing
 from datetime import UTC, datetime, timedelta
 from functools import partial
+from hashlib import sha256
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -385,6 +387,16 @@ def app_site(request, savings_now):
             assert not thread.is_alive()
 
 
+def pytest_addoption(parser):
+    """Register the opt-in Chromium execution coverage output directory."""
+    parser.addoption(
+        "--oep-js-coverage",
+        metavar="DIRECTORY",
+        type=Path,
+        help="Write first-party Chromium JavaScript execution coverage per browser test.",
+    )
+
+
 @pytest.fixture(params=[{"width": 1280, "height": 900}, {"width": 390, "height": 844}])
 def app_page(app_site, request, browser):
     """Open /setup in a fresh desktop or touch-sized mobile context of the shared browser.
@@ -423,8 +435,39 @@ def app_page(app_site, request, browser):
                 return result;
             };
         })();""")
-        page.goto(app_site + "/setup")
-        yield page, app_site
+        coverage_directory = request.config.getoption("--oep-js-coverage")
+        if coverage_directory is None:
+            page.goto(app_site + "/setup")
+            yield page, app_site
+            return
+
+        coverage_directory.mkdir(parents=True, exist_ok=True)
+        session = context.new_cdp_session(page)
+        session.send("Profiler.enable")
+        session.send("Profiler.startPreciseCoverage", {"callCount": True, "detailed": True})
+        try:
+            page.goto(app_site + "/setup")
+            yield page, app_site
+        finally:
+            scripts = session.send("Profiler.takePreciseCoverage")["result"]
+            session.send("Profiler.stopPreciseCoverage")
+            asset_prefix = app_site + "/setup/static/"
+            coverage = [
+                {
+                    "asset": script["url"].removeprefix(asset_prefix),
+                    "functions": script["functions"],
+                }
+                for script in scripts
+                if script["url"].startswith(asset_prefix)
+                and script["url"].endswith(".js")
+                and not script["url"].endswith("/chart.umd.min.js")
+            ]
+            test_id = request.node.nodeid
+            filename = sha256(test_id.encode()).hexdigest() + ".json"
+            (coverage_directory / filename).write_text(
+                json.dumps({"test": test_id, "scripts": coverage}, indent=2) + "\n",
+                encoding="utf-8",
+            )
 
 
 @pytest.fixture(scope="session")

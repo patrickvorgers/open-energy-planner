@@ -263,8 +263,9 @@ satellite irradiance separately. A background device worker reuses the same
 original run archive and preserves historical test predictions in the database.
 Regular forecasts can publish while new historical tests run. Savings compares settled measured operation
 with its reference. The shared database also retains the frozen daily baseline,
-measurement evidence and settings changes. `app.py` composes these services and their authenticated
-routes. See [plan archive](PLAN-ARCHIVE.md),
+measurement evidence and settings changes. `app.py` composes these services and
+wires their authenticated routes. `runtime/snapshot.py` assembles the shared HTTP
+snapshot for reads and settings save responses. See [plan archive](PLAN-ARCHIVE.md),
 [Forecast Quality](FORECAST-QUALITY.md), [Savings](SAVINGS.md) and
 [database ownership](DATABASE-SCHEMA.md).
 
