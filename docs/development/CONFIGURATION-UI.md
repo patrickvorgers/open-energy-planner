@@ -420,6 +420,8 @@ draft. A separate strategy or price preference save retains its own confirmation
 and version checks. Physical execution remains owned by user HA automations and
 equipment.
 
+See the [installation save sequence](INSTALLATION-PLANNING.md#saving-installation-settings) for the transaction and recovery paths.
+
 ## Shared date selection
 
 `period-selector.js` owns the Energy-style previous/date/next control and calendar
