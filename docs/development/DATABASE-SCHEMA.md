@@ -1134,7 +1134,10 @@ A read-only in-memory continuation bounds selection across gap-free day reports
 without acknowledging an unprocessed request or creating another durable store.
 
 Immutable measured/estimated evidence at up-to-quarter-hour intervals, including
-fragments at configuration boundaries. Conflicting replacement fails explicitly.
+fragments at configuration boundaries. Ingestion looks up retained start keys
+and inserts new rows in bounded batches of up to 96 intervals within the same
+transaction as the capture cursors. Identical evidence is idempotent, including
+repeated intervals within one capture. Conflicting replacement fails explicitly.
 
 | Field | Type / key | Meaning and use |
 | --- | --- | --- |

@@ -3,6 +3,7 @@
 import json
 from contextlib import contextmanager, nullcontext
 from datetime import datetime, timedelta
+from itertools import batched
 
 from sqlalchemy import func, select
 from sqlalchemy.exc import SQLAlchemyError
@@ -316,28 +317,39 @@ class SettlementStore:
         return [self._day_report(row) for row in rows]
 
     def put_frames(self, frames, context=None, active_connection=None):
-        """Idempotently retain original metering. Conflicting replacements require explicit correction handling."""
+        """Retain original metering in bounded batches inside one writer transaction.
+
+        Compare retained evidence and duplicates in the same batch using their
+        original JSON. Only unrecorded intervals may be inserted.
+        """
         with (
             nullcontext(active_connection)
             if active_connection is not None
             else lifecycle_transaction(self.engine) as connection
         ):
-            for frame in frames:
-                key, payload = (
-                    stamp(frame.start),
-                    encode_payload(canonical({"frame": frame.record(), "context": context})),
-                )
-                old = connection.scalar(
-                    select(SETTLEMENT_FRAMES.c.payload).where(SETTLEMENT_FRAMES.c.start == key)
-                )
-                if old is not None and decode_payload(old) != decode_payload(payload):
-                    raise ValueError("Settlement evidence is immutable")
-                if old is None:
+            for batch in batched(frames, MAX_BATCH_INTERVALS):
+                stamped = [(stamp(frame.start), frame) for frame in batch]
+                retained = dict(
                     connection.execute(
-                        SETTLEMENT_FRAMES.insert().values(
-                            start=key, end=stamp(frame.end), payload=payload
+                        select(SETTLEMENT_FRAMES.c.start, SETTLEMENT_FRAMES.c.payload).where(
+                            SETTLEMENT_FRAMES.c.start.in_({start for start, _ in stamped})
                         )
-                    )
+                    ).all()
+                )
+                inserts = []
+                for start, frame in stamped:
+                    document = canonical({"frame": frame.record(), "context": context})
+                    previous = retained.get(start)
+                    if previous is None:
+                        payload = encode_payload(document)
+                        inserts.append(
+                            {"start": start, "end": stamp(frame.end), "payload": payload}
+                        )
+                        retained[start] = payload
+                    elif decode_payload(previous) != document:
+                        raise ValueError("Settlement evidence is immutable")
+                if inserts:
+                    connection.execute(SETTLEMENT_FRAMES.insert(), inserts)
 
     def frames(self, after=None, *, end=None, limit=MAX_BATCH_INTERVALS):
         """Read bounded chronological batches using the interval primary key."""

@@ -1,8 +1,41 @@
-"""Large settlement history must stay aggregated and bounded on every backend."""
+"""Settlement capture and historical queries stay bounded on every backend."""
+
+from datetime import timedelta
 
 import pytest
+from sqlalchemy import event
 
+from tests.app.savings.support.scenarios import END, bindings, frame
 from tests.database.support.history_datasets import retained_evaluation, settlement_batches
+
+
+@pytest.mark.parametrize(("quarters", "batches"), [(96, 1), (100, 2)])
+def test_capture_uses_bounded_queries_and_retry_does_not_write(settlement, quarters, batches):
+    """Full-day writes use one read and insert execution per batch. Identical retries only read."""
+    _runtime, store, _docs, engine, _plans = settlement
+    frames = tuple(
+        frame(start=END + timedelta(minutes=15 * quarter)) for quarter in range(1, quarters + 1)
+    )
+    context = {"bindings": bindings(), "seeds": [], "location": None}
+    statements = []
+
+    def count(_connection, _cursor, statement, _parameters, _context, _many):
+        """Record statement types sent through the real backend cursor."""
+        statements.append(statement.split(maxsplit=1)[0].upper())
+
+    event.listen(engine, "before_cursor_execute", count)
+    try:
+        store.put_frames(frames, context)
+        assert statements.count("SELECT") == batches
+        assert statements.count("INSERT") == batches
+
+        statements.clear()
+        store.put_frames(frames, context)
+        assert statements.count("SELECT") == batches
+        assert statements.count("INSERT") == 0
+    finally:
+        event.remove(engine, "before_cursor_execute", count)
+    assert len(store.frames(limit=quarters + 2)) == quarters + 2
 
 
 def test_three_year_period_query_aggregates_without_loading_all_detail(settlement):
