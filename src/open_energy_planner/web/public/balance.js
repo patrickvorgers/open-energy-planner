@@ -289,8 +289,8 @@ export function energyBalances(plan, labels) {
         });
         const converter = Boolean(group.inverter);
         const definitions = [
-            ["solar", "Used solar: DC", "Production"],
-            ...(!converter ? [["solarAC", "Used solar: AC", "Production"]] : []),
+            ["solar", "Solar production: DC", "Production"],
+            ...(!converter ? [["solarAC", "Solar production: AC", "Production"]] : []),
             ["import", converter ? "AC supply to converter" : "Grid import: AC", "Production"],
             ["discharge", "Battery discharge: DC", "Production"], ["load", plan.input_snapshot?.load_components?.length ? plan.input_snapshot.load_components.find(part => part.entity_id == null)?.unseparated_entities?.length ? "Household remainder: AC" : "Household base: AC" : "Household demand: AC", "Consumption"],
             ["export", converter ? "Converter output to AC" : "Grid export: AC", "Consumption"],

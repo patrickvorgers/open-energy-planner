@@ -138,8 +138,8 @@ The signed balance palette below remains unchanged.
 
 | Flow | Sign | Color / boundary |
 | --- | --- | --- |
-| Used solar: DC | Positive | Green, hybrid DC input |
-| Used solar: AC | Positive | Dark green, separate PV inverter AC output |
+| Solar production: DC | Positive | Green, hybrid DC input |
+| Solar production: AC | Positive | Dark green, separate PV inverter AC output |
 | Grid import / converter AC supply | Positive | Blue, AC boundary |
 | Battery discharge | Positive | Red, DC terminals |
 | Household demand | Negative | Amber, AC consumption |
@@ -148,7 +148,7 @@ The signed balance palette below remains unchanged.
 | Conversion losses | Negative | Gray, converter and battery DC converter |
 | Battery SoC | Separate axis | Dark colored lines, percent of nominal capacity |
 
-At the installation boundary, used solar DC + used solar AC + grid import + terminal discharge
+At the installation boundary, DC solar production + AC solar production + grid import + terminal discharge
 equals household demand + grid export + terminal charge + conversion losses.
 The selected-interval inspector uses the same conservation equation for each
 battery converter's local solar, AC input/output and connected batteries. Thus it reveals direct DC
