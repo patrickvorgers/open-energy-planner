@@ -148,6 +148,19 @@ a diagram changes. CI builds from committed images and does not need Node.js or
 Chromium to generate them. Run the publication tests, strict build and diagram
 browser checks after changes. Generated diagrams contain no Mermaid runtime.
 
+### When a sequence diagram helps
+
+When writing or updating a workflow guide, consider a sequence diagram if the
+order of interactions explains an important outcome. For example, show which
+component commits data before acknowledging a save, which check authorizes a
+physical action, or how a client recovers after a lost response. Show the main
+path and the failure or retry branches that change the outcome. Keep detailed
+conditions in the surrounding text.
+
+Use the guide that owns the workflow and link to it from related guides. A
+flowchart is usually sufficient for a module map or a high-level data flow.
+Use fenced Mermaid source and commit the matching SVG as described above.
+
 ## GitHub Pages publishing
 
 The public guide is hosted at `https://patrickvorgers.github.io/open-energy-planner/`.

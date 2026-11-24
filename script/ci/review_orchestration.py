@@ -15,13 +15,16 @@ from pathlib import Path
 from script.ci.check_ci_candidate import (
     CODERABBIT_APP_ID,
     CODEX_APP_ID,
+    CODEX_BOT_ID,
     GREPTILE_APP_ID,
+    GREPTILE_BOT_ID,
     KODY_APP_ID,
     changed_files,
     codex_review_state,
     current_checks,
     greptile_completed_check,
     latest_check,
+    provider_comment,
     require_automated_review,
     require_included_base,
     require_prerequisites,
@@ -64,6 +67,16 @@ PROVIDER_BOT_LOGINS = (
     "greptile-apps[bot]",
     "kody-ai[bot]",
     "chatgpt-codex-connector[bot]",
+)
+GREPTILE_CREDIT_DENIAL = (
+    r"Your organization has run out of review credits\. "
+    r"\[Add credits\]\(https://app\.greptile\.com/-/switch-tenant\?"
+    r"tenant=[a-zA-Z0-9_-]+&next=%2Fsettings%2Fbilling\) to resume code reviews\.\n\n"
+    r"<!-- greptile-credit-pause:[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12} -->\n?"
+)
+PROVIDER_COMMAND = (
+    r"(?m)^@(?:coderabbitai|kody|codex|greptileai|greptile)"
+    r"(?:\s+(?:review(?: this draft| --force)?|start-review|rate limit))?\s*$"
 )
 ADD_COMMENT = """
 mutation($subject: ID!, $body: String!, $key: String!) {
@@ -183,6 +196,18 @@ def read_state(comments):
             raise VerificationError("Invalid durable review state")
         state.setdefault("greptile_used", False)
         state.setdefault("codex_used", False)
+        if "greptile_credit" in state:
+            evidence = state["greptile_credit"]
+            if (
+                state["target"] != "codex"
+                or not isinstance(evidence, list)
+                or len(evidence) != 3
+                or any(type(value) is not int or value <= 0 for value in evidence[:2])
+                or evidence[0] <= evidence[1]
+                or not isinstance(evidence[2], str)
+                or instant(evidence[2]) > instant(state["sent"])
+            ):
+                raise VerificationError("Invalid durable Greptile credit evidence")
         sha(state["head"])
         sha(state["base"])
         for field in ("started", "sent"):
@@ -315,6 +340,84 @@ def provider_active(checks):
         and row.get("status") != "completed"
         for row in checks
     )
+
+
+def greptile_fallback_target():
+    """Select the next provider from the trusted workflow's temporary repository setting."""
+    return "codex" if environ.get("OEP_GREPTILE_PAUSED") == "true" else "greptile"
+
+
+def require_paused_greptile_fallback(checks, checks_after, availability_reply):
+    """Keep a paused fallback tied to a CodeRabbit refusal or timeout and no Greptile work."""
+    if any(row.get("app", {}).get("id") == GREPTILE_APP_ID for row in checks):
+        raise VerificationError("Greptile already has check evidence for this revision")
+    if availability_reply is None:
+        check = latest_check(checks, "CodeRabbit", CODERABBIT_APP_ID)
+        if (
+            not check
+            or check["id"] <= checks_after
+            or check.get("status") != "completed"
+            or check.get("conclusion") != "timed_out"
+        ):
+            raise VerificationError("CodeRabbit timeout evidence changed before fallback")
+
+
+def greptile_credit_reply(row, command, sent):
+    """Recognize only the observed unedited refusal from the real Greptile app."""
+    return (
+        row["id"] > command
+        and provider_comment(row, "greptile-apps[bot]", GREPTILE_BOT_ID, GREPTILE_APP_ID)
+        and re.fullmatch(GREPTILE_CREDIT_DENIAL, row["body"]) is not None
+        and isinstance(row.get("updated_at"), str)
+        and instant(row["created_at"]) >= instant(sent)
+        and instant(row["created_at"]) == instant(row.get("updated_at"))
+    )
+
+
+def require_credit_evidence(evidence, comments, *, published_id=None):
+    """Revalidate the exact refusal recorded before sending or recovering a Codex command."""
+    identifier, command, sent = evidence
+    matches = [row for row in comments if greptile_credit_reply(row, command, sent)]
+    if len(matches) != 1 or matches[0]["id"] != identifier:
+        raise VerificationError("Greptile credit evidence changed before Codex confirmation")
+    if any(
+        row["id"] > command and row["id"] != published_id and provider_command_comment(row)
+        for row in comments
+    ):
+        raise VerificationError("Another provider command makes this request ambiguous")
+
+
+def provider_command_comment(row):
+    """Detect a provider command outside this controller's current publication."""
+    return not is_bot(row, GITHUB_ACTIONS_BOT_LOGIN) and re.search(PROVIDER_COMMAND, row["body"])
+
+
+def require_recovery_feedback(state, comments, published):
+    """Allow a new authenticated same-head progress summary after an already published command."""
+    if feedback_digest(comments) == state["feedback_digest"]:
+        return
+    codex = codex_review_state(comments, state["head"])
+    if (
+        codex
+        and codex.get("status") == "in_progress"
+        and codex.get("has_any_findings", False) is False
+        and codex.get("has_unresolved_findings", False) is False
+    ):
+        progress = [
+            row
+            for row in comments
+            if row["id"] > published["id"]
+            and provider_comment(row, "chatgpt-codex-connector[bot]", CODEX_BOT_ID, CODEX_APP_ID)
+            and row["body"].startswith("<!-- codex-pull-request-review-summary -->\n")
+            and instant(row["created_at"]) >= instant(published["created_at"])
+        ]
+        if (
+            len(progress) == 1
+            and feedback_digest([row for row in comments if row["id"] != progress[0]["id"]])
+            == state["feedback_digest"]
+        ):
+            return
+    raise VerificationError("Provider feedback changed during Codex recovery")
 
 
 def feedback_digest(comments):
@@ -467,6 +570,7 @@ def require_previous_feedback(state, comments, target, availability_reply):
                 "quota": availability,
                 "coderabbit": "available",
                 "greptile": "limited",
+                "codex": "limited" if greptile_fallback_target() == "codex" else None,
             }.get(target)
             != availability
         ):
@@ -487,6 +591,7 @@ def send_command(
     publisher=None,
     *,
     availability_reply=None,
+    credit_reply=None,
 ):
     """Record an outbox intent, recheck identities and publish at most one command for that intent."""
     _, checks = require_revision(repository, number, state, client)
@@ -494,7 +599,45 @@ def send_command(
     if provider_active(checks):
         raise VerificationError("A provider is still working on this revision")
     comments = comments_for(repository, number, client)
-    require_previous_feedback(state, comments, target, availability_reply)
+    previous_sent, previous_command, previous_checks = (
+        state["sent"],
+        state["command"],
+        state["checks_after"],
+    )
+    paused_codex = target == "codex" and state["phase"] in {"quota", "coderabbit"}
+    if paused_codex and (
+        greptile_fallback_target() != "codex"
+        or state["greptile_used"]
+        or any(
+            f"<!-- oep-greptile-head:{state['head']} -->" in row["body"].splitlines()
+            for row in comments
+        )
+    ):
+        raise VerificationError("The Greptile pause does not supersede existing review work")
+    credit_evidence = None
+    if credit_reply is not None:
+        if state["phase"] != "greptile" or target != "codex":
+            raise VerificationError("Greptile credit evidence does not authorize this command")
+        credit_evidence = [credit_reply["id"], state["command"], state["sent"]]
+        require_credit_evidence(credit_evidence, comments)
+        require_no_unclassified_feedback(
+            repository, number, state, [row for row in comments if row != credit_reply], client
+        )
+        require_clear_formal_reviews(repository, number, state["head"], state["base"], client)
+        if greptile_completed_check(checks):
+            raise VerificationError("Greptile review publication is still possible")
+    else:
+        require_previous_feedback(state, comments, target, availability_reply)
+        if paused_codex:
+            require_paused_greptile_fallback(checks, previous_checks, availability_reply)
+            require_no_unclassified_feedback(
+                repository,
+                number,
+                state,
+                [row for row in comments if row != availability_reply],
+                client,
+            )
+            require_clear_formal_reviews(repository, number, state["head"], state["base"], client)
     codex = codex_review_state(comments, state["head"])
     if codex and codex.get("status") != "completed":
         raise VerificationError("Codex already has uncompleted work for this revision")
@@ -542,6 +685,8 @@ def send_command(
         message=f"Publishing the {target} request.",
         feedback_digest=feedback_digest(comments),
     )
+    if credit_evidence is not None:
+        state["greptile_credit"] = credit_evidence
     save_state(state, subject, client)
     _, final_checks = require_revision(repository, number, state, client)
     require_resolved_threads(repository, number, client)
@@ -553,6 +698,22 @@ def send_command(
         raise VerificationError("Codex started before command publication")
     if feedback_digest(final_comments) != state["feedback_digest"]:
         raise VerificationError("Provider feedback changed before command publication")
+    if credit_evidence is not None:
+        require_credit_evidence(credit_evidence, final_comments)
+        if greptile_completed_check(final_checks):
+            raise VerificationError("Greptile review publication is still possible")
+    if credit_evidence is not None or paused_codex:
+        if paused_codex:
+            require_paused_greptile_fallback(final_checks, previous_checks, availability_reply)
+            if any(
+                row["id"] > previous_command and provider_command_comment(row)
+                for row in final_comments
+            ):
+                raise VerificationError("Another provider command makes this request ambiguous")
+        require_no_unclassified_feedback(
+            repository, number, {**state, "sent": previous_sent}, final_comments, client
+        )
+        require_clear_formal_reviews(repository, number, state["head"], state["base"], client)
     if target == "kody" and kody_request_command(final_checks) != kody_command:
         raise VerificationError("Kody request evidence changed before publication")
     require_original_requester(repository, number, state, client)
@@ -756,6 +917,20 @@ def advance(repository, number, state, comments, client, now, publisher=None):
         ]
         if len(matches) != 1:
             return block_request(state, subject, client, category="sending")
+        if "greptile_credit" in state:
+            published = matches[0]
+            try:
+                require_credit_evidence(
+                    state["greptile_credit"], comments, published_id=published["id"]
+                )
+                if published["id"] <= state["greptile_credit"][0] or published["body"] != (
+                    f"@codex review\n<!-- oep-codex-head:{state['head']} -->\n"
+                    f"{command_marker(state)}"
+                ):
+                    raise VerificationError("Codex outbox publication changed")
+                require_recovery_feedback(state, comments, published)
+            except VerificationError:
+                return block_request(state, subject, client, category="sending")
         record_publication(state, matches[0]["id"], matches[0]["created_at"], subject, client)
     if state["phase"] == "coderabbit" and now - instant(state["sent"]) > REVIEW_TIMEOUT:
         return block_request(state, subject, client, category="coderabbit")
@@ -764,14 +939,7 @@ def advance(repository, number, state, comments, client, now, publisher=None):
         for row in comments
         if row["id"] > state["command"] and instant(row["created_at"]) >= instant(state["sent"])
     ]
-    if any(
-        re.search(
-            r"(?m)^@(?:coderabbitai|kody|codex|greptileai|greptile)(?:\s+(?:review(?: this draft| --force)?|start-review|rate limit))?\s*$",
-            row["body"],
-        )
-        and not is_bot(row, GITHUB_ACTIONS_BOT_LOGIN)
-        for row in fresh
-    ):
+    if any(provider_command_comment(row) for row in fresh):
         raise VerificationError(
             "Another provider command makes this request ambiguous. Inspect the PR"
         )
@@ -821,7 +989,7 @@ def advance(repository, number, state, comments, client, now, publisher=None):
                         repository,
                         number,
                         state,
-                        "greptile",
+                        greptile_fallback_target(),
                         subject,
                         client,
                         now,
@@ -866,6 +1034,30 @@ def advance(repository, number, state, comments, client, now, publisher=None):
                 "Codex completion is uncertain. Inspect its published review state"
             )
         return
+    if state["phase"] == "greptile" and now - instant(state["sent"]) <= REVIEW_TIMEOUT:
+        refusals = [
+            row
+            for row in fresh
+            if greptile_credit_reply(row, state["command"], state["sent"])
+            and instant(row["created_at"]) <= now
+        ]
+        if refusals:
+            if len(refusals) != 1:
+                raise VerificationError("Ambiguous Greptile credit replies")
+            if provider_active(checks):
+                return
+            send_command(
+                repository,
+                number,
+                state,
+                "codex",
+                subject,
+                client,
+                now,
+                publisher,
+                credit_reply=refusals[0],
+            )
+            return
     provider_name, provider_app_id = {
         "kody": ("Kody Code Review", KODY_APP_ID),
         "greptile": ("Greptile Review", GREPTILE_APP_ID),
@@ -897,7 +1089,7 @@ def advance(repository, number, state, comments, client, now, publisher=None):
         ):
             require_no_unclassified_feedback(repository, number, state, comments, client)
             require_clear_formal_reviews(repository, number, state["head"], state["base"], client)
-            target = "greptile" if state["phase"] == "coderabbit" else "kody"
+            target = greptile_fallback_target() if state["phase"] == "coderabbit" else "kody"
             send_command(repository, number, state, target, subject, client, now, publisher)
             return
         if (

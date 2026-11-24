@@ -46,4 +46,5 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ github.token }}
           OEP_REVIEW_COMMAND_TOKEN: ${{ secrets.OEP_REVIEW_COMMAND_TOKEN }}
+          OEP_GREPTILE_PAUSED: ${{ vars.OEP_GREPTILE_PAUSED }}
         run: python3 -m script.ci.review_orchestration
