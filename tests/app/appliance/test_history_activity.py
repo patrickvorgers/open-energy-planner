@@ -2,7 +2,6 @@
 
 import asyncio
 from datetime import UTC, datetime, timedelta
-from types import SimpleNamespace
 
 import pytest
 from aiohttp import web
@@ -11,10 +10,9 @@ from aiohttp.test_utils import TestClient, TestServer
 from open_energy_planner.activities.api import EVENTS
 from open_energy_planner.activities.events import Events, Outcome
 from open_energy_planner.appliances.cycles import history
-from open_energy_planner.appliances.cycles.api import register
 from open_energy_planner.appliances.cycles.model import instant
 from open_energy_planner.storage.adapters.activities import ActivityStore
-from tests.app.appliance.support import ENTITY, POWER
+from tests.app.appliance.support import ENTITY, POWER, register_appliance_routes
 
 CASES = [
     (operation, quality)
@@ -73,15 +71,7 @@ def test_history_activity_recovers_only_for_real_usable_intervals(service, opera
         events = Events(ActivityStore(service.documents.engine))
         app = web.Application()
         app[EVENTS] = events
-        register(
-            app,
-            service,
-            SimpleNamespace(state={"enabled": False, "plan": None}),
-            None,
-            asyncio.Lock(),
-            SimpleNamespace(state={"points": []}),
-            SimpleNamespace(state={"stores": []}),
-        )
+        register_appliance_routes(app, service)
         failure = await events.start("appliances", "history", "Earlier failed read")
         await events.finish(failure, Outcome.FAILED, "Synthetic history fault.")
         body = {
