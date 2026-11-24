@@ -1,9 +1,11 @@
 """Only local HTTP and JSON. Never import the app package."""
 
 import json
+import logging
 from http import HTTPStatus
+from time import monotonic
 
-from aiohttp import ClientSession, ClientTimeout, Fingerprint
+from aiohttp import ClientError, ClientResponseError, ClientSession, ClientTimeout, Fingerprint
 
 from .const import BUILD_INFO
 from .wire_limits import (
@@ -15,13 +17,23 @@ from .wire_limits import (
 RESPONSE_READ_CHUNK_BYTES = 16384
 
 HTTP_TIMEOUT_SECONDS = 5
+_LOGGER = logging.getLogger(__name__)
 
 
-class AuthenticationError(ValueError):
+class _HTTPRejection(ValueError):
+    """Preserve a response status when the client raises a domain error."""
+
+    def __init__(self, message, *, status=None):
+        """Keep the existing error text along with optional safe HTTP metadata."""
+        super().__init__(message)
+        self.status = status
+
+
+class AuthenticationError(_HTTPRejection):
     """An installation token needs user attention."""
 
 
-class ReleaseMismatchError(ValueError):
+class ReleaseMismatchError(_HTTPRejection):
     """The loaded app and integration do not identify the same release build."""
 
 
@@ -48,6 +60,7 @@ class LocalClient:
         self.instance_confirmed = False
         self.instance_mismatch = False
         self.instance_generation = 0
+        self._request_failures: dict[tuple[str, str], str] = {}
 
     async def request(self, method, path, body=None):
         """Send authenticated HTTP without redirects and require a bounded object response.
@@ -73,6 +86,39 @@ class LocalClient:
             and not identity_snapshot
         ):
             await self.snapshot()
+        operation = (method, path.partition("?")[0])
+        started_at = monotonic()
+        try:
+            result = await self._exchange(method, path, body, identity_snapshot)
+        except (ClientError, TimeoutError, ValueError, TypeError, KeyError) as error:
+            failure = type(error).__name__
+            if (
+                isinstance(error, (ClientResponseError, _HTTPRejection))
+                and error.status is not None
+            ):
+                failure = f"{failure} (HTTP {error.status})"
+            level = (
+                logging.DEBUG
+                if self._request_failures.get(operation) == failure
+                else logging.WARNING
+            )
+            self._request_failures[operation] = failure
+            _LOGGER.log(
+                level,
+                "App request %s %s failed after %.3f s (%s).",
+                *operation,
+                monotonic() - started_at,
+                failure,
+            )
+            raise
+        if self._request_failures.pop(operation, None) is not None:
+            _LOGGER.info(
+                "App request %s %s recovered in %.3f s.", *operation, monotonic() - started_at
+            )
+        return result
+
+    async def _exchange(self, method, path, body, identity_snapshot):
+        """Perform one HTTP exchange and validate the response and installation identity."""
         generation = self.instance_generation
         async with self.session.request(
             method,
@@ -89,12 +135,14 @@ class LocalClient:
             ssl=self.fingerprint,
         ) as response:
             if response.status in (HTTPStatus.UNAUTHORIZED, HTTPStatus.FORBIDDEN):
-                raise AuthenticationError("Local API token rejected")
+                raise AuthenticationError("Local API token rejected", status=response.status)
             if (
                 response.status == HTTPStatus.CONFLICT
                 and response.headers.get("X-OEP-Mismatch") == "true"
             ):
-                raise ReleaseMismatchError("App rejected a different integration release build")
+                raise ReleaseMismatchError(
+                    "App rejected a different integration release build", status=response.status
+                )
             response.raise_for_status()
             received = {
                 "version": response.headers.get("X-OEP-Release"),
@@ -103,7 +151,9 @@ class LocalClient:
             if path.startswith("/v1/") and any(
                 received[field] != BUILD_INFO[field] for field in received
             ):
-                raise ReleaseMismatchError("App and integration release builds differ")
+                raise ReleaseMismatchError(
+                    "App and integration release builds differ", status=response.status
+                )
             # Settings may return a complete snapshot too. Bound by the response contract.
             snapshot_response = path in (
                 "/v1/snapshot",
