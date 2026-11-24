@@ -87,6 +87,7 @@ def test_claim_checks_expiry_after_lock_and_worker_waits(tasks, monkeypatch, wai
     from aiohttp.test_utils import TestClient, TestServer
 
     from open_energy_planner.appliances.cycles import api as appliance_api
+    from open_energy_planner.runtime.settings_reads import mark_command_free
 
     async def scenario():
         """Hold a real request at the admission lock or write boundary using a deterministic clock."""
@@ -151,6 +152,7 @@ def test_claim_checks_expiry_after_lock_and_worker_waits(tasks, monkeypatch, wai
             ObservedLock() if waiting_at == "lock" else asyncio.Lock(),
             SimpleNamespace(state={"points": []}),
             SimpleNamespace(state={"stores": []}),
+            mark_command_free=mark_command_free,
         )
         async with TestClient(TestServer(app)) as client:
             pending = asyncio.create_task(
@@ -178,6 +180,93 @@ def test_claim_checks_expiry_after_lock_and_worker_waits(tasks, monkeypatch, wai
                 assert response.status == 200
                 assert (await response.json())["result"]["authorized"] is True
                 assert tasks.state["tasks"][ENTITY]["attempt"]["status"] == "claimed"
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("claim", [False, True])
+def test_published_appliance_read_rechecks_changes_to_start_authority(tasks, monkeypatch, claim):
+    """Completing unrelated state work preserves a request. Claiming that request withdraws it."""
+    import asyncio
+    import threading
+    from types import SimpleNamespace
+
+    from aiohttp import web
+    from aiohttp.test_utils import TestClient, TestServer
+
+    from open_energy_planner.appliances.cycles import api as appliance_api
+    from open_energy_planner.appliances.cycles.service import ApplianceView
+    from open_energy_planner.runtime.settings_reads import ApplicationStateLock, mark_command_free
+
+    async def scenario():
+        """Project a real start request, hold encoding, then let another owner finish an operation."""
+        scheduled_task, plan, before = scheduled(tasks)
+        attempt = scheduled_task["attempt"]
+        original_document = ApplianceView.document
+        entered, release = threading.Event(), threading.Event()
+
+        class Clock:
+            """Keep the plan and attempt before their real deadlines throughout the test."""
+
+            @staticmethod
+            def now(_zone):
+                """Return the exact time the service issued its legitimate request."""
+                return before
+
+        def hold_after_projection(view, *arguments, **keywords):
+            """Hold only the first response after it contains authorized start evidence."""
+            projected = original_document(view, *arguments, **keywords)
+            if not entered.is_set():
+                assert projected["devices"][0]["request"]["attempt_id"] == attempt["id"]
+                entered.set()
+                assert release.wait(8)
+            return projected
+
+        monkeypatch.setattr(appliance_api, "datetime", Clock)
+        monkeypatch.setattr(ApplianceView, "document", hold_after_projection)
+        repository = SimpleNamespace(
+            state={"enabled": True, "plan": plan}, pending_invalidation=False
+        )
+        demand = SimpleNamespace(consumers=tasks.consumers, forecast=None)
+        ev = SimpleNamespace(state={"points": []})
+        thermal = SimpleNamespace(state={"stores": []})
+        lock = ApplicationStateLock()
+        lock.bind_settings(tasks, demand, ev, thermal)
+        app = web.Application()
+        appliance_api.register(
+            app, tasks, repository, None, lock, ev, thermal, mark_command_free=mark_command_free
+        )
+        async with TestClient(TestServer(app)) as client:
+            pending = asyncio.create_task(client.get("/v1/appliances"))
+            try:
+                assert await asyncio.to_thread(entered.wait, 5)
+                if claim:
+                    response = await client.post(
+                        "/v1/appliances/claim",
+                        json={
+                            "entity_id": ENTITY,
+                            "task_id": scheduled_task["id"],
+                            "attempt_id": attempt["id"],
+                        },
+                    )
+                    assert response.status == 200
+                else:
+                    async with lock:
+                        pass
+                assert not pending.done()
+            finally:
+                release.set()
+                read = await pending
+            assert read.status == 200
+            request = (await read.json())["devices"][0]["request"]
+            if claim:
+                assert request is None
+            else:
+                assert request == {
+                    "task_id": scheduled_task["id"],
+                    "attempt_id": attempt["id"],
+                    "expires_at": attempt["expires_at"],
+                }
 
     asyncio.run(scenario())
 

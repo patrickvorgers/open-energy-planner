@@ -162,7 +162,7 @@ def test_http_profile_and_history_writes_preserve_contract_and_skip_unchanged_re
     from aiohttp import web
     from aiohttp.test_utils import TestClient, TestServer
 
-    from open_energy_planner.appliances.cycles.api import register
+    from tests.app.appliance.support import register_appliance_routes
 
     async def scenario():
         """Exercise route parsing and serialized SQL writes against the actual appliance service."""
@@ -172,15 +172,7 @@ def test_http_profile_and_history_writes_preserve_contract_and_skip_unchanged_re
             """Observe the actual awaited refresh contract without starting the planner."""
             refreshes.append(kwargs)
 
-        register(
-            app,
-            service,
-            SimpleNamespace(state={"enabled": False, "plan": None}),
-            SimpleNamespace(refresh_async=refresh_async),
-            asyncio.Lock(),
-            SimpleNamespace(state={"points": []}),
-            SimpleNamespace(state={"stores": []}),
-        )
+        register_appliance_routes(app, service, live=SimpleNamespace(refresh_async=refresh_async))
         async with TestClient(TestServer(app)) as client:
             response = await client.post(
                 "/v1/appliances/manual_profile",
@@ -192,7 +184,11 @@ def test_http_profile_and_history_writes_preserve_contract_and_skip_unchanged_re
                 },
             )
             assert response.status == 200
-            assert (await response.json())["appliances"]["devices"][0]["profile_kind"] == "Manual"
+            saved = (await response.json())["appliances"]
+            assert saved["devices"][0]["profile_kind"] == "Manual"
+            response = await client.get("/v1/appliances")
+            assert response.status == 200
+            assert await response.json() == saved
             stale = service.revision
             service.set_manual_profile(ENTITY, 100, 0.8, stale)
             response = await client.post(

@@ -1,5 +1,6 @@
 """Authenticated task transport. The application service owns lifecycle and physical execution stays in HA."""
 
+import asyncio
 import logging
 from datetime import UTC, datetime
 from time import monotonic
@@ -93,28 +94,55 @@ PUBLIC_VALIDATION_MESSAGES = (
 )
 
 
-def register(app, service, repository, live, lock, ev, thermal):
+def register(app, service, repository, live, lock, ev, thermal, *, mark_command_free):
     """Serialize readiness, measurements and execution events with plan admission."""
 
     async def state(request):
-        """Return durable task/profile evidence and only current, unclaimed start requests."""
-        async with lock:
-            raw_entity = request.query.get("raw_entity")
-            if raw_entity is not None:
-                try:
-                    service.member(raw_entity)
-                except ValueError:
-                    raise web.HTTPBadRequest(
-                        text="Select this consumer in Appliances settings first"
-                    ) from None
-            return web.json_response(
-                service.document(
-                    datetime.now(UTC),
-                    repository.state["enabled"],
-                    repository.state["plan"],
-                    raw_entity=raw_entity,
-                )
+        """Project committed evidence and only still-current start requests."""
+        view = lock.settings.appliances
+        raw_entity = request.query.get("raw_entity")
+        if raw_entity is not None:
+            try:
+                view.member(raw_entity)
+            except ValueError:
+                raise web.HTTPBadRequest(
+                    text="Select this consumer in Appliances settings first"
+                ) from None
+        plan = (
+            repository.state["plan"] if not lock.locked() and repository.state["enabled"] else None
+        )
+
+        def respond(authorized_plan):
+            """Render without borrowing any mutable appliance or repository service."""
+            document = view.document(
+                datetime.now(UTC),
+                authorized_plan is not None,
+                authorized_plan,
+                raw_entity=raw_entity,
             )
+            first_expiry = min(
+                (
+                    instant(row["request"]["expires_at"])
+                    for row in document["devices"]
+                    if row["request"]
+                ),
+                default=None,
+            )
+            return web.json_response(document), first_expiry
+
+        response, first_expiry = await asyncio.to_thread(respond, plan)
+        if first_expiry is not None and (
+            lock.locked()
+            or not repository.state["enabled"]
+            or repository.state["plan"] is not plan
+            or repository.pending_invalidation
+            or not view.same_inputs(lock.settings.appliances)
+            or datetime.now(UTC) >= min(first_expiry, instant(plan["valid_until"]))
+        ):
+            response, first_expiry = await asyncio.to_thread(respond, None)
+        if first_expiry is None:
+            mark_command_free(request)
+        return response
 
     async def mutate(request):
         """Validate exact operation schemas and finish each durable mutation before refreshing planning."""

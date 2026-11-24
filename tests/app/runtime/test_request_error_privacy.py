@@ -15,6 +15,7 @@ from open_energy_planner.forecast_quality import api as forecast_quality_api
 from open_energy_planner.forecast_quality.history import HistoryArchive
 from open_energy_planner.home_assistant.catalogue import HACatalogue
 from open_energy_planner.prices import api as prices_api
+from open_energy_planner.runtime.settings_reads import mark_command_free
 from open_energy_planner.savings import api as savings_api
 from open_energy_planner.savings.runtime import SavingsRuntime
 from open_energy_planner.storage.adapters.documents import SqlDocuments
@@ -49,7 +50,16 @@ def failure_route(kind, reject_operation, *, project_document=None):
     )
     service.ev = service
     if kind == "cycles":
-        cycles_api.register(app, service, repository, None, lock, service, service)
+        cycles_api.register(
+            app,
+            service,
+            repository,
+            None,
+            lock,
+            service,
+            service,
+            mark_command_free=mark_command_free,
+        )
         return (
             app,
             "POST",

@@ -183,8 +183,8 @@ def test_program_http_errors_and_planning_requests(service):
 
     from open_energy_planner.activities.api import EVENTS
     from open_energy_planner.activities.events import Events
-    from open_energy_planner.appliances.cycles.api import register
     from open_energy_planner.storage.adapters.activities import ActivityStore
+    from tests.app.appliance.support import register_appliance_routes
 
     async def scenario():
         """Use the real route admission and repository while observing only its public response."""
@@ -200,15 +200,7 @@ def test_program_http_errors_and_planning_requests(service):
         app[EVENTS] = events
         service.configure(ENTITY, True)
         service.set_manual_profile(ENTITY, 90, 0.6, service.revision)
-        register(
-            app,
-            service,
-            SimpleNamespace(state={"enabled": False, "plan": None}),
-            SimpleNamespace(refresh_async=refresh_async),
-            asyncio.Lock(),
-            SimpleNamespace(state={"points": []}),
-            SimpleNamespace(state={"stores": []}),
-        )
+        register_appliance_routes(app, service, live=SimpleNamespace(refresh_async=refresh_async))
         now = datetime.now(UTC)
         ready = {
             "entity_id": ENTITY,

@@ -68,6 +68,7 @@ from .runtime.diagnostics.planning_notifications import (
     explain_planning_problem,
     planning_notifications,
 )
+from .runtime.settings_reads import NO_COMMANDS, ApplicationStateLock, mark_command_free
 from .runtime.snapshot import create_snapshot_handler
 from .solar import api as solar_api
 from .solar.api import register as register_solar
@@ -154,7 +155,7 @@ def create_app(
     pending_contract_id = uuid4().hex
     bonus_history = BonusHistory()
     bonus_preview = BonusBudgetPreview()
-    lock = asyncio.Lock()
+    lock = ApplicationStateLock()
     setup_catalogue = HACatalogue()
     savings_mutation_lock = asyncio.Lock()
     planner = None
@@ -337,7 +338,7 @@ def create_app(
         try:
             return await handler(request)
         finally:
-            if repository.pending_invalidation:
+            if not request.get(NO_COMMANDS) and repository.pending_invalidation:
                 async with timed_lock(request, "revocation_wait", lock):
                     if repository.pending_invalidation:
                         try:
@@ -935,10 +936,13 @@ def create_app(
     register_assets(app, installation, demand, solar)
     from .demand.consumer_api import register as register_consumers
 
-    register_consumers(app, demand, lock, ev, thermal)
+    lock.bind_settings(appliances, demand, ev, thermal)
+    register_consumers(app, demand, lock, ev, thermal, mark_command_free=mark_command_free)
     from open_energy_planner.appliances.cycles.api import register as register_appliances
 
-    register_appliances(app, appliances, repository, live, lock, ev, thermal)
+    register_appliances(
+        app, appliances, repository, live, lock, ev, thermal, mark_command_free=mark_command_free
+    )
     from open_energy_planner.appliances.ev.api import register as register_ev
 
     register_ev(app, ev, setup_catalogue, repository, live, lock, thermal)

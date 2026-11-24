@@ -130,6 +130,7 @@ def test_ha_command_snapshot_attributes_waiting_settlement_to_its_own_phase(tmp_
                 "snapshot_bonus_history",
                 "snapshot_forecast_history",
                 "snapshot_demand",
+                "snapshot_projection_capture",
                 "snapshot_document",
                 "snapshot_json",
             } <= timings.keys()
