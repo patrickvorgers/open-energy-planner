@@ -51,6 +51,9 @@ def test_all_planning_dates_expose_daily_energy(app_page):
         expect(tooltip).to_contain_text("kWh")
         expect(tooltip).not_to_contain_text("SoC")
         expect(tooltip).to_contain_text("Totals cover this complete calendar day.")
+        expect(tooltip.locator(".chart-tooltip-period")).to_have_text(
+            "From 00:00 to 00:00 (next day)."
+        )
         snapshot = snapshots[identity]
         # The fixture starts at UTC midnight. Read independently archived kWh, not chart means.
         expected_import = sum(
@@ -105,7 +108,7 @@ def test_all_planning_dates_expose_daily_energy(app_page):
         )
         expect(tooltip).to_contain_text("Partial day. Totals cover only the shown planned period.")
         expect(tooltip.locator(".chart-tooltip-period")).to_be_in_viewport()
-        expect(tooltip.locator(".chart-tooltip-period")).to_contain_text("From ")
+        expect(tooltip.locator(".chart-tooltip-period")).to_have_text("From 00:00 to 06:00.")
         base = tooltip.locator("tr").filter(has_text="Household base: AC").locator("td").nth(1)
         expect(base).to_have_text("-1.26")
         totals = tooltip.locator(".chart-tooltip-total .chart-tooltip-value").all_text_contents()
