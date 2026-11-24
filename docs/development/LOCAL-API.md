@@ -15,6 +15,24 @@ HA OS exposes administration through authenticated HA ingress and pairs automati
 - `POST /v1/ack`: receipt of the current plan ID, never physical execution confirmation.
 - `GET /v1/savings?start=...&end=...`: read-only stored daily Savings once daily backfill has begun. `daily: true` identifies the three-scenario `totals`, independent `coverage`, bounded `days` and SQL `chart` contract. Days are complete local calendar periods within aware UTC query bounds. Current-day quarters are not published as a completed day. Internal continuation is omitted. Benefits sum only pairwise matching coverage and unavailable amounts remain null. Legacy `revision` reads retain their interval contract while temporary evidence remains. See [daily settlement](SAVINGS.md).
 
+### Plan status subscription
+
+`GET /v1/ha/plan-status/watch?cursor=...` uses the paired credential, pinned TLS
+where applicable and the release/build checks of the other synchronization
+routes. A missing or unknown cursor returns immediately. A matching cursor
+waits for a changed position or returns the same position after at most
+20 seconds. The response is a non-cacheable JSON object with one `cursor`
+field. The cursor is process-local and carries no plan contents.
+
+The integration subscribes before reading authoritative plan status. A change
+that happens during that read remains visible to the next subscription wait.
+On publication, revocation or reconnect it reconciles current state, downloads
+only a needed plan version and confirms that version after local acceptance.
+An idle reply with the same cursor does not cause another status read. When the
+subscription fails, the integration checks plan status on its recovery cadence.
+The local schedule still enforces the original command expiry independently.
+Measurement reports and Recorder requests use their own exchanges.
+
 EV endpoints share the same authenticated boundary:
 
 - `GET /v1/ev`: current vehicle/point configuration, fresh evidence and each vehicle's `charging_request`, separate from saved defaults.

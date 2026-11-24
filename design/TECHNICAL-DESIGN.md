@@ -519,6 +519,18 @@ After installation, HA OS connects automatically through the authenticated Super
 
 All HA metadata, Energy preferences, measurements and Recorder history reach the
 app through the integration. The app has no separate HA user access token, HA data client or Recorder connection. Its Supervisor client performs only the private bootstrap command. Integration-to-app HTTP still requires authentication.
+
+The integration subscribes to selected measurement entities and sends a current
+capture after selection changes and coalesced state events. A freshness
+heartbeat also checks stable states and preserves the original measurement
+timestamps. Recorder reads remain independent and request-driven. The app
+exposes a bounded authenticated watch on the existing connection. A wake
+cursor signals that authoritative plan status may have changed. The integration
+reads authority on initial connection, publication, revocation and reconnect,
+fetches only the needed version and acknowledges it after acceptance. Connection
+failure falls back to lightweight status checks. The integration still withdraws
+expired commands locally. See the [measurement contracts](../docs/development/HA-MEASUREMENT-SOURCES.md)
+and the [local API](../docs/development/LOCAL-API.md#plan-status-subscription).
 The product goal removes manual token handling, not credentials. UI ingress/session
 authentication remains separate from authentication of integration API calls.
 
