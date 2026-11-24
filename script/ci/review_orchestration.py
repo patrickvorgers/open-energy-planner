@@ -67,13 +67,13 @@ PROVIDER_BOT_LOGINS = (
     "kody-ai[bot]",
     "chatgpt-codex-connector[bot]",
 )
-GREPTILE_CREDIT_DENIAL = re.compile(
+GREPTILE_CREDIT_DENIAL = (
     r"Your organization has run out of review credits\. "
     r"\[Add credits\]\(https://app\.greptile\.com/-/switch-tenant\?"
     r"tenant=[a-zA-Z0-9_-]+&next=%2Fsettings%2Fbilling\) to resume code reviews\.\n\n"
     r"<!-- greptile-credit-pause:[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12} -->\n?"
 )
-PROVIDER_COMMAND = re.compile(
+PROVIDER_COMMAND = (
     r"(?m)^@(?:coderabbitai|kody|codex|greptileai|greptile)"
     r"(?:\s+(?:review(?: this draft| --force)?|start-review|rate limit))?\s*$"
 )
@@ -346,7 +346,7 @@ def greptile_credit_reply(row, command, sent):
     return (
         row["id"] > command
         and provider_comment(row, "greptile-apps[bot]", GREPTILE_BOT_ID, GREPTILE_APP_ID)
-        and GREPTILE_CREDIT_DENIAL.fullmatch(row["body"]) is not None
+        and re.fullmatch(GREPTILE_CREDIT_DENIAL, row["body"]) is not None
         and isinstance(row.get("updated_at"), str)
         and instant(row["created_at"]) >= instant(sent)
         and instant(row["created_at"]) == instant(row.get("updated_at"))
@@ -368,7 +368,7 @@ def require_credit_evidence(evidence, comments, *, published_id=None):
 
 def provider_command_comment(row):
     """Detect a provider command outside this controller's current publication."""
-    return not is_bot(row, GITHUB_ACTIONS_BOT_LOGIN) and PROVIDER_COMMAND.search(row["body"])
+    return not is_bot(row, GITHUB_ACTIONS_BOT_LOGIN) and re.search(PROVIDER_COMMAND, row["body"])
 
 
 def feedback_digest(comments):
