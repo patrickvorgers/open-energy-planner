@@ -3,6 +3,7 @@
 import logging
 from dataclasses import asdict, replace
 from datetime import UTC, datetime, timedelta
+from functools import partial
 from zoneinfo import ZoneInfo
 
 from open_energy_planner.demand.calculation.forecasting import live_forecast_grid, predict
@@ -704,24 +705,44 @@ class DemandRuntime:
             "request": self.request(now) or self.consumers.request(self.configuration, now),
         }
 
+    def capture_document(self, now, *, include_consumer_request=False):
+        """Capture history requests on their owner and defer forecast projection."""
+        pending = self.request(now)
+        if include_consumer_request and pending is None:
+            pending = self.consumers.request(self.configuration, now)
+        return partial(
+            demand_document,
+            self.forecast,
+            self.candidate,
+            self.comparison,
+            now,
+            {
+                "configuration": configuration_document(self.configuration),
+                "ridge_status": self.model_status,
+                "issue": self.issue or self.store.issue,
+                "history_issues": self.history_issues.copy(),
+                "history_quality": self.history_quality,
+                "model_selection": self.daily_selection,
+                "request": pending,
+            },
+        )
+
     def document(self, now):
-        """Expose current model, quality and requested history without inventing missing measurements."""
-        comparison = getattr(self, "comparison", None)
-        return {
-            "configuration": configuration_document(self.configuration),
-            "forecast": forecast_document(self.forecast, now=now),
-            "candidate": forecast_document(self.candidate, now=now),
-            "ridge_status": self.model_status,
-            "issue": self.issue or self.store.issue,
-            "history_issues": self.history_issues.copy(),
-            "history_quality": self.history_quality,
-            "model_selection": self.daily_selection,
-            "request": self.request(now),
-            "decision_comparison": {
-                **asdict(comparison),
-                "windows": [stamp.isoformat() for stamp in comparison.windows],
-                "improved": comparison.improved,
-            }
-            if comparison
-            else None,
+        """Expose current model, quality and requested history without inventing measurements."""
+        return self.capture_document(now)()
+
+
+def demand_document(forecast, candidate, comparison, now, status):
+    """Project immutable demand issues into the visible planning window."""
+    return {
+        **status,
+        "forecast": forecast_document(forecast, now=now),
+        "candidate": forecast_document(candidate, now=now),
+        "decision_comparison": {
+            **asdict(comparison),
+            "windows": [stamp.isoformat() for stamp in comparison.windows],
+            "improved": comparison.improved,
         }
+        if comparison
+        else None,
+    }

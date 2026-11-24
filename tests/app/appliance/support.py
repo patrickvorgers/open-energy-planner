@@ -1,13 +1,27 @@
-"""Shared synthetic appliance history inputs and bounded-upload helpers without scenario imports."""
+"""Shared synthetic appliance history inputs and HTTP fixture helpers without scenario imports."""
 
 from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
 
 from open_energy_planner.appliances.cycles import evidence, history
+from open_energy_planner.appliances.cycles.api import register
 from open_energy_planner.appliances.cycles.model import instant
+from open_energy_planner.runtime.settings_reads import ApplicationStateLock, mark_command_free
 
 NOW = datetime(2026, 10, 29, 12, tzinfo=UTC)
 ENTITY = "sensor.washer_energy"
 POWER = "sensor.washer_power"
+
+
+def register_appliance_routes(app, service, *, live=None):
+    """Register real read and write routes around the same committed view as the composed app."""
+    repository = SimpleNamespace(state={"enabled": False, "plan": None}, pending_invalidation=False)
+    demand = SimpleNamespace(consumers=service.consumers, forecast=None)
+    ev = SimpleNamespace(state={"points": []})
+    thermal = SimpleNamespace(state={"stores": []})
+    lock = ApplicationStateLock()
+    lock.bind_settings(service, demand, ev, thermal)
+    register(app, service, repository, live, lock, ev, thermal, mark_command_free=mark_command_free)
 
 
 def readings(*, cycles=2):

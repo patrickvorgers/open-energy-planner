@@ -288,11 +288,19 @@ There is no physical-device driver hidden in the HTTP UI. The app's static pages
 
 ## Keep calculation work outside the interface loop
 
+Each module and API owns one responsibility with an explicit owner for its data
+and workflow. Separate reads, updates and calculation when their consistency
+needs or cadence differ. Keep changes that share an atomic invariant in the
+same transaction, with the owning backend coordinating validation and publication.
+
 Snapshot reads capture immutable settlement source definitions under the state
 lock, then await historical database I/O outside that lock. The handler reacquires
-the lock afterward to refresh validity and read current state. A pause or source
-change therefore remains responsive and cannot be hidden by an older captured
-screen state. Historical transfers also read outside the state lock and reject
+the lock afterward to refresh validity and capture the current read inputs.
+Forecast series, appliance evidence and plan projection then run on a worker,
+together with JSON encoding. After this worker completes, the loop rechecks the
+plan, enable state and command deadlines before returning. A pause or source
+change can take effect during projection and is reflected in the response.
+Historical transfers also read outside the state lock and reject
 source changes made during validation before admitting a write. Financial
 mutations retain their separate serialization lock. Concurrent readers publish
 the cached historical plan identity and its bindings as one pair and use their
@@ -325,7 +333,13 @@ ownership or disposing its engine.
 Appliance editors request `/v1/consumers?view=settings`. This projection retains
 selection versions, Energy choices and specialized-meter ownership without
 transferring model forecasts that these editors do not use. The default consumer
-response retains complete forecast evidence for existing clients.
+response retains complete forecast evidence for existing clients. Both consumer
+and appliance reads capture the latest published view without acquiring the
+shared state lock. The app publishes their inputs together after a serialized
+state operation, when committed settings and ownership are installed. A read
+during a save can finish from the preceding complete view. Version validation
+and persistence remain inside the write boundary. Appliance start requests are
+checked again against current validity before the read returns.
 
 Live HTTP and background refresh owners await `LiveInputs.refresh_async` or
 `receive_async` while retaining the application state lock. The event loop first

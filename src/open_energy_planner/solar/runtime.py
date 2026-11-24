@@ -1169,7 +1169,7 @@ class SolarRuntime:
             "request": self.request(now),
         }
 
-    def document(self, now, *, series=False):
+    def document(self, now, *, series=False, include_learning=True):
         """Expose active prediction, per-source candidates and actionable status without recomputation."""
         forecast = forecast_document(self.forecast, series=False)
         candidate = forecast_document(self.candidate, series=False)
@@ -1212,18 +1212,7 @@ class SolarRuntime:
                 for model in self.calibrations
             ],
             "calibration_status": statuses,
-            "learning": {
-                source_id: {
-                    **{
-                        key: value
-                        for key, value in document(row.summary).items()
-                        if key not in ("excluded_periods", "diagnostic_periods")
-                    },
-                    "candidate_model": row.model.schema if row.model else None,
-                    "audit_reference": row.archive_reference,
-                }
-                for source_id, row in self.learning.items()
-            },
+            "learning": learning_document(self.learning) if include_learning else {},
             "source_selection": self.source_selection,
             "ha_issues": self.ha_issues,
             "source_models": {
@@ -1248,3 +1237,21 @@ class SolarRuntime:
                 self.histories,
             ),
         }
+
+
+def learning_document(learning):
+    """Summarize model evidence without traversing archived diagnostic interval series."""
+    return {
+        source_id: {
+            **{
+                key: value
+                for key, value in document(
+                    replace(row.summary, excluded_periods=(), diagnostic_periods=())
+                ).items()
+                if key not in ("excluded_periods", "diagnostic_periods")
+            },
+            "candidate_model": row.model.schema if row.model else None,
+            "audit_reference": row.archive_reference,
+        }
+        for source_id, row in learning.items()
+    }

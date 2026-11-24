@@ -1,15 +1,16 @@
 """Authenticated individual forecast choices. All measurement membership belongs to HA Energy."""
 
+import asyncio
 from datetime import UTC, datetime
 
 from aiohttp import web
 
-from open_energy_planner.appliances.forecasting import COMPOSITE_MODEL_ID, parse_selection
+from open_energy_planner.appliances.forecasting import parse_selection
 
 from ..storage.writes import complete_write
 
 
-def register(app, demand, lock, ev, thermal):
+def register(app, demand, lock, ev, thermal, *, mark_command_free):
     """Expose existing runtime status and serialize settings writes with forecast admission."""
 
     def view(request):
@@ -20,21 +21,21 @@ def register(app, demand, lock, ev, thermal):
         return selected
 
     async def state(request):
-        """Return source choices and estimated component forecasts without issuing commands."""
-        async with lock:
-            document = demand.consumers.document(
-                forecasts=view(request) != "settings", now=datetime.now(UTC)
-            )
-            document["charging_meters"] = sorted(
-                point["energy_entity"] for point in ev.state["points"]
-            )
-            document["thermal_meters"] = sorted(
-                store["energy_entity"] for store in thermal.state["stores"]
-            )
-            document["active_in_planning"] = bool(
-                demand.forecast and demand.forecast.model == COMPOSITE_MODEL_ID
-            )
-            return web.json_response(document)
+        """Project committed choices and forecasts independently of an in-flight save."""
+        forecasts = view(request) != "settings"
+        published = lock.settings
+        now = datetime.now(UTC)
+
+        def respond():
+            """Encode only the owned settings read view."""
+            return web.json_response(published.consumer_document(forecasts=forecasts, now=now))
+
+        return await asyncio.to_thread(respond)
+
+    async def read(request):
+        """Consumer settings do not expose commands or wait for plan revocation persistence."""
+        mark_command_free(request)
+        return await state(request)
 
     async def save(request):
         """Validate selected sources against current Energy metadata, retaining historical versions."""
@@ -69,5 +70,5 @@ def register(app, demand, lock, ev, thermal):
             ) from None
         return await state(request)
 
-    app.router.add_get("/v1/consumers", state)
+    app.router.add_get("/v1/consumers", read)
     app.router.add_put("/v1/consumers", save)

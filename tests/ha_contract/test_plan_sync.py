@@ -8,7 +8,7 @@ from types import SimpleNamespace
 from aiohttp.test_utils import TestClient, TestServer
 
 from open_energy_planner.app import create_app
-from open_energy_planner.appliances.forecasting import ConsumerForecasts
+from open_energy_planner.appliances.forecasting import ConsumerForecasts, ConsumerView
 from open_energy_planner.build_info import BUILD_INFO
 from open_energy_planner.demand.runtime import DemandRuntime
 from open_energy_planner.home_assistant import plan_api
@@ -168,8 +168,9 @@ def test_service_requests_skip_dashboard_and_command_assembly(tmp_path, monkeypa
             TestServer(create_app(tmp_path, TOKEN, solver=ImmediateSolver()))
         ) as client:
             await published_plan(client, headers)
-            for runtime_type in (DemandRuntime, ConsumerForecasts, SolarRuntime):
+            for runtime_type in (DemandRuntime, ConsumerForecasts, ConsumerView, SolarRuntime):
                 monkeypatch.setattr(runtime_type, "document", unrelated_projection)
+            monkeypatch.setattr(DemandRuntime, "capture_document", unrelated_projection)
             monkeypatch.setattr(plan_api, "execution_document", unrelated_projection)
             async with client.get("/v1/readiness") as response:
                 assert response.status == 401
