@@ -1,5 +1,5 @@
 site_name: Open Energy Planner
-site_description: Understand your energy. Make your first local plan.
+site_description: Local energy management for Home Assistant with battery optimization, appliance scheduling, dynamic electricity tariffs and solar forecasts.
 site_url: https://patrickvorgers.github.io/open-energy-planner/
 docs_dir: ..
 site_dir: ../../.local/documentation/open-energy-planner

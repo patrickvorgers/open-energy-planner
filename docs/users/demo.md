@@ -4,7 +4,7 @@ Run the actual planner with synthetic inputs on your computer. This route does n
 
 This optional sandbox is separate from [installing and configuring OEP with Home Assistant](first-plan.md). Use it only when you want synthetic inputs without integration. You do not need it to get a first plan from your own installation. For a separate laboratory with simulated Home Assistant devices, see the [persistent test environment](../development/USER-TEST-ENVIRONMENT.md).
 
-## Get the development preview
+## Set up the standalone demo
 
 You need repository access, Git, Python 3.12 or later, and a terminal. If you already have a checkout, open a terminal at its root and skip the clone.
 
