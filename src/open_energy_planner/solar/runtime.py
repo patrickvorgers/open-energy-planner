@@ -667,6 +667,68 @@ class SolarRuntime:
         }
         return all(ends.get(source.source_id, now) >= end for source in self.configuration.sources)
 
+    def _build_ha_only_forecast(self, configuration, location, now, ha_predictions):
+        """Archive an explicit Home Assistant forecast when no weather fallback is available."""
+        energies, issues = ha_energies(configuration, None, ha_predictions, now)
+        if issues or len(energies) != len(configuration.sources):
+            raise ValueError("HA solar forecast unavailable without weather fallback")
+        forecast = SolarForecast(
+            configuration.version,
+            location,
+            now,
+            "none",
+            limit_ac_production(
+                configuration, tuple(row for rows in energies.values() for row in rows)
+            ),
+            model="ha-production-v1",
+            quality="provider_estimate",
+            valid_until=min(
+                prediction.provider_refreshed_at + HA_REFRESH_MAX_AGE
+                for source in configuration.sources
+                for prediction in ha_predictions[source.entity_id]
+            ),
+        )
+        statuses = {
+            source.source_id: {
+                "requested": source.forecast_source,
+                "active": ForecastSource.HOME_ASSISTANT,
+                "model": forecast.model,
+                "mae_kwh": {},
+                "complete_days": 0,
+                "required_days": MIN_ACCURACY_DAYS,
+                "policy": SOURCE_POLICY,
+                "issue": None,
+            }
+            for source in configuration.sources
+        }
+        ha_references = {
+            entity: [row.version for row in providers]
+            for entity, providers in ha_predictions.items()
+        }
+        self.store.archive(
+            "forecast",
+            forecast.version,
+            {
+                "forecast": forecast_document(forecast),
+                "source_selection": statuses,
+                "ha_references": ha_references,
+            },
+        )
+        self.store.archive(
+            "quality-source-models",
+            forecast.version,
+            {source.source_id: forecast.model for source in configuration.sources},
+        )
+        self.store.archive(
+            "source-choice",
+            forecast.version,
+            {
+                "sources": statuses,
+                "ha_references": ha_references,
+            },
+        )
+        return forecast, statuses
+
     def build(self, job):
         """Compute and archive exact physical output plus shadow corrections outside the event loop."""
         from open_energy_planner.solar.calculation.predictor import PVWattsPredictor
@@ -686,65 +748,8 @@ class SolarRuntime:
             run_evidence_revision,
         ) = job
         if not weather:
-            energies, issues = ha_energies(configuration, None, ha_predictions, now)
-            if issues or len(energies) != len(configuration.sources):
-                raise ValueError("HA solar forecast unavailable without weather fallback")
-            forecast = SolarForecast(
-                configuration.version,
-                location,
-                now,
-                "none",
-                limit_ac_production(
-                    configuration, tuple(row for rows in energies.values() for row in rows)
-                ),
-                model="ha-production-v1",
-                quality="provider_estimate",
-                valid_until=min(
-                    prediction.provider_refreshed_at + HA_REFRESH_MAX_AGE
-                    for source in configuration.sources
-                    for prediction in ha_predictions[source.entity_id]
-                ),
-            )
-            statuses = {
-                source.source_id: {
-                    "requested": source.forecast_source,
-                    "active": ForecastSource.HOME_ASSISTANT,
-                    "model": forecast.model,
-                    "mae_kwh": {},
-                    "complete_days": 0,
-                    "required_days": MIN_ACCURACY_DAYS,
-                    "policy": SOURCE_POLICY,
-                    "issue": None,
-                }
-                for source in configuration.sources
-            }
-            self.store.archive(
-                "forecast",
-                forecast.version,
-                {
-                    "forecast": forecast_document(forecast),
-                    "source_selection": statuses,
-                    "ha_references": {
-                        entity: [row.version for row in providers]
-                        for entity, providers in ha_predictions.items()
-                    },
-                },
-            )
-            self.store.archive(
-                "quality-source-models",
-                forecast.version,
-                {source.source_id: forecast.model for source in configuration.sources},
-            )
-            self.store.archive(
-                "source-choice",
-                forecast.version,
-                {
-                    "sources": statuses,
-                    "ha_references": {
-                        entity: [row.version for row in providers]
-                        for entity, providers in ha_predictions.items()
-                    },
-                },
+            forecast, statuses = self._build_ha_only_forecast(
+                configuration, location, now, ha_predictions
             )
             return key, forecast, (), None, None, statuses, {}, {}
         predictor = PVWattsPredictor()
