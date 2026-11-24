@@ -17,8 +17,6 @@ from open_energy_planner.contracts.planning_basis import ContractBasisSource
 from open_energy_planner.contracts.storage import ContractStore
 from open_energy_planner.core.units import BYTES_PER_KIB
 from open_energy_planner.home_assistant.observation_wire import (
-    configuration_document,
-    observation_status,
     parse_configuration,
     parse_report,
 )
@@ -47,19 +45,13 @@ from .frontend.assets import is_public
 from .frontend.assets import register as register_assets
 from .frontend.session import register as register_session
 from .home_assistant.catalogue import HACatalogue
-from .home_assistant.market_prices import price_request
 from .home_assistant.source_choices import configured_sources
-from .installation.api import catalogue as installation_catalogue
 from .installation.api import register as register_installation
-from .installation.api import warnings as installation_warnings
 from .installation.api.setup import register as register_setup
 from .installation.basis import InstallationBasisSource
 from .installation.commands import PLAN_SCHEMA_VERSION
 from .installation.storage import (
     InstallationStore,
-)
-from .installation.storage import (
-    document as installation_document,
 )
 from .installation.storage import (
     sources as installation_sources,
@@ -76,6 +68,7 @@ from .runtime.diagnostics.planning_notifications import (
     explain_planning_problem,
     planning_notifications,
 )
+from .runtime.snapshot import create_snapshot_handler
 from .solar import api as solar_api
 from .solar.api import register as register_solar
 from .solar.runtime import SolarRuntime
@@ -745,152 +738,8 @@ def create_app(
     register_prices(app, lambda: prices, contracts, live, lock, daily_prices, price_timezone)
 
     async def snapshot(request):
-        """Capture settlement inputs under the state lock and await their archive read outside it.
-
-        Reacquire the lock to refresh live validity and assemble current state, so
-        intervening controls are reflected rather than overwritten by captured state.
-        """
-        async with timed_lock(request, "snapshot_capture_wait", lock):
-            pending_settlement = settlement_request()
-        with phase(request, "snapshot_settlement"):
-            settlement = await pending_settlement
-        async with timed_lock(request, "snapshot_state_wait", lock):
-            with phase(request, "snapshot_appliance_tick"):
-                cancellation = await complete_write(
-                    appliances.tick,
-                    datetime.now(UTC),
-                    repository.state["enabled"],
-                    repository.state["plan"],
-                )
-                if cancellation is not None:
-                    raise cancellation
-            if live:
-                with phase(request, "snapshot_live_refresh"):
-                    await live.refresh_async()
-            with phase(request, "snapshot_bonus_history"):
-                pending_history = contract_api.history_request()
-            with phase(request, "snapshot_forecast_history"):
-                quality_request = (
-                    forecast_history_request(datetime.now(UTC))
-                    if source == "home_assistant"
-                    else None
-                )
-            with phase(request, "snapshot_demand"):
-                demand_state = {
-                    **demand.document(datetime.now(UTC)),
-                    "request": demand.request(datetime.now(UTC))
-                    or demand.consumers.request(demand.configuration, datetime.now(UTC)),
-                }
-            with phase(request, "snapshot_document"):
-                devices = installation_catalogue(
-                    installation, solar, live.current_snapshot if live else None
-                )
-                if installation_basis or installation.current is not None:
-                    devices = setup_catalogue.devices(devices)
-                if devices is None:
-                    devices = (
-                        []
-                        if live
-                        else [
-                            {
-                                "id": unit.device_id,
-                                "kind": "battery",
-                                "name": "Battery",
-                                "configured": True,
-                                "can_follow_grid": unit.can_follow_grid,
-                            }
-                            for unit in synthetic_batteries
-                        ]
-                    )
-                from .installation.commands import execution_document
-
-                execution_only = request.headers.get("X-OEP-View") == "commands"
-                document = {
-                    "release": RELEASE,
-                    "settlement_request": settlement,
-                    "savings_status": {
-                        "issue": savings_runtime.issue,
-                        "action_required": savings_runtime.attention,
-                    },
-                    **repository.state,
-                    "plan": execution_document(repository.state["plan"])
-                    if execution_only
-                    else {
-                        key: value
-                        for key, value in repository.state["plan"].items()
-                        if key
-                        not in {
-                            "reference_forecast",
-                            "reference_forecast_issue",
-                            "comparison_bindings",
-                            "comparison_names",
-                        }
-                    }
-                    if repository.state["plan"]
-                    else None,
-                    "source": source,
-                    "market_price_request": price_request(prices, datetime.now(UTC))
-                    if source == "home_assistant"
-                    else None,
-                    "forecast_quality_request": quality_request,
-                    "demand": demand_state,
-                    "consumers": demand.consumers.document(now=datetime.now(UTC)),
-                    "appliances": appliances.document(
-                        datetime.now(UTC), repository.state["enabled"], repository.state["plan"]
-                    ),
-                    "ev": ev.document(
-                        datetime.now(UTC),
-                        (setup_catalogue.value or {}).get("timezone", "UTC"),
-                        setup_catalogue.value,
-                        repository.state["plan"],
-                    ),
-                    "solar": solar.document(datetime.now(UTC)),
-                    "thermal": thermal.document(
-                        datetime.now(UTC), setup_catalogue.value, repository.state["plan"]
-                    ),
-                    "installation": {
-                        "configuration": installation_document(installation.current),
-                        "issue": installation.issue,
-                        "devices": devices,
-                        "warnings": installation_warnings(installation, solar),
-                        "setup_discovery_requested": setup_catalogue.refresh_status()["id"],
-                        "setup_source_entities": configured_sources(
-                            live.configuration if live else None, ev.state, thermal.state
-                        ),
-                        "source_choices_requested": setup_catalogue.choices.pending(
-                            datetime.now(UTC)
-                        ),
-                    },
-                    "bonus_history": {
-                        "request": {
-                            **pending_history.document(),
-                            "version": pending_history.version,
-                        }
-                        if pending_history
-                        else None,
-                        "issue": bonus_counters.issue
-                        or (contract_api.history_issue if pending_history else None),
-                    },
-                    "config_revision": live.configuration.revision
-                    if live and live.configuration
-                    else "demo-1",
-                    "measurement_config": configuration_document(live.configuration)
-                    if live and live.configuration
-                    else None,
-                    "observations": observation_status(live.configuration, live.report)
-                    if live
-                    else None,
-                    "plan_invalidated": bool(live and repository.state["plan"] is None),
-                    "planning": {
-                        "status": planner.status,
-                        "reason": planner.reason,
-                        "requested_snapshot_id": planner.latest.snapshot_id
-                        if planner.latest
-                        else None,
-                    },
-                }
-            with phase(request, "snapshot_json"):
-                return web.json_response(document)
+        """Dispatch once the snapshot's app-owned services have been registered."""
+        return await snapshot_handler(request)
 
     async def enabled(request):
         """Persist explicit enable intent and request a fresh round for a new resume request."""
@@ -1061,6 +910,7 @@ def create_app(
 
     app.router.add_get("/v1/plans", plan_history)
     app.router.add_get("/v1/plans/{plan_id}", archived_plan)
+
     app.router.add_get("/v1/snapshot", snapshot)
 
     app.router.add_put("/v1/enabled", enabled)
@@ -1207,6 +1057,29 @@ def create_app(
         lock,
         satellite_factory,
         weather_documents=weather_store.documents,
+    )
+    snapshot_handler = create_snapshot_handler(
+        lock=lock,
+        now=lambda: datetime.now(UTC),
+        source=source,
+        repository=repository,
+        settlement_request=settlement_request,
+        savings_runtime=savings_runtime,
+        live=live,
+        current_prices=lambda: prices,
+        contract_api=contract_api,
+        bonus_counters=bonus_counters,
+        forecast_history_request=forecast_history_request,
+        demand=demand,
+        appliances=appliances,
+        ev=ev,
+        solar=solar,
+        thermal=thermal,
+        installation=installation,
+        installation_basis=installation_basis,
+        setup_catalogue=setup_catalogue,
+        synthetic_batteries=synthetic_batteries,
+        planner=planner,
     )
     register_lifecycle(app, RELEASE, source)
     return app

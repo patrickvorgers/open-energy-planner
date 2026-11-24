@@ -115,9 +115,9 @@ async def running_chain(
             if live and fixture_devices:
                 from unittest.mock import patch
 
-                from open_energy_planner import app as app_module
+                from open_energy_planner.runtime import snapshot as snapshot_module
 
-                catalogue = app_module.installation_catalogue
+                catalogue = snapshot_module.installation_catalogue
 
                 def fixture_catalogue(store, solar, snapshot=None):
                     """Declare the test battery only when no real installation settings exist."""
@@ -136,7 +136,7 @@ async def running_chain(
                     )
 
                 stack.enter_context(
-                    patch.object(app_module, "installation_catalogue", fixture_catalogue)
+                    patch.object(snapshot_module, "installation_catalogue", fixture_catalogue)
                 )
             runner = web.AppRunner(
                 create_app(
