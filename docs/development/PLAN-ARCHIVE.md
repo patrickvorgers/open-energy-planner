@@ -39,6 +39,9 @@ strategy, original inputs, independently checked economics and expected flows ar
 preserved without rounding. Reconstruction verifies hashes and bounds record depth.
 Retention follows the age policy below. Schema version 1 identifies the content-addressed graph.
 An unsupported version fails startup instead of clearing or guessing at history.
+The [one-time wire schema 3 update](INSTALLATION-PLANNING.md#one-time-grid-command-format-update)
+re-encodes the stored grid command and rehashes the affected content while
+preserving each plan's identity and evidence.
 
 Planning's `view=plan` and `view=simulations` reads select their required top-level
 and snapshot fields in SQL before decoding payloads. Omitted model/training and

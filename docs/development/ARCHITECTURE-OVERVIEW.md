@@ -193,7 +193,7 @@ flowchart TD
     QUEUE --> SERVICE["PlanningService<br/>Calculate a candidate using the snapshot"]
     SERVICE --> SOLVE["optimization/adapters/process/<br/>Solve in the isolated native HiGHS worker"]
     SOLVE --> CHECK["installation/validation.py<br/>Recompute balances, limits and financial results"]
-    CHECK -->|Valid candidate| MAP["CommandMapper<br/>Build the complete command document"]
+    CHECK -->|Valid candidate| MAP["CommandMapper<br/>Build device commands and grid control mode"]
     MAP --> PUBLISH["PlanningCoordinator and app publication<br/>Check validity, archive and expose the plan"]
     PUBLISH --> PLAN["Published plan"]
     CHECK -->|Rejected candidate| STATUS["Planning status and diagnostics<br/>Readiness, activity and notification reasons"]
@@ -251,6 +251,7 @@ flowchart TD
     QUALITY --> READ
     SAVINGS --> READ
     READ --> UI["web/pages/ and web/public/<br/>Planning, Forecast Quality, Savings and settings"]
+    READ -->|Selected plan grid control mode| OPTIMIZER["Planning Optimizer<br/>Zero on the meter time strip"]
     UI -->|Validated configuration mutations through API| SETTINGS["Domain configuration owners"]
     SETTINGS --> LIVE["Live planning inputs"]
 ```

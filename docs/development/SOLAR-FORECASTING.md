@@ -135,7 +135,7 @@ inverter share its cap. Different inverters retain independent caps. Night is ze
 from solar geometry. Missing radiation is not zero sunlight.
 
 The [configured installation path](INSTALLATION-PLANNING.md) uses canonical
-per-source DC, local converter/battery links and per-device schema-2 commands.
+per-source DC, local converter/battery links and per-device schema-3 commands.
 It applies conversion losses and shared ratings at each declared local bus,
 including hybrid PV/battery connections. No physical driver is implied.
 Original source IDs, DC/AC forecasts and configuration remain archived evidence.

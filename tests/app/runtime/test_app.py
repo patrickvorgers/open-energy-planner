@@ -1,6 +1,7 @@
 """Real HTTP, durable demo state and identical control retry semantics."""
 
 import asyncio
+from contextlib import closing
 from datetime import timedelta
 
 import pytest
@@ -10,22 +11,26 @@ from aiohttp import ClientSession, web
 
 from open_energy_planner.app import create_app
 from open_energy_planner.storage.adapters.lifecycle.sqlalchemy import SqlPlanRepository
+from tests.database.support.archive import read_plan, read_state
 from tests.ha_contract.support.commands import command_plan
 
 TOKEN = "local-test-only-0123456789abcdef"
 
 
 def test_demo_restart_retains_plan_intent_and_immutable_previous_plans(tmp_path):
-    """Restart stored demo state. Retain enable intent/current identity and the original archived plan unchanged."""
-    first = SqlPlanRepository(tmp_path)
+    """Start the app again with current-schema commands and retain the active plan and disabled intent."""
     original = command_plan()
-    first.state["plan"] = original
-    first.state["enabled"] = False
-    first.save()
-    loaded = SqlPlanRepository(tmp_path)
-    assert loaded.state["plan"] == original
-    assert loaded.state["enabled"] is False
-    assert loaded.get_plan(original["plan_id"]) == original
+    original["input_sha256"] = "a" * 64
+    with closing(SqlPlanRepository(tmp_path)) as first:
+        first.state.update(plan=original, enabled=False)
+        first.save()
+
+    with closing(SqlPlanRepository(tmp_path)) as restarted:
+        create_app(tmp_path, TOKEN, database_engine=restarted.engine)
+        loaded = read_state(tmp_path)
+        assert loaded["plan"] == original
+        assert loaded["enabled"] is False
+    assert read_plan(tmp_path, original["plan_id"]) == original
 
 
 def test_short_token_is_rejected(tmp_path):

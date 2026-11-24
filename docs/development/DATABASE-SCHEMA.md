@@ -285,18 +285,18 @@ and source-to-sink flow facades are not an alternate current JSON contract. Each
 battery, inverter, solar, EV and thermal outcomes. Original `independent_costs`,
 bonus results, immutable input hash and version evidence remain auditable.
 
-Schema-2 `steps[].devices` contains authoritative typed per-device commands.
-There is no scalar `battery_power_w` execution fallback. Original billing flows
+Schema-3 `steps[].devices` contains authoritative typed per-device commands.
+`steps[].grid_control_mode` is `zero_grid` or `inactive` and is stored in
+both the full plan record and the detached historical context. Original billing flows
 remain separate from merged control steps. Appliance schedules, EV session
 context and thermal context retain their execution safeguards.
 
-Previously stored plans keep their exact original JSON, hashes, IDs, activation
-history and measurement/configuration evidence. Archive reconstruction and
-read-only history can return those documents without recreating old solver
-classes, rerunning optimization or converting them to today's shape. Unsupported
-old execution schemas are not sent as executable advice. This cleanup requires
-no table, column, index or data migration and never rewrites historical plan
-content. Archive schema version 1 remains unchanged.
+The [one-time command format update](INSTALLATION-PLANNING.md#one-time-grid-command-format-update)
+replaces former boolean grid fields and rehashes the changed records and
+contexts. It preserves plan IDs, activation history, and measurement/configuration
+evidence. Archive schema version 1 still describes the same SQL tables, columns
+and indexes. Read-only history reconstructs the stored documents directly.
+Executable advice requires the current plan wire schema.
 
 ### `oep_archive_meta`
 

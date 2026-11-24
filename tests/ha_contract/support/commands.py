@@ -10,7 +10,7 @@ def command_plan(now=None, powers=(-1000, None, 0), seconds=30):
     """Declare current-schema battery commands without invoking production planning."""
     now = now or datetime.now(UTC)
     return {
-        "schema": 2,
+        "schema": 3,
         "device_commands": True,
         "release": RELEASE,
         "plan_id": str(uuid4()),
@@ -23,7 +23,7 @@ def command_plan(now=None, powers=(-1000, None, 0), seconds=30):
             {
                 "start": (now + timedelta(seconds=seconds * index)).isoformat(),
                 "end": (now + timedelta(seconds=seconds * (index + 1))).isoformat(),
-                "grid_active": power is None,
+                "grid_control_mode": "zero_grid" if power is None else "inactive",
                 "devices": {
                     "battery": {
                         "kind": "battery",

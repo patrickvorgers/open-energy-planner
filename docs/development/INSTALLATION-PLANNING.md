@@ -259,9 +259,35 @@ PV quantity when billing boundaries split intervals. Original forecast and
 configuration versions remain in archived planning input. Neither active learned
 models nor historical plans are silently recomputed by this change.
 
-All executable plans use wire schema 2. The integration rejects schema 1 and requires complete per-device commands. Synthetic development planning uses the same installation model. Historical documents remain unchanged in the archive. A complete schema-2
-plan contains the same configured device/kind set at every step. The HA integration
-also checks it against the app's catalogue before accepting the plan.
+All executable plans use wire schema 3. Each step includes `grid_control_mode`,
+either `zero_grid` or `inactive`, and the same configured device/kind set
+throughout the plan. The integration checks the catalogue and requires a battery
+in `follow_grid_target` exactly when the grid mode is `zero_grid`. The Grid
+target is 0 W for that mode and inapplicable during `inactive`. The Optimizer
+strip reads the selected plan's mode directly. Synthetic development planning
+uses the same installation model and wire contract.
+
+#### One-time grid command format update
+
+1. Stop OEP and any other archive writer. Keep the previous matched app and
+   integration and take a consistent backup of the active database and OEP
+   configuration. For SQLite, preserve a consistent copy that includes any
+   committed WAL contents. For a database server, use its consistent backup procedure.
+2. From the new source checkout with OEP installed, run
+   `python -m script.app.convert_grid_control_mode DATA_DIRECTORY`. Use the
+   existing OEP data directory with its `archive-backend.json`. The tool checks
+   archive content hashes and reports affected plans and contexts. Compare the
+   counts with the expected archive before proceeding.
+3. Run the same command with `--apply`. One transaction changes the old boolean
+   to the mode, updates schema-2 plan documents to schema 3 and verifies the
+   rewritten content. Run the command without `--apply` again to confirm both
+   counts are zero. Plan IDs, activation history, input hashes, costs and
+   energy flows are preserved.
+4. Start the new app and load the integration from the same build. The release
+   identity check blocks new commands during a mismatched deployment. Verify a
+   new active plan, the Grid virtual sensors and a retained plan in Planning.
+   Restore the database and configuration backup and both previous components
+   together if you need to roll back. The conversion has no startup entry point.
 
 Each battery gets its own virtual power target. Only controllable PV sources get
 an enabled-target entity. Configured devices remain visible before a plan exists,

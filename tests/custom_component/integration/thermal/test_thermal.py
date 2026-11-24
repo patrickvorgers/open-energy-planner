@@ -441,7 +441,7 @@ def test_coordinator_outage_and_local_unavailability_emit_guarded_stop_without_r
                 "wallbox", "ev", power_w=7000, vehicle_id="car", session_id="connected-session"
             )
             accepted = Projection(
-                "active", Command(False, (thermal_target, battery_target, vehicle_target))
+                "active", Command("inactive", (thermal_target, battery_target, vehicle_target))
             )
             peer.schedule = SimpleNamespace(
                 document={"thermal_context": {"revision": "a" * 64, "devices": [deepcopy(row)]}},
@@ -677,7 +677,7 @@ def test_optional_thermal_projection_fault_keeps_real_mixed_plan_and_guards_only
         )
         projection = {"configuration_version": "b" * 64, "revision": "a" * 64, "devices": [row]}
         plan = {
-            "schema": 2,
+            "schema": 3,
             "release": RELEASE,
             "plan_id": "mixed-plan",
             "config_revision": "installation-revision",
@@ -706,7 +706,7 @@ def test_optional_thermal_projection_fault_keeps_real_mixed_plan_and_guards_only
                 {
                     "start": (now - timedelta(seconds=1)).isoformat(),
                     "end": (now + timedelta(minutes=15)).isoformat(),
-                    "grid_active": False,
+                    "grid_control_mode": "inactive",
                     "devices": {
                         "battery": {"kind": "battery", "power_w": -500},
                         "wallbox": {

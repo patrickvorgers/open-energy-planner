@@ -5,6 +5,7 @@ import {calendarDays, calendarTime, calendarDayStart} from "./chart_days.js";
 import {money, configuredRate, when, dateLabel, localDate, localInstant, nextDate, percentage, optionLabel, planName, useHomeAssistantTimezone, watchSourceNames} from "./display.js";
 import {BATTERY_FLOW_GROUPS, batteryPlanSeries, batteryRouteValues, energyBalances, householdForecastEnergy, quarterBalanceSeries, balancePeriodEnergy, QUARTER_MILLISECONDS} from "./balance.js";
 import {bindSettingsActions, sessionResponse} from "./settings-actions.js";
+import {gridModeStrip, GRID_MODE_TICK_PADDING, ZERO_GRID_LABEL} from "./grid-mode-strip.js";
 bindSettingsActions();
 const $ = (id) => document.getElementById(id);
 const savingsPage = createSavingsView($("savings-view"), api);
@@ -371,7 +372,7 @@ async function loadDailyPrices(instance) {
  * sharing a stack and includes zero. Rendering applies the selected planning range
  * without category-style end padding. Interval timestamps already determine bar widths.
  */
-function chart(id, series, {utcDays = false, calendarDates = false, unit = "", minimum = null, balance = false, preserveVisibility = false, deferRange = false} = {}) {
+function chart(id, series, {utcDays = false, calendarDates = false, unit = "", minimum = null, balance = false, preserveVisibility = false, deferRange = false, gridSteps = null} = {}) {
     let balanceTime = null, priceHoverTime = null;
     const batteryPlan = id === "battery-plan-chart";
     if (balance) series = quarterBalanceSeries(series);
@@ -443,7 +444,7 @@ function chart(id, series, {utcDays = false, calendarDates = false, unit = "", m
         return {label: s.name, data: values, hidden: id === "price-chart" && hiddenPriceSeries.has(s.name), type: s.type || "line", stack: s.stack, yAxisID: s.axis || "y", unit: s.unit || unit, tooltipGroup: s.tooltipGroup, deviceState: s.deviceState, swatchColor: color, borderColor: s.outlineColor || color, backgroundColor: deviceFill(color, s.deviceState), borderWidth: s.outlineColor ? ({raw}) => raw?.y ? {top: 1, bottom: 1} : 0 : s.type === "bar" ? 0 : 2, borderSkipped: s.outlineColor ? false : undefined, borderDash: s.reference ? [6, 4] : [], segment: {borderDash: ({p0}) => p0.raw.priceKind === "forecast" ? FORECAST_PRICE_DASH : undefined}, pointRadius: 0, pointHitRadius: 10, spanGaps: false, order: s.axis === "soc" ? 0 : s.stackOrder ?? 1};
     });
     const result = new Chart(canvas, {
-        type: "line", data: {datasets: planningLegend ? [] : datasets}, plugins: [intervalWidths, ...(id === "price-chart" ? [dailyPriceExtremes] : []), ...(calendarDates ? [] : [calendarDays]), {
+        type: "line", data: {datasets: planningLegend ? [] : datasets}, plugins: [intervalWidths, ...(id === "price-chart" ? [dailyPriceExtremes] : []), ...(calendarDates ? [] : [calendarDays]), ...(gridSteps ? [gridModeStrip(gridSteps, positionDayTooltip)] : []), {
             id: "deviceLegend",
             beforeUpdate: syncLegend
         }, {id: "ownedTooltip", afterDestroy() { hideTooltip(); tooltipEvents.abort(); tooltip.remove(); }}],
@@ -494,7 +495,7 @@ function chart(id, series, {utcDays = false, calendarDates = false, unit = "", m
                     scale.ticks = [];
                     for (let quarter = first; quarter <= last; quarter += stride) scale.ticks.push({value: quarter * QUARTER_MILLISECONDS});
                 },
-                ticks: {maxTicksLimit: MAX_TIME_AXIS_LABELS, maxRotation: 0, callback: (value) => utcDays || calendarDates ? axisTime(value) : calendarTime(value)},
+                ticks: {padding: gridSteps ? GRID_MODE_TICK_PADDING : 3, maxTicksLimit: MAX_TIME_AXIS_LABELS, maxRotation: 0, callback: (value) => utcDays || calendarDates ? axisTime(value) : calendarTime(value)},
                 title: {display: utcDays || calendarDates, text: "Calendar date"}},
                 y: {min: minimum ?? undefined, suggestedMin: balance ? 0 : undefined, stacked: balance, beginAtZero: id === "price-chart", title: {display: Boolean(unit), text: unit}, grid: {color: (context) => context.tick.value === 0 ? "#455d70" : "#edf1f5", lineWidth: (context) => context.tick.value === 0 ? 2 : 1}, ticks: {maxTicksLimit: 6, callback: (value) => unit === "W" ? number(value) : valueText(value, unit)}},
                 ...(series.some((entry) => entry.axis === "soc") ? {soc: {position: "right", min: 0, max: 100, stacked: false, title: {display: true, text: "SoC (%)"}, ticks: {callback: (value) => percentage(value, false)}, grid: {drawOnChartArea: false}}} : {})},
@@ -550,6 +551,14 @@ function chart(id, series, {utcDays = false, calendarDates = false, unit = "", m
         const swatch = document.createElement("span"); swatch.className = "series-swatch"; swatch.style.backgroundColor = s.legendColor || datasets[indexes[0]].swatchColor; swatch.setAttribute("aria-hidden", "true");
         label.append(input, swatch, document.createTextNode(s.legendName || s.name)); legend.append(label);
         legendEntries.push({label, input, indexes, device: s.deviceState != null});
+    }
+    if (gridSteps) {
+        const item = document.createElement("span"), swatch = document.createElement("span");
+        item.className = "grid-mode-legend";
+        swatch.className = "grid-mode-swatch";
+        swatch.setAttribute("aria-hidden", "true");
+        item.append(swatch, ZERO_GRID_LABEL);
+        legend.append(item);
     }
     if (series.some(s => s.deviceState != null)) {
         const key = document.createElement("p"); key.id = `${id}-device-key`; deviceKey = key;
@@ -1116,7 +1125,7 @@ async function showPlan(signal, background = false) {
             });
         });
         const balance = balances[0];
-        chart("plan-chart", balance.series, {unit: "kW", balance: true, preserveVisibility: samePlan, deferRange: true});
+        chart("plan-chart", balance.series, {unit: "kW", balance: true, preserveVisibility: samePlan, deferRange: true, gridSteps: plan.steps});
         pendingBatterySeries = batteryPlanSeries(plan, batteryLabels);
         if (pendingBatterySeries.length) {
             batteryPlanPanel.hidden = false;

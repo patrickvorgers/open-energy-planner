@@ -56,6 +56,15 @@
 .chart-wrap { position:relative; height:245px; min-width:0; }
 .wide .chart-wrap { height:300px; }
 .chart-wrap canvas { display:block; width:100%; height:100%; }
+.grid-mode-track { position:absolute; height:26px; pointer-events:none; }
+.grid-mode-track::before,.grid-mode-block::before,.grid-mode-swatch { background:var(--oep-blue,#006da6); border-radius:3px; height:6px; }
+.grid-mode-track::before,.grid-mode-block::before { content:""; position:absolute; left:0; right:0; top:10px; }
+.grid-mode-track::before { background:#edf1f5; }
+.grid-mode-track .grid-mode-block { position:absolute; top:0; height:26px; min-width:0; min-height:0; margin:0; padding:0; border:0; background:transparent; box-shadow:none; pointer-events:auto; }
+.grid-mode-block:focus-visible { outline:2px solid var(--oep-blue,#006da6); outline-offset:-2px; }
+.grid-mode-legend { display:flex; align-items:center; gap:7px; margin:4px 0; font-size:11px; }
+.grid-mode-swatch { width:12px; flex:none; }
+.grid-mode-tooltip > * { display:block; }
 .chart-day-headings { position:absolute; inset:0 0 auto; height:32px; pointer-events:none; color:#354c61; font-size:10px; line-height:14px; }
 .chart-day-headings > span { position:absolute; height:32px; padding:2px 4px; box-sizing:border-box; overflow:hidden; text-align:center; border-left:1px solid #b8c9d2; pointer-events:auto; }
 .chart-day-headings > span:first-child { border-left:0; }

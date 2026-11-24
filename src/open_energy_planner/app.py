@@ -54,6 +54,7 @@ from .installation.api import register as register_installation
 from .installation.api import warnings as installation_warnings
 from .installation.api.setup import register as register_setup
 from .installation.basis import InstallationBasisSource
+from .installation.commands import PLAN_SCHEMA_VERSION
 from .installation.storage import (
     InstallationStore,
 )
@@ -176,7 +177,7 @@ def create_app(
     # Retained incompatible evidence remains archived and cannot become an active command.
     if repository.state["plan"] and (
         repository.state["plan"].get("release") != RELEASE
-        or repository.state["plan"].get("schema") != 2
+        or repository.state["plan"].get("schema") != PLAN_SCHEMA_VERSION
         or "input_sha256" not in repository.state["plan"]
     ):
         repository.state["plan"] = None

@@ -78,7 +78,7 @@ Every implementation task must identify a requirement and an acceptance result. 
 
 The maintained implementation includes:
 
-- [Installation setup](../docs/development/INSTALLATION-PLANNING.md), multiple batteries/converters, mixed AC/DC routes and capability-driven schema-2 HA commands. Synthetic development inputs use the same projection.
+- [Installation setup](../docs/development/INSTALLATION-PLANNING.md), multiple batteries/converters, mixed AC/DC routes and capability-driven schema-3 HA commands. Synthetic development inputs use the same projection.
 - [Solar](../docs/development/SOLAR-FORECASTING.md) and [demand](../docs/development/DEMAND-FORECASTING.md) forecasting, with app-owned Energy-prefilled configuration. Learned-model promotion requires independent chronological decision evidence.
 - [Measurement forwarding](../docs/development/HA-MEASUREMENT-SOURCES.md), [Recorder history](../docs/development/HA-HISTORY.md), [price inputs](../docs/development/PRICE-INPUTS.md) and [contract formulas](../docs/development/CONTRACT-PRICES.md). Missing required live inputs block planning instead of invoking synthetic fallback.
 - [Aggregate-export bonuses](../docs/development/BONUS-RULES.md) with exact billing segments, dated rules and chronological counters. Source-dependent supplier exclusions remain outside exact coverage. An optional paid-window constraint prevents planned battery discharge together with grid export while quota remains at the segment start, retaining self-consumption. Exhaustion releases later segments until quota is restored. Base formulas and bonuses remain separate.

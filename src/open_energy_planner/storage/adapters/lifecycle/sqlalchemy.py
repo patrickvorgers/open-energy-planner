@@ -258,7 +258,8 @@ class SqlPlanRepository:
         if self.owns_engine:
             self.engine.dispose()
 
-    def _pack(self, value, values, records, parts, *, nested_field):
+    @classmethod
+    def _pack(cls, value, values, records, parts, *, nested_field):
         """Share plan fields, snapshot fields and physical-problem fields without a generic JSON tree per scalar."""
         ref = digest(value)
         if ref in records:
@@ -268,7 +269,7 @@ class SqlPlanRepository:
             if not isinstance(field, str) or not 1 <= len(field) <= FIELD_LENGTH:
                 raise ValueError("Invalid archive field")
             if field == nested_field and isinstance(child, dict):
-                child_ref = self._pack(
+                child_ref = cls._pack(
                     child,
                     values,
                     records,
@@ -294,14 +295,29 @@ class SqlPlanRepository:
         stamp = datetime.fromisoformat(plan["generated_at"])
         if stamp.utcoffset() is None:
             raise ValueError("Archived plan time requires a timezone")
-        values, records, parts = {}, set(), []
-        ref = self._pack(plan, values, records, parts, nested_field="input_snapshot")
         existing = connection.scalar(select(PLANS.c.record_ref).where(PLANS.c.plan_id == plan_id))
         if existing:
-            if existing != ref:
+            if existing != digest(plan):
                 raise ValueError("Archived plan identity is immutable")
             self._write_context(connection, plan)
             return
+        ref = self._store_plan_record(connection, plan)
+        connection.execute(
+            PLANS.insert().values(
+                plan_id=plan_id,
+                record_ref=ref,
+                generated_at=stamp.astimezone(UTC).isoformat(timespec="microseconds"),
+                strategy=plan.get("strategy", "unspecified"),
+                solution_status=plan.get("solution_status", "unspecified"),
+            )
+        )
+        self._write_context(connection, plan)
+
+    @classmethod
+    def _store_plan_record(cls, connection, plan):
+        """Store the content-addressed record and missing input blocks, then return its hash."""
+        values, records, parts = {}, set(), []
+        ref = cls._pack(plan, values, records, parts, nested_field="input_snapshot")
         known_values = set(
             connection.scalars(select(VALUES.c.digest).where(VALUES.c.digest.in_(values)))
         )
@@ -323,16 +339,7 @@ class SqlPlanRepository:
             rows = [row for row in parts if row["owner"] in missing_records]
             if rows:
                 connection.execute(PARTS.insert(), rows)
-        connection.execute(
-            PLANS.insert().values(
-                plan_id=plan_id,
-                record_ref=ref,
-                generated_at=stamp.astimezone(UTC).isoformat(timespec="microseconds"),
-                strategy=plan.get("strategy", "unspecified"),
-                solution_status=plan.get("solution_status", "unspecified"),
-            )
-        )
-        self._write_context(connection, plan)
+        return ref
 
     def _write_context(self, connection, plan):
         """Preserve detached calculation context and permanent controls in the plan's transaction."""
@@ -466,7 +473,8 @@ class SqlPlanRepository:
         }
         self.save()
 
-    def _read_record(self, connection, ref, cache, depth=0, *, fields=None, snapshot_fields=None):
+    @classmethod
+    def _read_record(cls, connection, ref, cache, depth=0, *, fields=None, snapshot_fields=None):
         """Decode selected leaves, verifying complete records only when all their fields are read."""
         if depth >= MAX_RECORD_DEPTH:
             raise ValueError("Archive record nesting invalid")
@@ -483,7 +491,7 @@ class SqlPlanRepository:
         value = {}
         for row in rows:
             if row["record_ref"]:
-                value[row["field"]] = self._read_record(
+                value[row["field"]] = cls._read_record(
                     connection,
                     row["record_ref"],
                     cache,

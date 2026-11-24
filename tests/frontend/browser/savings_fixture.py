@@ -62,7 +62,7 @@ def seed(directory, *, corrected=False, now=None):
         ),
     )
     plan = {
-        "schema": 2,
+        "schema": 3,
         "release": RELEASE,
         "plan_id": "browser-original-plan",
         "config_revision": "browser-config",
@@ -142,7 +142,7 @@ def seed(directory, *, corrected=False, now=None):
                     "battery": {"mode": "fixed_power", "power_w": 4000},
                     "roof": {"enabled": True},
                 },
-                "grid_active": False,
+                "grid_control_mode": "inactive",
             }
             for step in steps
         ],

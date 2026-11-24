@@ -217,7 +217,7 @@ class CommandMapper:
     """Project independently checked installation flows into per-device command proposals."""
 
     def build(self, snapshot, result, costs, generated_at):
-        """Delegate validated installation flows to a schema-2 command document.
+        """Delegate validated installation flows to a schema-3 command document.
 
         The caller owns independent physical and financial validation. After checking
         the installation input type, this method delegates conversion and envelope
@@ -242,7 +242,7 @@ class CommandMapper:
                 bounded command deadline.
 
         Returns:
-            A new plain schema-2 dictionary with typed per-device command proposals,
+            A new plain schema-3 dictionary with typed per-device command proposals,
             original input evidence, strategy and independently recomputed costs.
 
         Raises:
