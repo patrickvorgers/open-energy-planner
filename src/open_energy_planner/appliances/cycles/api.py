@@ -13,7 +13,6 @@ from open_energy_planner.appliances.cycles.model import instant
 from open_energy_planner.appliances.cycles.raw import MAX_RAW_BODY_BYTES
 from open_energy_planner.appliances.sources import SOURCE_ALREADY_ASSIGNED
 from open_energy_planner.runtime.diagnostics.logging import request_error_message
-from open_energy_planner.runtime.settings_reads import NO_COMMANDS
 from open_energy_planner.storage.writes import complete_write
 
 # Only these reviewed owned literals may cross the public error boundary.
@@ -95,7 +94,7 @@ PUBLIC_VALIDATION_MESSAGES = (
 )
 
 
-def register(app, service, repository, live, lock, ev, thermal):
+def register(app, service, repository, live, lock, ev, thermal, *, mark_command_free):
     """Serialize readiness, measurements and execution events with plan admission."""
 
     async def state(request):
@@ -137,11 +136,12 @@ def register(app, service, repository, live, lock, ev, thermal):
             or not repository.state["enabled"]
             or repository.state["plan"] is not plan
             or repository.pending_invalidation
-            or lock.settings.appliances is not view
+            or not view.same_inputs(lock.settings.appliances)
             or datetime.now(UTC) >= min(first_expiry, instant(plan["valid_until"]))
         ):
             response, first_expiry = await asyncio.to_thread(respond, None)
-        request[NO_COMMANDS] = first_expiry is None
+        if first_expiry is None:
+            mark_command_free(request)
         return response
 
     async def mutate(request):

@@ -6,12 +6,11 @@ from datetime import UTC, datetime
 from aiohttp import web
 
 from open_energy_planner.appliances.forecasting import parse_selection
-from open_energy_planner.runtime.settings_reads import NO_COMMANDS
 
 from ..storage.writes import complete_write
 
 
-def register(app, demand, lock, ev, thermal):
+def register(app, demand, lock, ev, thermal, *, mark_command_free):
     """Expose existing runtime status and serialize settings writes with forecast admission."""
 
     def view(request):
@@ -35,7 +34,7 @@ def register(app, demand, lock, ev, thermal):
 
     async def read(request):
         """Consumer settings do not expose commands or wait for plan revocation persistence."""
-        request[NO_COMMANDS] = True
+        mark_command_free(request)
         return await state(request)
 
     async def save(request):

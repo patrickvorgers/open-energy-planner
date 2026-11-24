@@ -1560,6 +1560,16 @@ class ApplianceView:
     issue: str | None
     phase_limited_entities: frozenset
 
+    def same_inputs(self, current):
+        """Check copy-on-write inputs without traversing tasks or raw measurements."""
+        return (
+            self.state is current.state
+            and self.selected is current.selected
+            and self.options is current.options
+            and self.issue == current.issue
+            and self.phase_limited_entities == current.phase_limited_entities
+        )
+
     def revision(self, *, include_observation_progress):
         """Keep observation progress out of frozen planning identity."""
         return digest(

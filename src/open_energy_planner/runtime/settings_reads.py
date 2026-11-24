@@ -11,6 +11,11 @@ from open_energy_planner.appliances.forecasting import COMPOSITE_MODEL_ID, Consu
 NO_COMMANDS = web.RequestKey("oep-response-contains-no-commands", bool)
 
 
+def mark_command_free(request: web.Request) -> None:
+    """Tell the app that a read does not convey authority requiring the revocation barrier."""
+    request[NO_COMMANDS] = True
+
+
 @dataclass(frozen=True)
 class SettingsRead:
     """One published view of appliance state, forecasts and meter ownership."""

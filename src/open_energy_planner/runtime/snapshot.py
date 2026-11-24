@@ -84,8 +84,7 @@ class SnapshotProjection:
             return False
         return all(
             not state_locked
-            and self.appliances.state is current_appliances.state
-            and not current_appliances.issue
+            and self.appliances.same_inputs(current_appliances)
             and self.valid_plan_at(now)
             and now < instant(row["request"]["expires_at"])
             for row in document["appliances"]["devices"]

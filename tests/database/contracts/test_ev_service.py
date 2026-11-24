@@ -761,7 +761,7 @@ def test_consumer_api_preserves_saved_charging_membership_without_timezone(servi
 
     from open_energy_planner.appliances.cycles.service import ApplianceService
     from open_energy_planner.demand.consumer_api import register
-    from open_energy_planner.runtime.settings_reads import ApplicationStateLock
+    from open_energy_planner.runtime.settings_reads import ApplicationStateLock, mark_command_free
 
     async def scenario():
         """Read the consumer endpoint without invoking the timezone-dependent EV status document."""
@@ -772,7 +772,7 @@ def test_consumer_api_preserves_saved_charging_membership_without_timezone(servi
         lock = ApplicationStateLock()
         appliances = ApplianceService(service.documents, service.consumers)
         lock.bind_settings(appliances, demand, service, thermal)
-        register(app, demand, lock, service, thermal)
+        register(app, demand, lock, service, thermal, mark_command_free=mark_command_free)
         async with TestClient(TestServer(app)) as client:
             response = await client.get("/v1/consumers")
             assert response.status == 200

@@ -68,7 +68,7 @@ from .runtime.diagnostics.planning_notifications import (
     explain_planning_problem,
     planning_notifications,
 )
-from .runtime.settings_reads import NO_COMMANDS, ApplicationStateLock
+from .runtime.settings_reads import NO_COMMANDS, ApplicationStateLock, mark_command_free
 from .runtime.snapshot import create_snapshot_handler
 from .solar import api as solar_api
 from .solar.api import register as register_solar
@@ -937,10 +937,12 @@ def create_app(
     from .demand.consumer_api import register as register_consumers
 
     lock.bind_settings(appliances, demand, ev, thermal)
-    register_consumers(app, demand, lock, ev, thermal)
+    register_consumers(app, demand, lock, ev, thermal, mark_command_free=mark_command_free)
     from open_energy_planner.appliances.cycles.api import register as register_appliances
 
-    register_appliances(app, appliances, repository, live, lock, ev, thermal)
+    register_appliances(
+        app, appliances, repository, live, lock, ev, thermal, mark_command_free=mark_command_free
+    )
     from open_energy_planner.appliances.ev.api import register as register_ev
 
     register_ev(app, ev, setup_catalogue, repository, live, lock, thermal)
