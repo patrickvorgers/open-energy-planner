@@ -48,7 +48,7 @@ All three lines are solid. Positive power is import and negative power is export
 
 ## Read the energy balance
 
-Above zero is supply to the modeled balance: used solar, grid import and battery discharge. Below zero is use: household demand, grid export, battery charge and conversion losses. These signs describe this chart's balance. They are not interchangeable with every device's command sign.
+Above zero, the chart shows supply from solar production, grid import and battery discharge. Below zero, it shows household demand, grid export, battery charge and conversion losses. These signs apply to this chart and can differ from a device's command sign.
 
 The complete balance sums to zero before visual rounding or hiding series. Lines show SoC on the right axis. Bars show mean kW per quarter. Partial quarters identify their covered period in the tooltip.
 
@@ -73,13 +73,13 @@ has its own green color and legend switch.
 
 | Series | Measurement point |
 |---|---|
-| **Used solar: DC** | Used PV energy at the hybrid inverter's DC input, before conversion |
-| **Used solar: AC** | Used production at the AC output of separate solar-only inverters |
+| **Solar production: DC** | Planned solar production at the hybrid inverter's DC input, before conversion |
+| **Solar production: AC** | Planned solar production at the AC output of separate solar-only inverters |
 | **Battery charge / discharge: DC** | Battery terminals, after or before its DC converter |
 | **Household demand / grid import / export: AC** | The shared AC bus and grid connection |
 | **Conversion losses** | Hybrid or battery-inverter losses and battery DC/DC conversion inside these boundaries |
 
-A separate solar inverter's DC-to-AC loss has already occurred before **Used solar: AC**.
+Both solar series show planned production after any curtailment. This energy can supply the home, charge the battery or be exported. **Solar production: AC** also accounts for the separate solar inverter's DC-to-AC conversion loss.
 It is excluded from the loss bar to avoid counting it twice. Hybrid inverter losses
 remain included, as do any DC/DC losses on the direct route into the battery.
 Actual losses follow the declared efficiencies. Internal battery storage losses

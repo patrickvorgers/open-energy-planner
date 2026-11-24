@@ -93,7 +93,9 @@ def test_appliance_legends_follow_window_without_losing_visibility_choices(app_p
         legend = page.locator(f"#{identity}-legend")
         expect(legend.get_by_role("checkbox", name="Later appliance", exact=True)).to_be_visible()
         expect(page.locator(f"#{identity}-device-key")).to_be_visible()
-        expect(legend.get_by_role("checkbox", name="Used solar: DC", exact=True)).to_be_visible()
+        expect(
+            legend.get_by_role("checkbox", name="Solar production: DC", exact=True)
+        ).to_be_visible()
 
 
 @pytest.mark.parametrize("app_site", ["device_planning_legend"], indirect=True)

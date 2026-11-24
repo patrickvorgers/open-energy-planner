@@ -302,44 +302,49 @@ def daily_evidence(
         for original in result["series"]
         for candidate in (original, *original.get("alternatives", ()))
     ]:
-        rows = source["rows"]
-        predicted = (
-            fsum(row["predicted_kwh"] for row in rows)
-            if rows and all(row["predicted_kwh"] is not None for row in rows)
-            else None
-        )
-        actual = (
-            fsum(row["measured_kwh"] for row in rows)
-            if rows and all(row["measured_kwh"] is not None for row in rows)
-            else None
-        )
-        eligible = completed and bool(rows) and all(row["error_kwh"] is not None for row in rows)
-        issue = None
-        if not completed:
-            issue = "Daily evaluation waits for the completed day and Recorder delay"
-        elif not eligible:
-            issue = (
-                boundary_issue
-                or source["comparison_issue"]
-                or next(
-                    (row["evaluation_issue"] for row in rows if row["evaluation_issue"]),
-                    "Complete comparable daily evidence unavailable",
-                )
-            )
-        error = predicted - actual if eligible else None
-        source["daily"] = {
-            "predicted_kwh": predicted,
-            "measured_kwh": actual,
-            "error_kwh": error,
-            "absolute_error_kwh": abs(error) if error is not None else None,
-            "relative_error_percent": abs(error) / actual * 100
-            if error is not None and actual > 0
-            else None,
-            "evaluation_issue": issue,
-        }
-        if not eligible:
-            source["metrics"] = dict.fromkeys(source["metrics"])
-            for row in rows:
-                row["error_kwh"] = None
-                row["evaluation_issue"] = row["evaluation_issue"] or issue
+        _score_daily_source(source, completed=completed, boundary_issue=boundary_issue)
     return result
+
+
+def _score_daily_source(source, *, completed, boundary_issue):
+    """Score a source for the whole day and withhold errors when the evidence is incomplete."""
+    rows = source["rows"]
+    predicted = (
+        fsum(row["predicted_kwh"] for row in rows)
+        if rows and all(row["predicted_kwh"] is not None for row in rows)
+        else None
+    )
+    actual = (
+        fsum(row["measured_kwh"] for row in rows)
+        if rows and all(row["measured_kwh"] is not None for row in rows)
+        else None
+    )
+    eligible = completed and bool(rows) and all(row["error_kwh"] is not None for row in rows)
+    issue = None
+    if not completed:
+        issue = "Daily evaluation waits for the completed day and Recorder delay"
+    elif not eligible:
+        issue = (
+            boundary_issue
+            or source["comparison_issue"]
+            or next(
+                (row["evaluation_issue"] for row in rows if row["evaluation_issue"]),
+                "Complete comparable daily evidence unavailable",
+            )
+        )
+    error = predicted - actual if eligible else None
+    source["daily"] = {
+        "predicted_kwh": predicted,
+        "measured_kwh": actual,
+        "error_kwh": error,
+        "absolute_error_kwh": abs(error) if error is not None else None,
+        "relative_error_percent": abs(error) / actual * 100
+        if error is not None and actual > 0
+        else None,
+        "evaluation_issue": issue,
+    }
+    if not eligible:
+        source["metrics"] = dict.fromkeys(source["metrics"])
+        for row in rows:
+            row["error_kwh"] = None
+            row["evaluation_issue"] = row["evaluation_issue"] or issue

@@ -97,8 +97,8 @@ def test_mixed_boundaries_preserve_hybrid_identity_and_original_data(app_page, s
         for series in groups[0]["series"]
         if series.get("type") == "bar"
     }
-    assert bars["Used solar: DC"] == pytest.approx(2)
-    assert bars["Used solar: AC"] == pytest.approx(1.8)
+    assert bars["Solar production: DC"] == pytest.approx(2)
+    assert bars["Solar production: AC"] == pytest.approx(1.8)
     assert bars["Conversion losses"] == pytest.approx(-0.1 if storage else -0.2)
     assert bars["Grid export: AC"] == pytest.approx(-0.7 if storage else -1.6)
     assert sum(bars.values()) == pytest.approx(0)
@@ -111,13 +111,13 @@ def test_mixed_boundaries_preserve_hybrid_identity_and_original_data(app_page, s
             for series in groups[1]["series"]
             if series.get("type") == "bar"
         }
-        assert converter["Used solar: DC"] == pytest.approx(2)
+        assert converter["Solar production: DC"] == pytest.approx(2)
         assert converter["AC supply to converter"] == pytest.approx(0)
         assert converter["Converter output to AC"] == pytest.approx(-0.9)
         assert converter["Conversion losses"] == pytest.approx(-0.1)
-        assert "Used solar: AC" not in converter
+        assert "Solar production: AC" not in converter
     colors = {series["name"]: series["color"] for series in groups[0]["series"]}
-    assert colors["Used solar: DC"] != colors["Used solar: AC"]
+    assert colors["Solar production: DC"] != colors["Solar production: AC"]
 
 
 @pytest.mark.parametrize("storage", [False, True])
@@ -144,8 +144,8 @@ def test_ac_solar_is_counted_once_and_battery_conversion_remains_inside(app_page
         for series in groups[0]["series"]
         if series.get("type") == "bar"
     }
-    assert bars["Used solar: DC"] == 0
-    assert bars["Used solar: AC"] == pytest.approx(3.6)
+    assert bars["Solar production: DC"] == 0
+    assert bars["Solar production: AC"] == pytest.approx(3.6)
     assert bars["Conversion losses"] == pytest.approx(-0.56 if storage else 0)
     assert sum(bars.values()) == pytest.approx(0)
     if storage:
@@ -203,7 +203,7 @@ def test_three_scenarios_show_independent_solar_with_balanced_day_and_night(app_
         bars = [dataset for dataset in datasets if dataset["type"] == "bar"]
         solar = [
             next(dataset for dataset in bars if dataset["name"] == name)
-            for name in ("Used solar: DC", "Used solar: AC")
+            for name in ("Solar production: DC", "Solar production: AC")
         ]
         for dataset in solar:
             values = [point["y"] for point in dataset["data"]]
@@ -216,8 +216,8 @@ def test_three_scenarios_show_independent_solar_with_balanced_day_and_night(app_
                 0, abs=0.00005
             )
         legend = page.locator(f"#{identity}-legend")
-        dc = legend.get_by_role("checkbox", name="Used solar: DC", exact=True)
-        ac = legend.get_by_role("checkbox", name="Used solar: AC", exact=True)
+        dc = legend.get_by_role("checkbox", name="Solar production: DC", exact=True)
+        ac = legend.get_by_role("checkbox", name="Solar production: AC", exact=True)
         dc.focus()
         dc.press("Space")
         expect(dc).not_to_be_checked()
