@@ -53,6 +53,21 @@ CI artifacts and link those captures from the PR until inline uploads can be res
 
 See [GitHub's attachment procedure](https://docs.github.com/en/github-cli/github-cli/attaching-files-with-github-cli).
 
+## Browser JavaScript execution coverage
+
+After setting up Playwright Chromium, run browser tests with the optional coverage flag:
+
+```sh
+python -m pytest tests/frontend/browser --oep-js-coverage /path/to/empty-coverage-directory
+```
+
+To measure specific flows, pass their test files or node IDs in place of the directory.
+Use a fresh output directory for each run. Each JSON file identifies its test case
+and lists the first-party JavaScript assets observed by Chromium, their V8 execution
+ranges and their execution counts. V8 reports character offsets in the served script.
+Map the offsets against the corresponding served asset to determine source lines.
+The flag writes local reports and has no effect on ordinary test runs.
+
 ## Development and review
 
 Inspect formal GitHub change requests before Ready and again before merge.
