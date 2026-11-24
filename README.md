@@ -4,9 +4,11 @@
   <img src="src/open_energy_planner/web/public/icons/app.svg" alt="Open Energy Planner" width="88" height="88">
 </p>
 
-**Understand your energy. Plan how to use it.**
+Open Energy Planner (OEP) is a local **home energy management system (HEMS) for Home Assistant**.
 
-Local energy planning for Home Assistant. Turn your existing Energy configuration, measured history, solar forecasts and electricity contract into a checked plan for batteries and supported appliances.
+**Start with the Energy dashboard you already configured.** OEP detects the grid, solar, battery and individual device energy sources you set up in Home Assistant. Review those sources and add planning details such as your electricity contract and equipment limits. OEP uses your existing energy history to learn household demand as enough measurements become available.
+
+**Plan when to charge your battery and run supported appliances.** OEP combines demand and solar forecasts with electricity tariffs. Choose whether to prioritize lower electricity costs or lower grid imports.
 
 [Install in Home Assistant](#install-in-home-assistant) | [Set up your first plan](https://patrickvorgers.github.io/open-energy-planner/docs/users/first-plan/) | [User guide](https://patrickvorgers.github.io/open-energy-planner/) | [Optional demo](docs/users/demo.md) | [Developer guide](docs/development/README.md) | [Report an issue](https://github.com/patrickvorgers/open-energy-planner/issues)
 
@@ -18,7 +20,7 @@ Local energy planning for Home Assistant. Turn your existing Energy configuratio
 *Follow the same expected day through the optimizer, ordinary battery self-consumption and a without-battery baseline. All screenshots show the actual interface with synthetic examples. They do not demonstrate physical execution or measured savings. Click an image to inspect it at full size.*
 
 > [!IMPORTANT]
-> **Development preview.** OEP targets Home Assistant 2026.11 or newer. Install the integration through the built-in Marketplace and the matching planner through its separate app repository on AMD64 Home Assistant OS. These channels require a published tested release. Follow [Install OEP](docs/users/install.md) and its availability check. Physical control and equipment protection remain in your own Home Assistant automations and local controllers. See the [release boundaries](design/FIRST-RELEASE-SCOPE.md).
+> OEP targets Home Assistant 2026.11 or newer. Install the integration through the built-in Marketplace and the matching planner through its separate app repository on AMD64 Home Assistant OS. These channels require a published tested release. Follow [Install OEP](docs/users/install.md) and its availability check. Physical control and equipment protection remain in your own Home Assistant automations and local controllers. See the [release boundaries](design/FIRST-RELEASE-SCOPE.md).
 
 ## Install in Home Assistant
 
@@ -70,7 +72,7 @@ The [first-plan guide](docs/users/first-plan.md) walks through configuration wit
 
 ## What makes OEP different?
 
-OEP brings the following choices together in one Home Assistant workflow. These are implemented capabilities, not a claim that every other EMS lacks them.
+OEP brings the following energy management system (EMS) capabilities together in one Home Assistant workflow.
 
 | What you already have or need | How OEP uses it | What you can do with it |
 |---|---|---|
@@ -83,11 +85,19 @@ OEP brings the following choices together in one Home Assistant workflow. These 
 
 ## Start with what Home Assistant already knows
 
-OEP reads the sources you configured in Energy. It does not ask you to build a second energy dashboard. You confirm the information Energy does not define, such as permitted grid import/export, equipment ratings, inverter relationships and planning permissions.
+OEP reuses three kinds of information from Home Assistant. The setup wizard shows the sources it detects so you can review them without entering the same meters again.
 
-[![Saved connection settings with import/export limits and an annual household consumption estimate.](docs/assets/installation-connection.png)](docs/assets/installation-connection.png)
+| From Home Assistant | How OEP uses it |
+|---|---|
+| **Energy dashboard configuration** | Finds the configured grid import and export, solar production, battery charge and discharge, and individual device sources. It also reuses configured battery capacity, linked battery sensors and supported solar panel details where available. |
+| **Current sensor readings** | Uses measurements such as grid and solar power and the battery's state of charge to track the current installation and plan from the measured battery level. |
+| **Recorded energy history** | Estimates annual household use when enough history is available, learns household demand and supported appliance cycles, and compares forecasts with later measurements. |
 
-*Power limits use kW. Annual household demand uses kWh. The synthetic example disables feed-in. A zero-export plan still requires enough consumption, storage or explicitly controllable solar to handle surplus.*
+In OEP, add your electricity contract and confirm planning details such as grid import and export limits, equipment ratings, inverter relationships and which actions the planner may propose. See [what to prepare in Home Assistant Energy](docs/users/before-you-start.md#prepare-home-assistant-energy).
+
+[![The Home Assistant stage of the installation wizard shows detected grid meters, solar and battery sources, and annual household consumption from recorded history.](docs/assets/installation-energy-discovery.png)](docs/assets/installation-energy-discovery.png)
+
+*This synthetic example shows the Energy sources the wizard detected and the annual household consumption calculated from Home Assistant history.*
 
 Existing history can supply an annual-use estimate. Without enough usable history, you can confirm your own annual whole-home estimate and obtain a provisional demand profile. Solar and batteries are optional. See [installation settings](docs/users/installation.md).
 

@@ -1,10 +1,10 @@
 # Your energy, understood.
 
-Understand what OEP plans, configure the inputs it needs and learn how to read the result. Choose the user route for operating the app or the developer route for changing it.
+Open Energy Planner (OEP) is a local energy management system for Home Assistant. It uses household energy history, solar forecasts and electricity tariffs to plan battery charging and schedule supported appliances.
 
 [Set up your first plan](users/first-plan.md){ .primary }
 
-OEP is a development preview targeting Home Assistant 2026.11 or newer. The
+OEP targets Home Assistant 2026.11 or newer. The
 [installation guide](users/install.md) explains the custom Marketplace repository
 for the integration and the separate planner app repository. Both require a
 published tested release. A separate synthetic demo is optional.
