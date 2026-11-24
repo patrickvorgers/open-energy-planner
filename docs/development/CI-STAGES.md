@@ -160,7 +160,8 @@ base and progress in an **OEP review** PR comment. It applies this order:
 3. If CodeRabbit explicitly reports no included capacity, request Greptile once
    with `@greptileai review this draft` and an `oep-greptile-head` marker.
    A confirmed rate limit on the actual CodeRabbit request or its authentic
-   terminal `timed_out` check follows the same route.
+   terminal `timed_out` check follows the same route. When the repository's
+   Greptile pause is enabled, send one `@codex review` for this new fallback.
 4. A genuine current-head `Greptile Review` check from app `867647` with
    `status: completed` and `conclusion: timed_out` permits one Kody-ai request.
    Use `@kody start-review` with an `oep-kody-head` marker. The exact merge-only
@@ -280,6 +281,19 @@ The controller never falls back to publishing provider commands with its workflo
 bot credential. Missing, expired, malformed or unauthorized credentials block
 visibly with administrator recovery advice. No raw token or API error body is
 included in status comments or logs.
+
+### Temporarily pause Greptile for this repository
+
+A repository administrator can set the GitHub Actions repository variable
+`OEP_GREPTILE_PAUSED` to `true` after confirming the Greptile review-credit
+outage. Only the trusted main orchestration job reads the variable. The pause
+changes the target of eligible new fallbacks after a confirmed CodeRabbit quota
+refusal or authenticated terminal timeout. The workflow still checks the frozen
+head/base, reviewer activity, command permissions and existing findings. A
+previously issued Greptile request stays on its existing path, including during
+silence. When credits return, the administrator removes the variable or sets it
+to `false`. The default route resumes, including direct Codex fallback for an
+authenticated Greptile credit refusal.
 
 ### Configure the provider command credential
 

@@ -69,6 +69,7 @@ class UserPublisher:
 def configured_publisher_token(monkeypatch):
     """Supply a synthetic second credential without reading host credentials in entrypoint tests."""
     monkeypatch.setenv("OEP_REVIEW_COMMAND_TOKEN", "synthetic-command-token")
+    monkeypatch.delenv("OEP_GREPTILE_PAUSED", raising=False)
 
 
 class GitHubEvidence:
@@ -2211,7 +2212,113 @@ def greptile_requested(client):
     client.run()
 
 
-@pytest.mark.parametrize("recovery", ["normal", "lost-response", "changed-refusal"])
+@pytest.mark.parametrize("pause", [None, "false", "true"])
+@pytest.mark.parametrize("outcome", ["quota", "timeout"])
+def test_greptile_pause_routes_only_recognized_coderabbit_results(monkeypatch, pause, outcome):
+    """Only the enabled repository pause changes the target of an eligible fallback."""
+    if pause is not None:
+        monkeypatch.setenv("OEP_GREPTILE_PAUSED", pause)
+    client = GitHubEvidence()
+    client.run(explicit=True)
+    client.reply(LIMITED if outcome == "quota" else AVAILABLE)
+    if outcome == "timeout":
+        client.run()
+        client.checks.append(
+            {
+                "id": 18,
+                "name": "CodeRabbit",
+                "head_sha": HEAD,
+                "app": {"id": 347564},
+                "status": "completed",
+                "conclusion": "timed_out",
+            }
+        )
+    client.run(minutes=1)
+    client.run(minutes=2)
+    expected = "@codex review" if pause == "true" else "@greptileai review this draft"
+    assert client.provider_commands() == [
+        "@coderabbitai rate limit",
+        *(["@coderabbitai review"] if outcome == "timeout" else []),
+        expected,
+    ]
+
+
+@pytest.mark.parametrize(
+    "evidence", ["active-check", "greptile-marker", "findings", "unknown", "silence"]
+)
+def test_greptile_pause_does_not_override_existing_work(monkeypatch, evidence):
+    """A repository pause does not authorize a review through an unresolved request."""
+    client = GitHubEvidence()
+    if evidence == "silence":
+        greptile_requested(client)
+        monkeypatch.setenv("OEP_GREPTILE_PAUSED", "true")
+        client.run(minutes=1)
+        client.run(minutes=121)
+        assert client.state()["phase"] == "blocked"
+        assert client.provider_commands() == [
+            "@coderabbitai rate limit",
+            "@greptileai review this draft",
+        ]
+        return
+    monkeypatch.setenv("OEP_GREPTILE_PAUSED", "true")
+    client.run(explicit=True)
+    if evidence == "unknown":
+        client.reply("<!-- This is an auto-generated reply by CodeRabbit -->\nUnknown quota")
+    else:
+        client.reply(LIMITED)
+    if evidence == "greptile-marker":
+        client.comment(f"<!-- oep-greptile-head:{HEAD} -->", "developer", "User")
+    if evidence == "findings":
+        client.unresolved = True
+    if evidence == "active-check":
+        client.checks.append(
+            {
+                "id": 18,
+                "name": "Greptile Review",
+                "head_sha": HEAD,
+                "app": {"id": 867647},
+                "status": "in_progress",
+                "conclusion": None,
+            }
+        )
+    client.run(minutes=1)
+    assert client.provider_commands() == ["@coderabbitai rate limit"]
+
+
+def test_greptile_pause_rechecks_coderabbit_timeout_before_publishing(monkeypatch):
+    """A changed terminal check invalidates the recorded intent before publication."""
+    monkeypatch.setenv("OEP_GREPTILE_PAUSED", "true")
+    client = GitHubEvidence()
+    client.run(explicit=True)
+    client.reply(AVAILABLE)
+    client.run()
+    check = {
+        "id": 18,
+        "name": "CodeRabbit",
+        "head_sha": HEAD,
+        "app": {"id": 347564},
+        "status": "completed",
+        "conclusion": "timed_out",
+    }
+    client.checks.append(check)
+    post = client.post
+
+    def change_timeout_after_intent(path, payload):
+        result = post(path, payload)
+        if client.state()["phase"] == "sending" and client.state()["target"] == "codex":
+            check["conclusion"] = "cancelled"
+        return result
+
+    monkeypatch.setattr(client, "post", change_timeout_after_intent)
+    with pytest.raises(VerificationError, match="timeout evidence changed"):
+        client.run(minutes=1)
+    assert client.provider_commands() == ["@coderabbitai rate limit", "@coderabbitai review"]
+
+
+@pytest.mark.parametrize(
+    "recovery",
+    ["normal", "lost-response", "changed-refusal", "codex-progress", "extra-feedback", "findings"],
+)
 def test_greptile_credit_denial_requests_codex_once(recovery):
     """Recover a published Codex command without ever issuing a second command."""
     client = GitHubEvidence()
@@ -2227,9 +2334,28 @@ def test_greptile_credit_denial_requests_codex_once(recovery):
         client.lose_response = False
         if recovery == "changed-refusal":
             denial["performed_via_github_app"]["id"] = 123
+        if recovery in {"codex-progress", "extra-feedback", "findings"}:
+            publication = client.published_result("codex")
+            publication["body"] = publication["body"].replace(
+                '"status":"completed"', '"status":"in_progress"'
+            )
+            if recovery == "extra-feedback":
+                client.comment("Partial review findings", "greptile-apps[bot]")
+            if recovery == "findings":
+                publication["body"] = publication["body"].replace(
+                    '"has_any_findings":false', '"has_any_findings":true'
+                )
     client.run(minutes=2)
     client.run(minutes=3)
-    assert client.state()["phase"] == ("blocked" if recovery == "changed-refusal" else "codex")
+    assert client.state()["phase"] == (
+        "blocked" if recovery in {"changed-refusal", "extra-feedback", "findings"} else "codex"
+    )
+    if recovery == "codex-progress":
+        publication["body"] = publication["body"].replace(
+            '"status":"in_progress"', '"status":"completed"'
+        )
+        client.run(minutes=4)
+        assert client.state()["phase"] == "complete"
     assert client.provider_commands() == [
         "@coderabbitai rate limit",
         "@greptileai review this draft",
