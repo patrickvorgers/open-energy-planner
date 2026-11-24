@@ -14,7 +14,7 @@ Start by understanding the inputs and the current installation boundary. The nor
 
 ## Check current availability
 
-OEP is a public development preview. Home Assistant 2026.11 or newer provides the
+Home Assistant 2026.11 or newer provides the
 built-in Marketplace for the integration. The planner uses a separate custom app
 repository on AMD64 Home Assistant OS. Both channels require a published tested
 release. Follow [Install OEP](install.md), including its availability check, before

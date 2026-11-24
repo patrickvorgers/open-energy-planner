@@ -1,7 +1,7 @@
 # Security policy
 
-Open Energy Planner is early-stage software. The current development branch is
-`main`. There is no stable production release with a security support guarantee.
+The current development branch is `main`. No stable release has been published,
+and there is no security support guarantee for development builds.
 
 ## Report a vulnerability privately
 

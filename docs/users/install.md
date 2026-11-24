@@ -14,8 +14,7 @@ Install both from the same release before configuring your installation.
 - A GitHub account to add OEP as a custom Marketplace repository.
 - A published OEP release with completed checks and installation assets.
 
-OEP remains a development preview. The installation channel becomes usable after
-the first tested stable release is published. Check the
+Both installation channels require a tested stable release. Check the
 [releases page](https://github.com/patrickvorgers/open-energy-planner/releases)
 for `open_energy_planner.zip`, `ha-app-repository.tar.gz`,
 `release-manifest.json` and `SHA256SUMS`. If no stable release with those assets
