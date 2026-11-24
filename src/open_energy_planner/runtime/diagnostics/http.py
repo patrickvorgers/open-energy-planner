@@ -1,6 +1,6 @@
 """Expose bounded operation durations through standard HTTP diagnostics, never request data."""
 
-from contextlib import contextmanager
+from contextlib import asynccontextmanager, contextmanager
 from time import perf_counter
 
 from aiohttp import web
@@ -8,6 +8,14 @@ from aiohttp import web
 REQUEST_STARTED = web.RequestKey("oep-request-started", float)
 REQUEST_PHASES = web.RequestKey("oep-request-phases", list)
 MILLISECONDS_PER_SECOND = 1000
+
+
+def _record_phase(request, name, started):
+    """Attach diagnostic metadata only to requests managed by aiohttp."""
+    if isinstance(request, web.Request):
+        request.setdefault(REQUEST_PHASES, []).append(
+            (name, (perf_counter() - started) * MILLISECONDS_PER_SECOND)
+        )
 
 
 @contextmanager
@@ -21,9 +29,16 @@ def phase(request, name):
     try:
         yield
     finally:
-        request.setdefault(REQUEST_PHASES, []).append(
-            (name, (perf_counter() - started) * MILLISECONDS_PER_SECOND)
-        )
+        _record_phase(request, name, started)
+
+
+@asynccontextmanager
+async def timed_lock(request, name, lock):
+    """Record acquisition latency separately from work performed while holding the lock."""
+    started = perf_counter()
+    async with lock:
+        _record_phase(request, name, started)
+        yield
 
 
 def register(app):

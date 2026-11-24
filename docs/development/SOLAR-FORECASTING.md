@@ -287,7 +287,9 @@ unchanged. Run initialization, simulated planning origin, provider lead and
 planning lead are separate values. Historical `available_at` remains unknown
 unless separately established; initialization is not a publication timestamp.
 An archive outage cannot discard an independently usable current forecast.
-The original-run policy is `ecmwf-ifs-frozen-original-runs-v1`; simulated-origin
+Already normalized original runs retain their cached identity when solar checks an
+updated archive cohort. Only a run with a different simulation origin needs a new
+normalized copy. The original-run policy is `ecmwf-ifs-frozen-original-runs-v1`; simulated-origin
 delays belong to the separate backtest policy rather than the physical weather
 cache identity.
 

@@ -22,6 +22,7 @@ def test_root_article_search_and_provisioning(documentation_page, documentation_
     assert page.url == documentation_url + "docs/"
     expect(page.get_by_role("heading", name="Your energy, understood.")).to_be_visible()
     assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+    page.evaluate("document.fonts.ready")
     assert page.evaluate("document.fonts.check('16px Outfit')")
     page.screenshot(
         path=f"results/ci/documentation-home-{page.viewport_size['width']}.png", full_page=True
