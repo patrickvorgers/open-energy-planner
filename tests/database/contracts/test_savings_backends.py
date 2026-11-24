@@ -37,6 +37,28 @@ def test_ingestion_retries_do_not_duplicate_or_replace_meter_evidence(settlement
     assert store.frames()[0]["frame"]["channels"]["sensor.import"] == 1
 
 
+def test_ingestion_preserves_duplicate_evidence_and_rolls_back_a_late_conflict(settlement):
+    """One capture accepts identical repeats and rolls back prior batches when later evidence conflicts."""
+    _runtime, store, _docs, _engine, _plans = settlement
+    original = store.frames()
+    context = {"bindings": bindings(), "seeds": [], "location": None}
+    frames = tuple(
+        frame(start=END + timedelta(minutes=15 * quarter), imported_kwh=quarter)
+        for quarter in range(1, 97)
+    )
+    changed = replace(frames[0], channels={**frames[0].channels, "sensor.import": 100})
+
+    with pytest.raises(ValueError, match="immutable"):
+        store.put_frames(iter((*frames, changed)), context)
+    assert store.frames() == original
+
+    store.put_frames(iter((frames[0], *frames, frames[0])), context)
+    assert store.frames(limit=100) == [
+        *original,
+        *({"frame": retained.record(), "context": context} for retained in frames),
+    ]
+
+
 def test_empty_scanned_batch_advances_without_inventing_measurements(settlement):
     """A whole unavailable day can be passed without zero frames or costs being fabricated."""
     runtime, store, documents, _engine, _plans = settlement
