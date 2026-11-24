@@ -5,7 +5,7 @@ import json
 import logging
 from collections import deque
 from contextlib import asynccontextmanager
-from dataclasses import asdict, replace
+from dataclasses import asdict
 from datetime import UTC, datetime, timedelta
 from math import ceil, isfinite, log2
 
@@ -188,7 +188,7 @@ class OpenMeteoWeatherSource:
             "policy": run.policy_version,
         }
         if len(run.hours) == FORECAST_RUN_RESPONSE_HOURS - 1:
-            self._runs[initialized] = replace(run, forecast_origin=None)
+            self._runs[initialized] = run.as_original()
         return run.hours
 
     async def import_runs(self, location, now):
