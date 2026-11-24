@@ -85,7 +85,15 @@ OEP brings the following energy management system (EMS) capabilities together in
 
 ## Start with what Home Assistant already knows
 
-OEP reads the sources you configured in Energy. It does not ask you to build a second energy dashboard. You confirm the information Energy does not define, such as permitted grid import/export, equipment ratings, inverter relationships and planning permissions.
+OEP reuses three kinds of information from Home Assistant. The setup wizard shows the sources it detects so you can review them without entering the same meters again.
+
+| From Home Assistant | How OEP uses it |
+|---|---|
+| **Energy dashboard configuration** | Finds the configured grid import and export, solar production, battery charge and discharge, and individual device sources. It also reuses configured battery capacity, linked battery sensors and supported solar panel details where available. |
+| **Current sensor readings** | Uses measurements such as grid and solar power and the battery's state of charge to track the current installation and plan from the measured battery level. |
+| **Recorded energy history** | Estimates annual household use when enough history is available, learns household demand and supported appliance cycles, and compares forecasts with later measurements. |
+
+In OEP, add your electricity contract and confirm planning details such as grid import and export limits, equipment ratings, inverter relationships and which actions the planner may propose. See [what to prepare in Home Assistant Energy](docs/users/before-you-start.md#prepare-home-assistant-energy).
 
 [![Saved connection settings with import/export limits and an annual household consumption estimate.](docs/assets/installation-connection.png)](docs/assets/installation-connection.png)
 
