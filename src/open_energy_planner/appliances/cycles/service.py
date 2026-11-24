@@ -1379,21 +1379,26 @@ class ApplianceService:
                 )
         self.commit(data)
 
+    @staticmethod
+    def _expire_start_attempt(task, now):
+        """Mark an expired requested or claimed start uncertain and retain observed execution."""
+        attempt = task["attempt"]
+        if (
+            attempt
+            and attempt["status"] in ("requested", "claimed")
+            and now >= instant(attempt["expires_at"])
+        ):
+            attempt["status"] = "unknown"
+            if task["status"] != "execution_observed":
+                task["status"] = "start_not_confirmed"
+
     def tick(self, now, enabled, plan):
         """Expire unconfirmed attempts durably and issue only still-valid scheduled requests."""
         data = deepcopy(self.state)
         for entity, task in data["tasks"].items():
             if task["status"] == "cancelled":
                 continue
-            attempt = task["attempt"]
-            if (
-                attempt
-                and attempt["status"] in ("requested", "claimed")
-                and now >= instant(attempt["expires_at"])
-            ):
-                attempt["status"] = "unknown"
-                if task["status"] != "execution_observed":
-                    task["status"] = "start_not_confirmed"
+            self._expire_start_attempt(task, now)
             if (
                 self.observed(entity)
                 or task["status"] != "scheduled"
