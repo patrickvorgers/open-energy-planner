@@ -1,9 +1,10 @@
-"""One local schedule, one boundary timer and sequential HTTP synchronization."""
+"""Own local command validity and independent HA data exchange."""
 
 import asyncio
 import logging
 from dataclasses import replace
 from datetime import timedelta
+from http import HTTPStatus
 from uuid import uuid4
 
 from aiohttp import ClientError, ClientResponseError, ServerFingerprintMismatch
@@ -34,13 +35,22 @@ CATALOGUE_RETRY_MINUTES = 5
 CATALOGUE_CONFIRM_SECONDS = 60
 SOLAR_FORECAST_REFRESH_MINUTES = 5
 POLL_INTERVAL_SECONDS = 5
+SERVICE_REQUEST_INTERVAL_SECONDS = 15
+PLAN_CONNECTION_ISSUES = {
+    "installation_identity_changed",
+    "release_mismatch",
+    "supervisor_reconnecting",
+    "authentication_failed",
+    "identity_changed",
+    "synchronization_failed",
+}
 
 
 _LOGGER = logging.getLogger(__name__)
 
 
 class PlanCoordinator:
-    """Own HA enable intent, current command projection, timers and sequential app exchange."""
+    """Own HA enable intent, the command projection and independent data exchange timers."""
 
     def __init__(self, hass, entry, client):
         """Initialize entry-local state, storage, listeners and the synchronization lock."""
@@ -53,13 +63,19 @@ class PlanCoordinator:
         self.poll_cancel = None
         self.startup_cancel = None
         self.lock = asyncio.Lock()
+        self.services_lock = asyncio.Lock()
+        self.observations_lock = asyncio.Lock()
+        self.service_cancel = None
+        self.observation_cancel = None
         self.pending_enabled = None
         self.issue = None
         self.notification_message = None
         self.planning_status = None
         self.closed = False
         self.observation_bridge = None
+        self.observation_generation = 0
         self.observations = None
+        self.service_diagnostics = {}
         self.devices = None
         self.consumer_forecasts = {}
         self.appliances = {}
@@ -246,7 +262,7 @@ class PlanCoordinator:
         self.pending_enabled = value
         self.refresh()
         await self.save()
-        await self.sync()
+        await self.sync_plan()
 
     async def _publish_catalogue(self, now, *, force=False):
         """Publish one captured generation through the existing bounded transfer and acknowledge it.
@@ -349,183 +365,325 @@ class PlanCoordinator:
         return response
 
     async def sync(self, _now=None):
-        """Serialize authenticated snapshots/reports and accept only compatible validated plans.
+        """Reconcile once and run optional service work independently of the command lane."""
 
-        Known local required-source faults revoke commands even during app outage. A
-        connection failure alone retains only normally valid commands. Delayed replies
-        cannot override newer user intent. Physical device control remains in automations.
-        After persistence and plan acknowledgement, one cancellable background job
-        refreshes selected appliance histories and resumes bounded hourly batches.
-        It never holds this command synchronization open. Individual Recorder reads
-        and uploads retain their existing timeouts. History faults remain visible
-        as source-bound progress without withdrawing valid physical commands.
-        """
+        async def sync_current():
+            """Resolve source bindings before sending the first current capture."""
+            await self.sync_plan()
+            if await self.sync_observations():
+                await self.sync_plan()
+
+        await asyncio.gather(sync_current(), self.sync_services())
+
+    async def sync_plan(self, _now=None):
+        """Accept only the app's current authorized command version and report reconciliation."""
         if self.closed:
-            return
+            return False
         async with self.lock:
             if self.closed:
-                return
+                return False
             try:
-                # Known local core faults revoke commands even when the app is unreachable.
-                if self.observation_bridge:
-                    ready, _ = self.observation_bridge.capture(dt_util.utcnow())
-                    if not ready:
-                        self.schedule.invalidate()
-                        self.refresh()
-                intent_at_request = self.schedule.resume_after
-                ev_intent_at_request = self.ev_intent_generation
+                if self.observation_bridge and not self._capture_required_sources():
+                    self.revoke_observation_authority()
+                generation = (self.schedule.resume_after, self.ev_intent_generation)
                 if self.pending_enabled is not None:
                     await self.client.enabled(
                         self.pending_enabled, self.schedule.resume_after.isoformat()
                     )
-                    if (
-                        self.closed
-                        or self.schedule.resume_after != intent_at_request
-                        or self.ev_intent_generation != ev_intent_at_request
-                    ):
-                        return
+                    if not self._same_intent(generation):
+                        return False
                     self.pending_enabled = None
-                    return
+                    return True
+                status = await self.client.plan_status()
+                if not self._same_intent(generation):
+                    return False
+                if status.get("release") != RELEASE:
+                    raise ReleaseMismatchError("Plan status release mismatch")
+                enabled = status.get("enabled")
+                if type(enabled) is not bool:
+                    raise ValueError("Invalid plan enable state")
+                revision = identifier(status.get("config_revision"))
+                measurements_required = status.get("measurements_required")
+                if type(measurements_required) is not bool:
+                    raise ValueError("Invalid measurement requirement")
+                if revision != self.schedule.config_revision:
+                    self.schedule.invalidate()
+                    self.schedule.config_revision = revision
+                    self.refresh()
+                self.planning_status = status.get("planning")
+                self._clear_plan_connection_issue()
+                if not enabled and self.schedule.enabled:
+                    self.schedule.pause(dt_util.utcnow())
+                    self.schedule.invalidate()
+                    self.refresh()
+                    await self.save()
+                    return True
+                elif enabled and not self.schedule.enabled:
+                    self.pending_enabled = False
+                plan_id = status.get("plan_id")
+                if plan_id is None:
+                    self.schedule.invalidate()
+                    self.refresh()
                 else:
-                    try:
-                        data = await self.client.snapshot()
-                    except (ClientResponseError, ServerFingerprintMismatch):
-                        raise
-                    except (ClientError, TimeoutError):
-                        await self._confirm_catalogue(dt_util.utcnow())
-                        raise
-                if (
-                    self.closed
-                    or self.schedule.resume_after != intent_at_request
-                    or self.ev_intent_generation != ev_intent_at_request
-                ):
-                    return
-                if data.get("release") != RELEASE:
-                    self.action_required(
-                        "release_mismatch",
-                        "Update the app and integration to the same release. "
-                        "Existing commands remain usable only within their normal validity.",
-                    )
-                    return
-                if data.get("source") == "home_assistant":
-                    from .source_choices import refresh_choices
-
-                    if (
-                        data.get("plan_invalidated") is True
-                        or data.get("config_revision") != self.schedule.config_revision
+                    identifier(plan_id)
+                try:
+                    if measurements_required and (
+                        self.observation_bridge is None
+                        or self.observation_bridge.revision != revision
                     ):
                         self.schedule.invalidate()
                         self.refresh()
-                    # Chooser requests must not expire behind unrelated observation or history failures.
+                        reply = await self.client.measurement_config(revision)
+                        if not self._same_intent(generation):
+                            return False
+                        configuration = reply["measurement_config"]
+                        if configuration["revision"] != revision:
+                            raise ValueError("Measurement configuration revision mismatch")
+                        self._configure_measurements(configuration)
+                    elif not measurements_required and self.observation_bridge is not None:
+                        self._configure_measurements(None)
+                    if plan_id is None:
+                        return not enabled or self.schedule.enabled
+                    if not self.schedule.enabled or (
+                        measurements_required and not self._capture_required_sources()
+                    ):
+                        self.revoke_observation_authority()
+                        return False
+                    observation_generation = self.observation_generation
+                    if self.schedule.plan and self.schedule.plan.plan_id == plan_id:
+                        if status.get("acknowledged_plan") != plan_id:
+                            await self.client.acknowledge(plan_id)
+                        if (
+                            not self._same_intent(generation)
+                            or observation_generation != self.observation_generation
+                        ):
+                            return False
+                        if measurements_required and not self._capture_required_sources():
+                            self.revoke_observation_authority()
+                            return False
+                        return self.schedule.plan is not None
+                    reply = await self.client.plan(plan_id)
+                    if (
+                        not self._same_intent(generation)
+                        or observation_generation != self.observation_generation
+                    ):
+                        return False
+                    plan = reply["plan"]
+                    if plan.get("plan_id") != plan_id:
+                        raise ValueError("Command plan identity mismatch")
+                    self._validate_command_plan(
+                        plan, reply.get("devices"), reply.get("ev_points", [])
+                    )
+                    candidate = self.schedule.validate_candidate(plan, dt_util.utcnow())
+                    await self.client.acknowledge(plan_id)
+                    if (
+                        not self._same_intent(generation)
+                        or observation_generation != self.observation_generation
+                    ):
+                        return False
+                    if measurements_required and not self._capture_required_sources():
+                        self.revoke_observation_authority()
+                        return False
+                    self.schedule.install_candidate(candidate, plan, dt_util.utcnow())
+                except RevokedPlan:
+                    return False
+                except ClientResponseError as error:
+                    if error.status != HTTPStatus.CONFLICT:
+                        raise
+                    self.schedule.invalidate()
+                    return False
+                return True
+            except (
+                InstallationMismatchError,
+                ReleaseMismatchError,
+                AuthenticationError,
+                ServerFingerprintMismatch,
+            ) as error:
+                self._connection_failure(error)
+            except (ClientError, TimeoutError, ValueError, TypeError, KeyError):
+                if not self.issue:
+                    _LOGGER.warning(
+                        "EMS synchronization failed. Keeping only locally valid commands"
+                    )
+                self.issue = "synchronization_failed"
+                # A temporary outage is not itself an action-required notification.
+            finally:
+                self.refresh()
+            return False
+
+    def _same_intent(self, generation):
+        """Reject observations from a request that outlived a newer local action."""
+        return not self.closed and generation == (
+            self.schedule.resume_after,
+            self.ev_intent_generation,
+        )
+
+    def _connection_failure(self, error):
+        """Apply existing identity, authentication and paired-build recovery behavior."""
+        if isinstance(error, InstallationMismatchError):
+            self.revoke_observation_authority()
+            self.pending_enabled = None
+            self.action_required(
+                "installation_identity_changed",
+                "This Home Assistant connection belongs to a different OEP installation. "
+                "Existing commands have been withdrawn. Verify the current app connection to resume.",
+            )
+        elif isinstance(error, ReleaseMismatchError):
+            self.action_required(
+                "release_mismatch",
+                "Update the app and integration together to the same version and build. "
+                "Existing commands remain usable only within their normal validity.",
+            )
+        elif isinstance(error, AuthenticationError):
+            if self.entry.data.get("supervisor"):
+                self.issue = "supervisor_reconnecting"
+                return
+            if self.entry.data.get("fingerprint"):
+                self.entry.async_start_reauth(self.hass)
+            self.action_required(
+                "authentication_failed",
+                "Open the app to check its Home Assistant connection and approve re-pairing when requested. "
+                "Existing commands remain usable only within their normal validity.",
+            )
+        elif isinstance(error, ServerFingerprintMismatch):
+            self.action_required(
+                "identity_changed",
+                "The app certificate differs from the confirmed identity. "
+                "Restore the original app identity or explicitly pair again. "
+                "The saved certificate pin has not been replaced.",
+            )
+
+    def _clear_plan_connection_issue(self):
+        """Only a validated status response clears an earlier command transport issue."""
+        if self.issue in PLAN_CONNECTION_ISSUES:
+            persistent_notification.async_dismiss(self.hass, f"{DOMAIN}.{self.entry.entry_id}")
+            self.issue = None
+            self.notification_message = None
+
+    def _capture_required_sources(self):
+        """Check required local inputs without depending on the app connection."""
+        ready, _report = self.observation_bridge.capture(dt_util.utcnow())
+        return ready
+
+    def _validate_command_plan(self, plan, devices, ev_points):
+        """Reject commands that exceed independently reported installation capabilities."""
+        if devices is not None:
+            expected = {
+                device_item["id"]: device_item["kind"]
+                for device_item in devices
+                if device_item.get("configured", True)
+                and (device_item["kind"] == "battery" or device_item.get("can_curtail", True))
+            }
+            ev_points = {point["id"]: point for point in ev_points}
+            for work in plan.get("ev_context", {}).get("work", []):
+                point = ev_points.get(work["point_id"])
+                if not point or point["control"] == "read_only":
+                    raise ValueError("Plan uses an unconfigured charge point")
+                expected[work["point_id"]] = "ev"
+            # The immutable plan owns thermal membership. Protocol parsing
+            # validates its complete context. Optional metadata faults or
+            # changed bindings suppress only each heater's local guard.
+            for heater in plan.get("thermal_context", {}).get("devices", []):
+                expected[heater["id"]] = "thermal"
+            followers = {
+                device_item["id"]
+                for device_item in devices
+                if device_item.get("can_follow_grid") is True
+            }
+            if plan.get("device_commands") is not True or any(
+                {key: value.get("kind") for key, value in step.get("devices", {}).items()}
+                != expected
+                for step in plan.get("steps", [])
+            ):
+                raise ValueError("Plan does not match configured device capabilities")
+            if any(
+                value.get("mode") == "follow_grid_target" and key not in followers
+                for step in plan.get("steps", [])
+                for key, value in step.get("devices", {}).items()
+            ):
+                raise ValueError("Plan uses an unconfigured grid-following capability")
+
+    def _configure_measurements(self, configuration):
+        """Install the current revision of app-owned HA source bindings."""
+        bridge = (
+            ObservationBridge(self.hass.states, configuration)
+            if configuration is not None
+            else None
+        )
+        self.revoke_observation_authority()
+        self.observation_bridge = bridge
+        self.observations = None
+
+    @callback
+    def revoke_observation_authority(self):
+        """Withdraw commands and prevent in-flight validation from bypassing a local source fault."""
+        self.observation_generation += 1
+        self.schedule.invalidate()
+        self.refresh()
+
+    async def sync_observations(self, _now=None):
+        """Send one normalized current capture without waiting for plans or history."""
+        if self.closed or self.observations_lock.locked() or self.observation_bridge is None:
+            return False
+        async with self.observations_lock:
+            bridge = self.observation_bridge
+            ready, report = bridge.capture(
+                dt_util.utcnow(),
+                location={
+                    "latitude": self.hass.config.latitude,
+                    "longitude": self.hass.config.longitude,
+                    "timezone": self.hass.config.time_zone,
+                },
+            )
+            if not ready:
+                self.revoke_observation_authority()
+            try:
+                receipt = await self.client.observations(report)
+                if bridge is not self.observation_bridge:
+                    return False
+                if (
+                    receipt.get("accepted") is not True
+                    or receipt.get("config_revision") != bridge.revision
+                ):
+                    self.revoke_observation_authority()
+                    return False
+                self.observations = receipt.get("observations")
+                self._update_snapshot_notification(self.service_diagnostics)
+            except InstallationMismatchError:
+                self.schedule.invalidate()
+                self.refresh()
+                return False
+            except ClientResponseError as error:
+                if error.status == HTTPStatus.CONFLICT and bridge is self.observation_bridge:
+                    self.revoke_observation_authority()
+                return False
+            except (ClientError, TimeoutError, ValueError, TypeError, KeyError):
+                _LOGGER.debug("Current observations transfer did not complete", exc_info=True)
+                return False
+            return True
+
+    async def sync_services(self, _now=None):
+        """Service setup, optional virtual projections and Recorder away from plan reconciliation."""
+        if self.closed or self.services_lock.locked():
+            return
+        async with self.services_lock:
+            try:
+                intent_at_request = self.schedule.resume_after
+                ev_intent_at_request = self.ev_intent_generation
+                data = await self.client.service_requests()
+                if self.closed:
+                    return
+                if data.get("release") != RELEASE:
+                    raise ReleaseMismatchError("HA data requests release mismatch")
+                if data.get("source") == "home_assistant":
+                    from .source_choices import refresh_choices
+
                     await refresh_choices(
                         self, data.get("installation", {}).get("source_choices_requested", [])
                     )
                     if self.closed:
                         return
                 self.market_prices.start(data.get("market_price_request"), self.client)
-                configuration = data.get("measurement_config")
-                if configuration is not None:
-                    bridge = ObservationBridge(self.hass.states, configuration)
-                    if bridge.revision != self.schedule.config_revision:
-                        self.schedule.config_revision = bridge.revision
-                        self.schedule.invalidate()
-                    self.observation_bridge = bridge
-                    ready, report = bridge.capture(
-                        dt_util.utcnow(),
-                        location={
-                            "latitude": self.hass.config.latitude,
-                            "longitude": self.hass.config.longitude,
-                            "timezone": self.hass.config.time_zone,
-                        },
-                    )
-                    if not ready:
-                        self.schedule.invalidate()
-                        self.refresh()
-                    try:
-                        data = await self.client.observations(report)
-                    except (ClientResponseError, ServerFingerprintMismatch):
-                        raise
-                    except (ClientError, TimeoutError):
-                        await self._confirm_catalogue(dt_util.utcnow())
-                        raise
-                    if (
-                        self.closed
-                        or self.schedule.resume_after != intent_at_request
-                        or self.ev_intent_generation != ev_intent_at_request
-                    ):
-                        return
-                    if data.get("release") != RELEASE:
-                        raise ValueError("Observation response release mismatch")
-                    pending_history = data.get("bonus_history", {}).get("request")
-                    if pending_history:
-                        historical = await self.history_bridge.capture(pending_history)
-                        if historical is not None:
-                            try:
-                                data = await self.client.history(historical)
-                            except ClientError:
-                                # Invalid/gapped history is diagnosed by the app. A fresh
-                                # snapshot retains that reason and normal plan validation.
-                                data = await self.client.snapshot()
-                        if (
-                            self.closed
-                            or self.schedule.resume_after != intent_at_request
-                            or self.ev_intent_generation != ev_intent_at_request
-                        ):
-                            return
-                        if data.get("release") != RELEASE:
-                            raise ValueError("History response release mismatch")
-                    pending_demand = data.get("demand", {}).get("request")
-                    if pending_demand:
-                        historical = await self.demand_history_bridge.capture(pending_demand)
-                        if historical is not None:
-                            try:
-                                data = await self.client.demand_history(historical)
-                            except ClientError:
-                                data = await self.client.snapshot()
-                        if (
-                            self.closed
-                            or self.schedule.resume_after != intent_at_request
-                            or self.ev_intent_generation != ev_intent_at_request
-                        ):
-                            return
-                        if data.get("release") != RELEASE:
-                            raise ValueError("Demand history response release mismatch")
-                    pending_solar = data.get("solar", {}).get("request")
-                    if pending_solar:
-                        historical = await self.solar_history_bridge.capture(pending_solar)
-                        if historical is not None:
-                            try:
-                                data = await self.client.request(
-                                    "POST", "/v1/solar/history", historical
-                                )
-                            except ClientError:
-                                data = await self.client.snapshot()
-                        if (
-                            self.closed
-                            or self.schedule.resume_after != intent_at_request
-                            or self.ev_intent_generation != ev_intent_at_request
-                        ):
-                            return
-                        if data.get("release") != RELEASE:
-                            raise ValueError("Solar history response release mismatch")
-                else:
-                    revision = identifier(data.get("config_revision"))
-                    if (
-                        self.observation_bridge is not None
-                        or revision != self.schedule.config_revision
-                    ):
-                        self.schedule.invalidate()
-                    self.observation_bridge = None
-                    self.schedule.config_revision = revision
-                enabled = data.get("enabled")
-                if data.get("config_revision") != self.schedule.config_revision:
-                    # A changed revision invalidates commands even if this reply is rejected.
-                    self.schedule.invalidate()
-                    raise ValueError("Installation configuration changed during synchronization")
-                if type(enabled) is not bool:
-                    raise ValueError("Invalid installation snapshot")
-                if data.get("plan_invalidated") is True:
-                    self.schedule.invalidate()
                 now = dt_util.utcnow()
                 if data.get("source") == "home_assistant":
                     try:
@@ -574,9 +732,8 @@ class PlanCoordinator:
                             if membership.get("devices") is not None:
                                 data["installation"]["devices"] = membership["devices"]
                             if membership.get("configuration_issue"):
-                                self.schedule.invalidate()
-                                data["plan"] = None
-                                data["planning"] = {
+                                self.revoke_observation_authority()
+                                self.planning_status = {
                                     "status": "not_ready",
                                     "reason": membership["configuration_issue"],
                                 }
@@ -633,15 +790,6 @@ class PlanCoordinator:
                         raise
                     except (ClientError, TimeoutError, ValueError, TypeError, KeyError):
                         _LOGGER.debug("Solar forecast refresh failed", exc_info=True)
-                # App-side disable is immediate once observed. Resuming requires a new plan.
-                if not enabled and self.schedule.enabled:
-                    self.schedule.pause(now)
-                    # The accepted remote pause is not a newer local user action.
-                    intent_at_request = self.schedule.resume_after
-                elif enabled and not self.schedule.enabled:
-                    # A persisted manual pause cannot be silently cancelled by a stale app.
-                    self.pending_enabled = False
-                self.planning_status = data.get("planning")
                 if self.ev_intent_generation != ev_intent_at_request:
                     return
                 if "ev" in data:
@@ -660,11 +808,6 @@ class PlanCoordinator:
                         if self.closed or self.ev_intent_generation != ev_intent_at_request:
                             return
                         self.ev = receive_ev(ev_reply)
-                    if data.get("plan") and data["plan"].get("ev_context", {}).get(
-                        "revision"
-                    ) not in (None, self.ev["revision"]):
-                        self.schedule.invalidate()
-                        data["plan"] = None
                 devices = data.get("installation", {}).get("devices")
                 if devices is not None:
                     validate_projection_size(devices, MAX_SNAPSHOT_RESPONSE_BYTES)
@@ -748,63 +891,18 @@ class PlanCoordinator:
                 }
                 validate_device_configuration({"configuration": grid})
                 self.grid_configuration = grid or None
-                self.observations = data.get("observations")
-                accepted = False
-                if data.get("plan") is not None:
-                    if devices is not None:
-                        expected = {
-                            device_item["id"]: device_item["kind"]
-                            for device_item in devices
-                            if device_item.get("configured", True)
-                            and (
-                                device_item["kind"] == "battery"
-                                or device_item.get("can_curtail", True)
-                            )
-                        }
-                        ev_points = {point["id"]: point for point in self.ev.get("points", [])}
-                        for work in data["plan"].get("ev_context", {}).get("work", []):
-                            point = ev_points.get(work["point_id"])
-                            if not point or point["control"] == "read_only":
-                                raise ValueError("Plan uses an unconfigured charge point")
-                            expected[work["point_id"]] = "ev"
-                        # The immutable plan owns thermal membership. Protocol parsing
-                        # validates its complete context. Optional metadata faults or
-                        # changed bindings suppress only each heater's local guard.
-                        for heater in data["plan"].get("thermal_context", {}).get("devices", []):
-                            expected[heater["id"]] = "thermal"
-                        followers = {
-                            device_item["id"]
-                            for device_item in devices
-                            if device_item.get("can_follow_grid") is True
-                        }
-                        if data["plan"].get("device_commands") is not True or any(
-                            {
-                                key: value.get("kind")
-                                for key, value in step.get("devices", {}).items()
-                            }
-                            != expected
-                            for step in data["plan"].get("steps", [])
-                        ):
-                            self.schedule.invalidate()
-                            raise ValueError("Plan does not match configured device capabilities")
-                        if any(
-                            value.get("mode") == "follow_grid_target" and key not in followers
-                            for step in data["plan"].get("steps", [])
-                            for key, value in step.get("devices", {}).items()
-                        ):
-                            self.schedule.invalidate()
-                            raise ValueError("Plan uses an unconfigured grid-following capability")
-                    try:
-                        accepted = self.schedule.accept(data["plan"], now)
-                    except RevokedPlan:
-                        # Expected during recovery: keep commands revoked, but process diagnostics.
-                        pass
-                await self.save()
-                if self.schedule.plan and (
-                    accepted or data.get("acknowledged_plan") != self.schedule.plan.plan_id
-                ):
-                    await self.client.acknowledge(self.schedule.plan.plan_id)
-                self._update_snapshot_notification(data)
+                self.service_diagnostics = {
+                    key: data[key]
+                    for key in (
+                        "installation",
+                        "bonus_history",
+                        "demand",
+                        "solar",
+                        "savings_status",
+                    )
+                    if key in data
+                }
+                self._update_snapshot_notification(self.service_diagnostics)
                 self.refresh()
                 from .solar_feedback import synchronize as synchronize_solar_feedback
 
@@ -849,50 +947,65 @@ class PlanCoordinator:
                         or self.ev_intent_generation != ev_intent_at_request
                     ):
                         return
-            except InstallationMismatchError:
-                self.schedule.invalidate()
-                self.pending_enabled = None
-                self.action_required(
-                    "installation_identity_changed",
-                    "This Home Assistant connection belongs to a different OEP installation. "
-                    "Existing commands have been withdrawn. Verify the current app connection to resume.",
-                )
-            except ReleaseMismatchError:
-                self.action_required(
-                    "release_mismatch",
-                    "Update the app and integration together to the same version and build. "
-                    "Existing commands remain usable only within their normal validity.",
-                )
-            except AuthenticationError:
-                if self.entry.data.get("supervisor"):
-                    self.issue = "supervisor_reconnecting"
-                    return
-                if self.entry.data.get("fingerprint"):
-                    self.entry.async_start_reauth(self.hass)
-                self.action_required(
-                    "authentication_failed",
-                    "Open the app to check its Home Assistant connection and approve re-pairing when requested. "
-                    "Existing commands remain usable only within their normal validity.",
-                )
-            except ServerFingerprintMismatch:
-                self.action_required(
-                    "identity_changed",
-                    "The app certificate differs from the confirmed identity. "
-                    "Restore the original app identity or explicitly pair again. "
-                    "The saved certificate pin has not been replaced.",
-                )
+                for pending, bridge, endpoint in (
+                    (
+                        data.get("bonus_history", {}).get("request"),
+                        self.history_bridge,
+                        "/v1/history",
+                    ),
+                    (
+                        data.get("demand", {}).get("request"),
+                        self.demand_history_bridge,
+                        "/v1/demand/history",
+                    ),
+                    (
+                        data.get("solar", {}).get("request"),
+                        self.solar_history_bridge,
+                        "/v1/solar/history",
+                    ),
+                ):
+                    if self.closed:
+                        return
+                    if pending:
+                        try:
+                            historical = await bridge.capture(pending)
+                            if historical is not None:
+                                receipt = await self.client.request("POST", endpoint, historical)
+                                if (
+                                    endpoint == "/v1/history"
+                                    and not self.closed
+                                    and "issue" in receipt
+                                ):
+                                    self.service_diagnostics["bonus_history"] = {
+                                        "issue": receipt["issue"]
+                                    }
+                                    self._update_snapshot_notification(self.service_diagnostics)
+                        except (
+                            InstallationMismatchError,
+                            ReleaseMismatchError,
+                            AuthenticationError,
+                        ):
+                            raise
+                        except (ClientError, TimeoutError, ValueError, TypeError, KeyError):
+                            _LOGGER.debug(
+                                "Optional history transfer did not complete", exc_info=True
+                            )
+            except (
+                InstallationMismatchError,
+                ReleaseMismatchError,
+                AuthenticationError,
+                ServerFingerprintMismatch,
+            ) as error:
+                self._connection_failure(error)
             except (ClientError, TimeoutError, ValueError, TypeError, KeyError):
-                if not self.issue:
-                    _LOGGER.warning(
-                        "EMS synchronization failed. Keeping only locally valid commands"
-                    )
-                self.issue = "synchronization_failed"
-                # A temporary outage is not itself an action-required notification.
+                _LOGGER.debug("Non-command synchronization did not complete", exc_info=True)
             finally:
                 self.refresh()
 
     def _update_snapshot_notification(self, data):
         """Apply the selected recovery advice or clear it after recovery."""
+        if self.issue in PLAN_CONNECTION_ISSUES:
+            return
         issues = self.observations.get("issues", []) if self.observations else []
         required_sources = (
             {
@@ -951,7 +1064,13 @@ class PlanCoordinator:
         )
         self.hass.async_create_background_task(synchronize(self), "OEP appliance history startup")
         self.poll_cancel = async_track_time_interval(
-            self.hass, self.sync, timedelta(seconds=POLL_INTERVAL_SECONDS)
+            self.hass, self.sync_plan, timedelta(seconds=POLL_INTERVAL_SECONDS)
+        )
+        self.service_cancel = async_track_time_interval(
+            self.hass, self.sync_services, timedelta(seconds=SERVICE_REQUEST_INTERVAL_SECONDS)
+        )
+        self.observation_cancel = async_track_time_interval(
+            self.hass, self.sync_observations, timedelta(seconds=POLL_INTERVAL_SECONDS)
         )
 
     async def close(self):
@@ -995,12 +1114,16 @@ class PlanCoordinator:
             self.boundary_cancel()
         if self.poll_cancel:
             self.poll_cancel()
+        if self.service_cancel:
+            self.service_cancel()
+        if self.observation_cancel:
+            self.observation_cancel()
         if self.startup_cancel:
             self.startup_cancel()
         if self.ev_cancel:
             self.ev_cancel()
         if self.thermal_cancel:
             self.thermal_cancel()
-        async with self.lock:
+        async with self.services_lock, self.observations_lock, self.lock:
             self.solar_forecast_bridge.close()
             await self.save()

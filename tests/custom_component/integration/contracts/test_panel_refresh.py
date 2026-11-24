@@ -63,7 +63,7 @@ async def _accepted_metadata(*, measurement=False, fixture_devices=True):
             yield hass, coordinator, status
 
 
-@pytest.mark.parametrize("failure_path", ["/v1/snapshot", "/v1/observations"])
+@pytest.mark.parametrize("failure_path", ["/v1/ha/plan-status", "/v1/observations"])
 @pytest.mark.parametrize("failure_type", [TimeoutError, ClientConnectionError])
 @pytest.mark.parametrize("measurement", [False, True])
 def test_healthy_panel_metadata_confirmation_survives_command_snapshot_timeout(
@@ -81,8 +81,10 @@ def test_healthy_panel_metadata_confirmation_survives_command_snapshot_timeout(
                 assert "sensor.diagnostic_grid" in {
                     entity["entity_id"] for entity in accepted["data"]["entities"]
                 }
-                snapshot = await original_request("GET", "/v1/snapshot")
-                configuration = snapshot["measurement_config"]
+                plan_status = await coordinator.client.plan_status()
+                configuration = (
+                    await coordinator.client.measurement_config(plan_status["config_revision"])
+                )["measurement_config"]
                 assert configuration["bindings"][0]["entity_id"] == "sensor.diagnostic_grid"
 
             async def request(method, path, body=None):
@@ -94,10 +96,20 @@ def test_healthy_panel_metadata_confirmation_survives_command_snapshot_timeout(
                 data = await original_request(method, path, body)
                 if (
                     not measurement
-                    and path == "/v1/snapshot"
                     and failure_path == "/v1/observations"
+                    and path == "/v1/ha/plan-status"
                 ):
-                    data["measurement_config"] = {
+                    data.update(config_revision="diagnostic-grid", measurements_required=True)
+                return data
+
+            if not measurement and failure_path == "/v1/observations":
+                from custom_components.open_energy_planner.observation_bridge import (
+                    ObservationBridge,
+                )
+
+                coordinator.observation_bridge = ObservationBridge(
+                    coordinator.hass.states,
+                    {
                         "revision": "diagnostic-grid",
                         "bindings": [
                             {
@@ -110,16 +122,17 @@ def test_healthy_panel_metadata_confirmation_survives_command_snapshot_timeout(
                                 "timestamp_attribute": None,
                             }
                         ],
-                    }
-                    data["config_revision"] = "diagnostic-grid"
-                return data
+                    },
+                )
 
             before = await status()
             coordinator.catalogue_confirmed_at = dt_util.utcnow() - timedelta(minutes=2)
             monkeypatch.setattr(coordinator.client, "request", request)
             await coordinator.sync()
             after = await status()
-            assert coordinator.issue == "synchronization_failed"
+            assert coordinator.issue == (
+                "synchronization_failed" if failure_path == "/v1/ha/plan-status" else None
+            )
             assert coordinator.catalogue_discovery.healthy
             assert confirmations == [{"confirmed_revision": coordinator.catalogue_context.revision}]
             assert after["revision"] == before["revision"]
@@ -210,7 +223,8 @@ def test_changed_publication_preserves_real_configuration_rejection(monkeypatch,
             await coordinator.sync()
             assert coordinator.catalogue_discovery.healthy
             original_request = coordinator.client.request
-            cached = await original_request("GET", "/v1/snapshot")
+            cached = await coordinator.client.service_requests()
+            command_status = await coordinator.client.plan_status()
             now = dt_util.utcnow()
             plan = command_plan(now, powers=(0,))
             plan["config_revision"] = coordinator.schedule.config_revision
@@ -228,27 +242,33 @@ def test_changed_publication_preserves_real_configuration_rejection(monkeypatch,
             assert coordinator.projection.status == (
                 "not_ready" if caller == "confirmation_empty" else "active"
             )
-            cached.update(plan=plan, plan_invalidated=False, planning={"status": "ready"})
+            command_status.update(
+                plan_id=plan["plan_id"],
+                acknowledged_plan=plan["plan_id"],
+                planning={"status": "ready"},
+            )
             old_devices = deepcopy(cached["installation"]["devices"])
             assert old_devices and old_devices[0]["energy_entity"] == "sensor.roof_energy"
             confirmation = caller.startswith("confirmation_")
-            accept = coordinator.schedule.accept
+            install = coordinator.schedule.install_candidate
             fetched_plan_attempts = []
 
-            def accept_reply(document, current):
+            def install_reply(candidate, document, current):
                 """Record attempts to accept the fetched plan after the genuine app rejection."""
                 fetched_plan_attempts.append(document["plan_id"])
-                return accept(document, current)
+                return install(candidate, document, current)
 
             if confirmation:
-                monkeypatch.setattr(coordinator.schedule, "accept", accept_reply)
+                monkeypatch.setattr(coordinator.schedule, "install_candidate", install_reply)
 
             async def request(method, path, body=None):
                 """Model an old valid command reply or outage, preserving actual app catalogue traffic."""
-                if path in ("/v1/snapshot", "/v1/observations"):
-                    if caller == "recovery":
-                        raise TimeoutError("Synthetic command transport failure")
+                if path == "/v1/ha/requests":
                     return deepcopy(cached)
+                if path == "/v1/ha/plan-status":
+                    if caller == "recovery" or confirmation:
+                        raise TimeoutError("Synthetic command transport failure")
+                    return deepcopy(command_status)
                 return await original_request(method, path, body)
 
             monkeypatch.setattr(coordinator.client, "request", request)
@@ -342,7 +362,7 @@ def test_watch_change_during_confirmation_cannot_leave_old_app_metadata_fresh(
 
             async def request(method, path, body=None):
                 """Keep actual metadata HTTP traffic while command snapshots cannot be reached."""
-                if path == "/v1/snapshot":
+                if path == "/v1/ha/plan-status":
                     raise TimeoutError("Synthetic command transport failure")
                 if path == "/v1/ha/catalogue" and "confirmed_revision" not in body:
                     corrections.append(body)
@@ -396,9 +416,9 @@ def test_watch_change_during_confirmation_cannot_leave_old_app_metadata_fresh(
     asyncio.run(scenario())
 
 
-@pytest.mark.parametrize("failure_path", ["/v1/snapshot", "/v1/observations"])
-def test_http_validation_rejection_does_not_confirm_metadata(monkeypatch, failure_path):
-    """An actual HTTP 400 rejection must not be treated as an unavailable transport."""
+@pytest.mark.parametrize("failure_path", ["/v1/ha/plan-status", "/v1/observations"])
+def test_http_validation_rejection_does_not_block_independent_metadata(monkeypatch, failure_path):
+    """An actual HTTP 400 on one exchange leaves the independent metadata confirmation available."""
 
     async def scenario():
         """Use the real report validator and client HTTP exception for either command read boundary."""
@@ -410,7 +430,11 @@ def test_http_validation_rejection_does_not_confirm_metadata(monkeypatch, failur
                 """Return a genuine app-side HTTP validation rejection with otherwise healthy transport."""
                 if path == failure_path:
                     try:
-                        return await original("POST", "/v1/observations", {"invalid_report": True})
+                        return await original(
+                            "POST",
+                            "/v1/observations",
+                            {"config_revision": coordinator.observation_bridge.revision},
+                        )
                     except ClientResponseError as error:
                         rejections.append(error.status)
                         raise
@@ -423,9 +447,13 @@ def test_http_validation_rejection_does_not_confirm_metadata(monkeypatch, failur
             monkeypatch.setattr(coordinator.client, "request", request)
             await coordinator.sync()
             assert rejections == [400]
-            assert coordinator.issue == "synchronization_failed"
-            assert confirmations == []
-            assert await status() == before
+            assert coordinator.issue == (
+                "synchronization_failed" if failure_path == "/v1/ha/plan-status" else None
+            )
+            assert confirmations == [{"confirmed_revision": coordinator.catalogue_context.revision}]
+            after = await status()
+            assert after["revision"] == before["revision"]
+            assert after["confirmed_at"] > before["confirmed_at"]
 
     asyncio.run(scenario())
 
@@ -456,7 +484,7 @@ def test_command_outage_cannot_confirm_missing_or_malformed_current_sources(
 
             async def request(method, path, body=None):
                 """Keep real HTTP rejection and introduce a command-only transport outage."""
-                if path == "/v1/snapshot":
+                if path == "/v1/ha/plan-status":
                     raise TimeoutError("Synthetic command timeout")
                 if path == "/v1/ha/catalogue":
                     assert set(body) == {"confirmed_revision"}
@@ -466,7 +494,8 @@ def test_command_outage_cannot_confirm_missing_or_malformed_current_sources(
                     except ClientResponseError as error:
                         rejected.append(error.status)
                         raise
-                raise AssertionError("Recovery must not publish metadata or forecasts")
+                assert path == "/v1/ha/requests"
+                return await original(method, path, body)
 
             before = await status()
             coordinator.catalogue_confirmed_at = dt_util.utcnow() - timedelta(minutes=2)
@@ -515,7 +544,7 @@ def test_nontransport_failures_never_use_metadata_confirmation(monkeypatch, fail
                     await coordinator.sync()
             else:
                 await coordinator.sync()
-            assert requests == ["/v1/snapshot"]
+            assert sorted(requests) == ["/v1/ha/plan-status", "/v1/ha/requests"]
             assert await status() == before
 
     asyncio.run(scenario())
@@ -548,7 +577,9 @@ def test_unavailable_watch_cannot_confirm_after_command_failure(monkeypatch, una
                 await coordinator.sync()
             finally:
                 coordinator.closed = False
-            assert requests == ([] if unavailable == "closed" else ["/v1/snapshot"])
+            assert sorted(requests) == (
+                [] if unavailable == "closed" else ["/v1/ha/plan-status", "/v1/ha/requests"]
+            )
             assert await status() == before
 
     asyncio.run(scenario())
@@ -615,7 +646,7 @@ def test_command_outage_cannot_confirm_a_replaced_revision(monkeypatch):
 
             async def request(method, path, body=None):
                 """Fail only command reads and preserve actual revision validation over HTTP."""
-                if path == "/v1/snapshot":
+                if path == "/v1/ha/plan-status":
                     raise TimeoutError("Synthetic command timeout")
                 return await original(method, path, body)
 

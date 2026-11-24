@@ -178,7 +178,7 @@ def test_build_change_during_optional_catalogue_exchange_is_not_suppressed(monke
         """Swap app identity between real HTTP requests rather than injecting a validation exception."""
         async with running_chain(live=True) as (_hass, entry, _url, _root):
             coordinator = entry.runtime_data
-            snapshot = coordinator.client.snapshot
+            snapshot = coordinator.client.service_requests
 
             async def snapshot_then_change_build():
                 """Return a matching snapshot, then emulate a different app build before catalogue refresh."""
@@ -188,7 +188,7 @@ def test_build_change_during_optional_catalogue_exchange_is_not_suppressed(monke
                 )
                 return data
 
-            monkeypatch.setattr(coordinator.client, "snapshot", snapshot_then_change_build)
+            monkeypatch.setattr(coordinator.client, "service_requests", snapshot_then_change_build)
             coordinator.catalogue_sent = None
             await coordinator.sync()
             assert coordinator.issue == "release_mismatch"
@@ -536,20 +536,17 @@ def test_app_source_selection_saves_only_in_app_and_forwards_real_reports():
             assert len(bindings) == 6
             assert bindings["grid.export_energy"]["required"] is True
             assert bindings["grid.export_energy"]["quantity"] == "energy"
-            from custom_components.open_energy_planner.observation_bridge import ObservationBridge
-
             forwarded = []
-            original_capture = ObservationBridge.capture
+            original_upload = entry.runtime_data.client.observations
 
-            def observe_capture(bridge, *args, **kwargs):
+            async def observe_upload(report):
                 """Observe the actual coordinator's forwarded HA location without changing its report."""
-                ready, report = original_capture(bridge, *args, **kwargs)
                 forwarded.append(report)
-                return ready, report
+                return await original_upload(report)
 
             from unittest.mock import patch
 
-            with patch.object(ObservationBridge, "capture", observe_capture):
+            with patch.object(entry.runtime_data.client, "observations", observe_upload):
                 await entry.runtime_data.sync()
             assert forwarded[-1]["location"] == {
                 "latitude": hass.config.latitude,
@@ -908,7 +905,7 @@ def test_optional_setup_catalogue_failure_does_not_block_current_plan(monkeypatc
                         attempts += 1
                     raise ClientError("Discovery temporarily unavailable")
                 data = await request(method, path, body)
-                if path == "/v1/snapshot":
+                if path == "/v1/ha/requests":
                     data["source"] = "home_assistant"
                     data["installation"]["setup_discovery_requested"] = refresh
                 return data

@@ -458,6 +458,22 @@ class SqlPlanRepository:
                 raise OSError("Archive transaction failed. No new plan was published") from None
             raise
 
+    def committed_control_state(self):
+        """Borrow the stable published command while applying immediate fail-closed revocation.
+
+        The archive installs a detached committed copy after the database write.
+        Readers must not mutate the borrowed plan.
+        """
+        committed = self._committed
+        return {
+            "instance_id": committed["instance_id"],
+            "enabled": committed["enabled"] and self.state["enabled"],
+            "plan": committed["plan"]
+            if not self.pending_invalidation and self.state["plan"] is not None
+            else None,
+            "acknowledged_plan": committed["acknowledged_plan"],
+        }
+
     def invalidate_plan(self):
         """Revoke commands immediately. The async owner durably flushes this flag before responding."""
         if self.state["plan"] is not None:

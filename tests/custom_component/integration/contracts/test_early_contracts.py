@@ -27,15 +27,15 @@ from tests.custom_component.support.chain import (
 
 def test_changed_revision_in_observation_response_revokes_old_commands_immediately(monkeypatch):
     """Change revision during observation upload. Reject the reply and make old command entities unavailable immediately."""
-    from copy import deepcopy
 
     async def scenario():
         """Return a changed revision during observation upload and inspect immediate command revocation."""
         async with running_chain() as (hass, entry, _url, _root):
             coordinator = entry.runtime_data
             hass.states.async_set("sensor.grid", "0", {"unit_of_measurement": "W"})
-            state = await coordinator.client.snapshot()
-            state["measurement_config"] = {
+            from custom_components.open_energy_planner.observation_bridge import ObservationBridge
+
+            configuration = {
                 "revision": "demo-1",
                 "bindings": [
                     {
@@ -50,23 +50,15 @@ def test_changed_revision_in_observation_response_revokes_old_commands_immediate
                 ],
             }
 
-            async def snapshot():
-                """Return the fixed pre-upload snapshot without changing user intent."""
-                return deepcopy(state)
+            coordinator.observation_bridge = ObservationBridge(hass.states, configuration)
 
             async def upload(_report):
                 """Simulate a changed configuration revision in the observation transport reply."""
-                return {
-                    **state,
-                    "config_revision": "changed-while-uploading",
-                    "plan_invalidated": True,
-                }
+                return {"accepted": True, "config_revision": "changed-while-uploading"}
 
-            monkeypatch.setattr(coordinator.client, "snapshot", snapshot)
             monkeypatch.setattr(coordinator.client, "observations", upload)
-            await coordinator.sync()
+            assert not await coordinator.sync_observations()
             assert coordinator.schedule.plan is None
-            assert coordinator.issue == "synchronization_failed"
             assert find(hass, "battery_power_target").state == "unavailable"
 
     asyncio.run(scenario())
@@ -543,31 +535,33 @@ def test_received_stop_is_projected_before_optional_history_wait(
         """Hold Recorder capture open while checking the actual coordinator projection and HA command entities."""
         async with running_chain() as (hass, entry, _url, _root):
             coordinator = entry.runtime_data
-            snapshot = coordinator.client.snapshot
+            status = coordinator.client.plan_status
+            requests = coordinator.client.service_requests
             started, finish = asyncio.Event(), asyncio.Event()
             assert coordinator.projection.command is not None
 
-            async def stopped_snapshot():
-                """Return a legitimate control decision and an independently pending optional history request."""
-                data = await snapshot()
-                data[request_key] = {"version": "delayed-history"}
-                if decision == "pause":
-                    data["enabled"] = False
-                else:
-                    data["plan_invalidated"] = True
-                    data["plan"] = None
-                return data
+            async def stopped_status():
+                """Return a paused installation or a plan revocation."""
+                data = await status()
+                return {**data, "enabled": decision != "pause", "plan_id": None}
+
+            async def pending_history():
+                """Return one optional history request independently of plan status."""
+                return {**await requests(), request_key: {"version": "delayed-history"}}
 
             async def capture(_request):
                 """Keep optional history work pending until the control-path assertions are complete."""
                 started.set()
                 await finish.wait()
 
-            monkeypatch.setattr(coordinator.client, "snapshot", stopped_snapshot)
+            monkeypatch.setattr(coordinator.client, "plan_status", stopped_status)
+            monkeypatch.setattr(coordinator.client, "service_requests", pending_history)
             monkeypatch.setattr(getattr(coordinator, bridge_attribute), "capture", capture)
-            task = asyncio.create_task(coordinator.sync())
+            task = asyncio.create_task(coordinator.sync_services())
             try:
                 await asyncio.wait_for(started.wait(), 5)
+                async with asyncio.timeout(1):
+                    assert await coordinator.sync_plan()
                 assert not task.done()
                 assert coordinator.projection.command is None
                 assert find(hass, "battery_power_target").state == "unavailable"

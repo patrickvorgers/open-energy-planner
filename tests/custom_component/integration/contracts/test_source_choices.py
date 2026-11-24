@@ -30,32 +30,46 @@ def test_source_choices_survive_an_observation_upload_timeout(monkeypatch, scope
                 "50",
                 {"device_class": "temperature", "unit_of_measurement": "°C"},
             )
-            original_snapshot = coordinator.client.snapshot
+            original_status = coordinator.client.plan_status
+            revision = "fixture-measurements"
 
-            async def snapshot():
-                """Supply a valid measurement binding alongside the genuine pending chooser request."""
-                data = await original_snapshot()
-                data["measurement_config"] = {
-                    "revision": "fixture-measurements",
-                    "bindings": [
-                        {
-                            "key": "grid.power",
-                            "entity_id": "sensor.grid",
-                            "quantity": "power",
-                            "required": True,
-                            "multiplier": 1,
-                            "maximum_age_s": 300,
-                            "timestamp_attribute": None,
-                        }
-                    ],
+            async def measurement_config(requested_revision):
+                """Supply a valid measurement binding separately from the genuine chooser request."""
+                assert requested_revision == revision
+                return {
+                    "measurement_config": {
+                        "revision": revision,
+                        "bindings": [
+                            {
+                                "key": "grid.power",
+                                "entity_id": "sensor.grid",
+                                "quantity": "power",
+                                "required": True,
+                                "multiplier": 1,
+                                "maximum_age_s": 300,
+                                "timestamp_attribute": None,
+                            }
+                        ],
+                    }
                 }
-                return data
+
+            async def plan_status():
+                """Advertise the test binding on the independent command status route."""
+                return {
+                    **await original_status(),
+                    "config_revision": revision,
+                    "measurements_required": True,
+                }
+
+            upload_failed = asyncio.Event()
 
             async def observations(_report):
                 """Fail independently of the metadata path without real-time waiting."""
+                upload_failed.set()
                 raise TimeoutError
 
-            monkeypatch.setattr(coordinator.client, "snapshot", snapshot)
+            monkeypatch.setattr(coordinator.client, "plan_status", plan_status)
+            monkeypatch.setattr(coordinator.client, "measurement_config", measurement_config)
             monkeypatch.setattr(coordinator.client, "observations", observations)
             async with ClientSession(headers={"Authorization": "Bearer " + TOKEN}) as session:
                 async with session.post(
@@ -64,7 +78,8 @@ def test_source_choices_survive_an_observation_upload_timeout(monkeypatch, scope
                     assert response.status == 200
                     assert (await response.json())["pending"]
                 await coordinator.sync()
-                assert coordinator.issue == "synchronization_failed"
+                assert upload_failed.is_set()
+                assert coordinator.issue is None
                 async with session.get(url + "/v1/ha/source-choices/" + scope) as response:
                     result = await response.json()
                 assert not result["pending"] and not result["failed"]
@@ -78,7 +93,7 @@ def test_source_choices_survive_an_observation_upload_timeout(monkeypatch, scope
     asyncio.run(scenario())
 
 
-@pytest.mark.parametrize("changed", [{"plan_invalidated": True}, {"config_revision": "changed"}])
+@pytest.mark.parametrize("changed", [{"plan_id": None}, {"config_revision": "changed"}])
 def test_source_transfer_cannot_delay_known_command_invalidation(monkeypatch, changed):
     """Revoke a previously usable command before awaiting optional chooser publication."""
 
@@ -92,23 +107,35 @@ def test_source_transfer_cannot_delay_known_command_invalidation(monkeypatch, ch
             hass.states.async_set("sensor.car_soc", "60", {"unit_of_measurement": "%"})
             original = coordinator.client.request
             published = []
+            metadata_started, allow_metadata = asyncio.Event(), asyncio.Event()
 
             async def request(method, path, body=None):
-                """Apply a snapshot invalidation and inspect commands before metadata I/O."""
+                """Keep a real chooser upload blocked while the separate plan status revokes authority."""
                 if path == "/v1/ha/source-choices":
-                    assert coordinator.schedule.plan is None
-                    assert coordinator.projection.command is None
+                    metadata_started.set()
+                    await allow_metadata.wait()
                     published.append(body)
                 data = await original(method, path, body)
-                if path == "/v1/snapshot":
-                    data.update(source="home_assistant", **changed)
+                if path == "/v1/ha/requests":
+                    data["source"] = "home_assistant"
+                elif path == "/v1/ha/plan-status":
+                    data.update(changed)
                 return data
 
             monkeypatch.setattr(coordinator.client, "request", request)
             async with ClientSession(headers={"Authorization": "Bearer " + TOKEN}) as session:
                 async with session.post(url + "/v1/ha/source-choices/ev", json={}) as response:
                     assert response.status == 200
-                await coordinator.sync()
+                task = asyncio.create_task(coordinator.sync_services())
+                try:
+                    await asyncio.wait_for(metadata_started.wait(), 5)
+                    async with asyncio.timeout(1):
+                        await coordinator.sync_plan()
+                    assert coordinator.schedule.plan is None
+                    assert coordinator.projection.command is None
+                finally:
+                    allow_metadata.set()
+                    await task
             assert published
 
     asyncio.run(scenario())
@@ -498,7 +525,7 @@ def test_source_identity_failure_immediately_withdraws_commands(monkeypatch, fai
             coordinator.poll_cancel()
             coordinator.poll_cancel = None
             assert coordinator.schedule.plan is not None
-            original_snapshot = coordinator.client.snapshot
+            original_snapshot = coordinator.client.service_requests
             original_request = coordinator.client.request
             attempts = []
 
@@ -516,7 +543,7 @@ def test_source_identity_failure_immediately_withdraws_commands(monkeypatch, fai
                     raise ValueError("Synthetic interrupted source page")
                 return await original_request(method, path, body)
 
-            monkeypatch.setattr(coordinator.client, "snapshot", snapshot)
+            monkeypatch.setattr(coordinator.client, "service_requests", snapshot)
             monkeypatch.setattr(coordinator.client, "request", request)
             async with ClientSession(headers={"Authorization": "Bearer " + TOKEN}) as session:
                 async with session.post(url + "/v1/ha/source-choices/ev", json={}) as response:

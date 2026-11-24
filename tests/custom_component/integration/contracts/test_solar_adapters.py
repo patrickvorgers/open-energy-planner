@@ -156,7 +156,7 @@ def test_unload_drains_solar_work_without_reopening_listeners(monkeypatch, pause
                 """Delay catalogue or upload while recording any request started after closure."""
                 if coordinator.closed:
                     late_requests.append(path)
-                if path == "/v1/snapshot":
+                if path == "/v1/ha/requests":
                     return {
                         **await original_request(method, path, body),
                         "source": "home_assistant",

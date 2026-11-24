@@ -9,7 +9,7 @@ HA OS is the default installation route. After installing the app and the Market
 3. The integration requires an authenticated HA administrator. It calls the app's pinned-TLS `/pair/supervisor` endpoint with that private proof and the HA instance identity. Public mDNS metadata alone cannot invoke automatic authorization.
 4. The app durably creates a separate peer credential, or retains the credential of the same HA owner. It refuses a different owner. The integration reconciles the one config entry. Same-installation reconnects retain entity identities and reject an unexpected certificate change.
 5. The app retries startup failures every ten seconds. Successful idempotent handshakes run every thirty seconds. App/HA restart and lost peer credentials recover without user action. Existing plan validity rules remain unchanged.
-6. Subsequent HA data reads and virtual-device management run through the integration. The TLS peer listener forwards only the explicit synchronization routes to the app. It cannot edit app settings or authorize peers.
+6. Subsequent HA data reads and virtual-device management run through the integration. The TLS peer listener forwards only the explicit synchronization routes to the app. It cannot edit app settings or authorize peers. The app and integration must use the same release and build.
 
 ```mermaid
 flowchart LR
@@ -50,11 +50,11 @@ groups, and stores a new projection namespace before setting up the entry.
 The namespace prevents Home Assistant from restoring deleted registry metadata
 when a new app configures a device with the same role or sensor.
 
-An unauthenticated announcement or failed snapshot cannot trigger cleanup. A
+An unauthenticated announcement or failed plan status response cannot trigger cleanup. A
 previously connected Supervisor app can be replaced automatically in the same
 app slot. A new standalone app requires fresh consent. Once its connection has
 been saved, a later announcement can resume an interrupted replacement with a
-snapshot authenticated using the saved TLS pin and credential. Repeated trusted
+plan status response authenticated using the saved TLS pin and credential. Repeated trusted
 Supervisor handshakes also resume interrupted setup. Same-identity reconnects
 keep the current namespace and local settings. Keep the Home Assistant and app
 backups together if the previous projection must be restored.
@@ -93,7 +93,16 @@ The manifest in `ha_app/config.yaml` enables `homeassistant_api`, default-role `
 
 The app generates its internal administration secret once in private storage. Browser users do not see it through ingress. Authorization requires the **actual socket peer** to be the standard Supervisor ingress address `172.30.32.2` and a valid `X-Ingress-Path`. Forwarded-IP headers grant no trust. HTML assets and API requests retain the ingress prefix. The canonical HA UI link comes from Supervisor's own app slug. An advanced standalone `--ui-url` / `OEP_PUBLIC_UI_URL` override avoids publishing an unreachable container hostname.
 
-The startup wrapper prepares only its `/data` directory and drops root before the app begins. Back up the internal administration secret, `pairing.json`, TLS certificate/key and app data consistently with the HA config entry. A replacement requires a trusted pairing and an authenticated snapshot of the new installation.
+The startup wrapper prepares only its `/data` directory and drops root before the app begins. Back up the internal administration secret, `pairing.json`, TLS certificate/key and app data consistently with the HA config entry. A replacement requires a trusted pairing and an authenticated plan status response from the new installation.
+
+Upgrade the app and integration from the same tested installation bundle. Keep
+the existing HA config entry, app data directory, pairing state and certificate.
+Stop the old app before replacing its files and restart Home Assistant to load
+the paired integration. A mismatched build cannot fetch or acknowledge a new
+plan. The integration withdraws previously accepted commands at their local
+validity boundary. After the paired restart, check the existing entry and entity
+IDs, a newly accepted plan ID and the matching app acknowledgement. If rollback
+is required, restore both program versions from the same previous bundle.
 
 ## Standalone containers
 

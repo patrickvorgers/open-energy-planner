@@ -68,7 +68,7 @@ from .runtime.diagnostics.planning_notifications import (
     explain_planning_problem,
     planning_notifications,
 )
-from .runtime.snapshot import create_snapshot_handler
+from .runtime.snapshot import create_snapshot_handler, device_catalogue
 from .solar import api as solar_api
 from .solar.api import register as register_solar
 from .solar.runtime import SolarRuntime
@@ -84,6 +84,7 @@ DEFAULT_REQUEST_LIMIT_KIB = 256
 MAX_REQUEST_ID_LENGTH = 128
 FORECAST_WORKER_POLL_SECONDS = 5
 PRICE_SCHEDULE_POLL_SECONDS = 30
+APPLIANCE_LIFECYCLE_TICK_SECONDS = 5
 DATABASE_URL_UNSET = object()
 _LOGGER = logging.getLogger(__name__)
 
@@ -328,10 +329,14 @@ def create_app(
 
         Public pages, assets and bounded session metadata contain no commands or
         authenticated state. Their reads must not wait behind archive writes.
-        Protected responses retain the durability barrier even on handler failure.
+        HA status and binding reads expose no command content. The status uses
+        fail-closed committed authority even while the background flush is blocked.
+        Other protected responses retain the durability barrier on handler failure.
         """
         if is_public(request) or (
-            request.method in {"GET", "HEAD"} and request.path == "/setup/session"
+            request.method in {"GET", "HEAD"}
+            and request.path
+            in {"/setup/session", "/v1/ha/plan-status", "/v1/ha/measurement-config"}
         ):
             return await handler(request)
         try:
@@ -739,7 +744,17 @@ def create_app(
 
     async def snapshot(request):
         """Dispatch once the snapshot's app-owned services have been registered."""
+        if request.headers.get("X-OEP-View") == "commands":
+            if request.method == "GET":
+                raise web.HTTPNotFound()
+            return web.json_response(
+                {"accepted": True, "instance_id": repository.state["instance_id"]}
+            )
         return await snapshot_handler(request)
+
+    async def ha_requests(request):
+        """Serve HA setup and data requests separately from command transfers."""
+        return await snapshot_handler(request, ha_requests=True)
 
     async def enabled(request):
         """Persist explicit enable intent and request a fresh round for a new resume request."""
@@ -771,12 +786,15 @@ def create_app(
         body = await request.json()
         if not isinstance(body, dict):
             raise web.HTTPBadRequest(text="Invalid acknowledgement")
+        from .home_assistant.plan_api import command_mode
+
         async with lock:
-            current = repository.state["plan"]
+            state, _revision, current = command_mode(repository, live)
             if current is None or body.get("plan_id") != current["plan_id"]:
-                raise web.HTTPConflict(text="Acknowledgement refers to a different plan")
-            repository.state["acknowledged_plan"] = body["plan_id"]
-            await save_state()
+                raise web.HTTPConflict(text="Acknowledgement refers to an inactive plan")
+            if state["acknowledged_plan"] != body["plan_id"]:
+                repository.state["acknowledged_plan"] = body["plan_id"]
+                await save_state()
         return web.json_response({"accepted": True})
 
     async def startup(app):
@@ -787,14 +805,37 @@ def create_app(
     async def cleanup(app):
         """Own the live clock and drain planning before outer resources close."""
         schedule = asyncio.create_task(live.run(lock)) if live else None
+
+        async def tick_appliances():
+            """Expire appliance execution attempts under the durable writer's lock."""
+            while True:
+                await asyncio.sleep(APPLIANCE_LIFECYCLE_TICK_SECONDS)
+                if not appliances.state["tasks"]:
+                    continue
+                try:
+                    async with lock:
+                        cancellation = await complete_write(
+                            appliances.tick,
+                            datetime.now(UTC),
+                            repository.state["enabled"],
+                            repository.state["plan"],
+                        )
+                        if cancellation is not None:
+                            raise cancellation
+                except OSError:
+                    _LOGGER.exception("Appliance execution state could not be updated")
+
+        appliance_clock = asyncio.create_task(tick_appliances())
         try:
             yield
         finally:
-            if schedule:
-                schedule.cancel()
-                with suppress(asyncio.CancelledError):
-                    await schedule
-            await planner.close()
+            tasks = [task for task in (schedule, appliance_clock) if task is not None]
+            for task in tasks:
+                task.cancel()
+            try:
+                await asyncio.gather(*tasks, return_exceptions=True)
+            finally:
+                await planner.close()
 
     async def replan(request):
         """Request a fresh live round or validate explicitly synthetic state overrides."""
@@ -852,6 +893,8 @@ def create_app(
 
         async def observations(request):
             """Validate a complete report against current source bindings before refreshing live planning."""
+            from .home_assistant.observation_wire import observation_status
+
             async with lock:
                 if live.configuration is None:
                     raise web.HTTPConflict(text="Configure measurement sources first")
@@ -859,6 +902,13 @@ def create_app(
                     from datetime import UTC, datetime
 
                     body = await request.json()
+                    is_peer = request.headers.get("X-OEP-View") == "commands"
+                    if (
+                        is_peer
+                        and isinstance(body, dict)
+                        and body.get("config_revision") != live.configuration.revision
+                    ):
+                        raise web.HTTPConflict(text="The measurement configuration changed")
                     report = parse_report(body, live.configuration, datetime.now(UTC))
                     if live.report is not None and report.captured_at <= live.report.captured_at:
                         raise ValueError("Observation reports must advance capture time")
@@ -877,6 +927,15 @@ def create_app(
                         raise cancellation
                 except (ValueError, TypeError, KeyError):
                     raise web.HTTPBadRequest(text="Invalid observation report") from None
+                if is_peer:
+                    return web.json_response(
+                        {
+                            "accepted": True,
+                            "instance_id": repository.state["instance_id"],
+                            "config_revision": live.configuration.revision,
+                            "observations": observation_status(live.configuration, live.report),
+                        }
+                    )
             return await snapshot(request)
 
         app.router.add_put("/v1/sources", configure_sources)
@@ -915,6 +974,29 @@ def create_app(
 
     app.router.add_put("/v1/enabled", enabled)
     app.router.add_post("/v1/ack", acknowledge)
+    app.router.add_get("/v1/ha/requests", ha_requests)
+    from .home_assistant.plan_api import register as register_ha_plan_api
+
+    def command_context():
+        """Describe the actual device permissions used to validate a new command plan."""
+        devices = device_catalogue(
+            installation, solar, setup_catalogue, installation_basis, synthetic_batteries, live
+        )
+        return {
+            "devices": [
+                {
+                    name: device[name]
+                    for name in ("id", "kind", "configured", "can_curtail", "can_follow_grid")
+                    if name in device
+                }
+                for device in devices
+            ],
+            "ev_points": [
+                {"id": point["id"], "control": point["control"]} for point in ev.state["points"]
+            ],
+        }
+
+    register_ha_plan_api(app, repository, planner, live, lock, command_context)
     setup_catalogue = register_setup(
         app,
         installation,

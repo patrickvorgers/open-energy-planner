@@ -112,12 +112,18 @@ def test_tls_pinning_consent_and_admin_separation_over_real_http(tmp_path):
                 ) as response:
                     token = (await response.json())["token"]
                 async with client.get(
-                    url + "/v1/snapshot",
+                    url + "/v1/ha/plan-status",
                     ssl=fingerprint,
                     headers={"Authorization": "Bearer " + token},
                 ) as response:
                     assert response.status == 200
                     assert (await response.json())["instance_id"] == pairing.instance_id
+                async with client.get(
+                    url + "/v1/snapshot",
+                    ssl=fingerprint,
+                    headers={"Authorization": "Bearer " + token},
+                ) as response:
+                    assert response.status == 403
                 for route, body_mib, expected_status in (
                     ("/v1/history", 2, 409),
                     ("/v1/observations", 2, 413),

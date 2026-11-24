@@ -29,9 +29,10 @@ def test_rejected_bindings_do_not_block_ack_or_confirm_old_metadata(monkeypatch,
                 if path == "/v1/ack":
                     acknowledgements.append(body)
                 data = await original(method, path, body)
-                if path == "/v1/snapshot":
+                if path == "/v1/ha/requests":
                     data["source"] = "home_assistant"
                     data["installation"]["setup_source_entities"] = bindings.copy()
+                if path == "/v1/ha/plan-status":
                     data["acknowledged_plan"] = None
                 return data
 

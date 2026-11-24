@@ -441,7 +441,8 @@ def test_delayed_observations_or_appliance_history_sync_cannot_overwrite_newer_u
                 "release": RELEASE,
                 "enabled": False,
                 "config_revision": "selected-1",
-                "plan": None,
+                "plan_id": None,
+                "measurements_required": True,
                 "measurement_config": {
                     "revision": "selected-1",
                     "bindings": [
@@ -467,9 +468,12 @@ def test_delayed_observations_or_appliance_history_sync_cannot_overwrite_newer_u
                 """Hold synchronization open until explicit resume, then return its stale intent."""
                 started.set()
                 await finish.wait()
-                return data
+                return {"accepted": True, "config_revision": "stale-observation-revision"}
 
-            monkeypatch.setattr(coordinator.client, "snapshot", snapshot)
+            monkeypatch.setattr(coordinator.client, "plan_status", snapshot)
+            monkeypatch.setattr(
+                coordinator.client, "measurement_config", lambda _revision: snapshot()
+            )
             if upload_stage == "observations":
                 monkeypatch.setattr(coordinator.client, "observations", upload)
             else:
@@ -755,7 +759,7 @@ def test_demand_history_fault_notifies_sensor_names_and_clears_after_recovery(re
         """Inject app diagnostics into real HA synchronization without using production sensors or Recorder credentials."""
         async with running_chain() as (hass, entry, _url, _root):
             coordinator = entry.runtime_data
-            snapshot = coordinator.client.snapshot
+            snapshot = coordinator.client.service_requests
             demand = {"history_issues": {"sensor.z_home": reason, "sensor.a_home": reason}}
 
             async def with_diagnostics():
@@ -765,7 +769,7 @@ def test_demand_history_fault_notifies_sensor_names_and_clears_after_recovery(re
                 return data
 
             with (
-                patch.object(coordinator.client, "snapshot", with_diagnostics),
+                patch.object(coordinator.client, "service_requests", with_diagnostics),
                 patch.object(
                     persistent_notification,
                     "async_create",
@@ -1275,11 +1279,11 @@ def test_optional_history_failure_does_not_interrupt_command_synchronization(
 
         async with running_chain() as (_hass, entry, _url, _root):
             coordinator = entry.runtime_data
-            snapshot = coordinator.client.snapshot
+            snapshot = coordinator.client.service_requests
             original = coordinator.schedule.plan.plan_id
             attempted = asyncio.Event()
-            accepted = Mock(wraps=coordinator.schedule.accept)
-            monkeypatch.setattr(coordinator.schedule, "accept", accepted)
+            install = Mock(wraps=coordinator.schedule.install_candidate)
+            monkeypatch.setattr(coordinator.schedule, "install_candidate", install)
 
             async def pending_snapshot():
                 """Keep the real plan response while requesting a faulty optional settlement transfer."""
@@ -1290,13 +1294,14 @@ def test_optional_history_failure_does_not_interrupt_command_synchronization(
             async def failed_capture(_request):
                 """Emulate an independent history-read problem, not a planner or authentication failure."""
                 attempted.set()
-                accepted.assert_called_once()
+                assert coordinator.schedule.plan.plan_id == original
                 raise failure("Settlement fixture failure")
 
-            monkeypatch.setattr(coordinator.client, "snapshot", pending_snapshot)
+            monkeypatch.setattr(coordinator.client, "service_requests", pending_snapshot)
             monkeypatch.setattr(getattr(coordinator, bridge_attribute), "capture", failed_capture)
             await coordinator.sync()
             assert attempted.is_set()
+            install.assert_not_called()
             assert coordinator.issue is None
             assert coordinator.schedule.plan.plan_id == original
 
@@ -1322,7 +1327,7 @@ def test_optional_history_wait_cannot_override_newer_resume_intent(
         async with running_chain() as (_hass, entry, _url, _root):
             coordinator = entry.runtime_data
             coordinator.schedule.pause(dt_util.utcnow())
-            snapshot = coordinator.client.snapshot
+            snapshot = coordinator.client.service_requests
             started, finish = asyncio.Event(), asyncio.Event()
 
             async def pending_snapshot():
@@ -1336,7 +1341,7 @@ def test_optional_history_wait_cannot_override_newer_resume_intent(
                 started.set()
                 await finish.wait()
 
-            monkeypatch.setattr(coordinator.client, "snapshot", pending_snapshot)
+            monkeypatch.setattr(coordinator.client, "service_requests", pending_snapshot)
             monkeypatch.setattr(getattr(coordinator, bridge_attribute), "capture", capture)
             task = asyncio.create_task(coordinator.sync())
             await asyncio.wait_for(started.wait(), 5)
@@ -1713,7 +1718,7 @@ def test_appliance_history_timer_runs_when_command_synchronization_fails(monkeyp
                 raise AuthenticationError("Synthetic command exchange failure")
 
             monkeypatch.setattr(appliance_history, "process", read_history)
-            monkeypatch.setattr(coordinator.client, "snapshot", failed_snapshot)
+            monkeypatch.setattr(coordinator.client, "plan_status", failed_snapshot)
             await coordinator.sync()
             assert not entered.is_set()
             ticks = [action for action, interval in callbacks if interval == timedelta(seconds=60)]

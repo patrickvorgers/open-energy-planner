@@ -212,19 +212,21 @@ publish never extends a previous command's validity. See
 flowchart TD
     accTitle: Plan synchronization and feedback in Home Assistant
     accDescr: The HA integration checks received plans locally and exposes current virtual commands. User automations control equipment, and execution feedback returns over synchronization.
-    PLAN["Published plan<br/>App snapshot API"] --> SYNC["HA coordinator.py<br/>Synchronize and acknowledge a complete plan"]
+    PLAN["Published plan<br/>App plan status and command API"] --> SYNC["HA command reconciliation<br/>Read status and fetch changed commands"]
+    SYNC -->|"Receipt of current plan ID"| PLAN
     SYNC --> SCHEDULE["HA local schedule and validity<br/>Select the applicable interval or withdraw commands"]
     SCHEDULE --> ENTITIES["Virtual devices and entities<br/>Expose current proposals and status"]
     ENTITIES --> AUTOMATION["User-owned HA automations<br/>Translate proposals into device actions"]
     AUTOMATION --> EQUIPMENT["Physical equipment<br/>Apply local control and safeguards"]
     EQUIPMENT --> EVIDENCE["HA states, Recorder and execution feedback"]
-    EVIDENCE -->|Observations and supported feedback| SYNC
-    SYNC -->|Measurements and execution state| LIVE["App admission and live planning inputs"]
+    EVIDENCE --> SEPARATE["HA observations and Recorder transfers"]
+    SEPARATE -->|Measurements and execution state| LIVE["App admission and live planning inputs"]
 ```
 
 The integration checks local validity independently of the app. Expiry and
 pause withdraw virtual commands. A receipt proves delivery. Measurements,
 claims and execution feedback provide separate evidence of device behavior.
+The integration can reconcile a new command plan while Recorder or observation transfers wait.
 See [virtual devices](VIRTUAL-DEVICES.md).
 
 ### Historical evaluation, storage and the web UI
@@ -305,8 +307,9 @@ confirmed current intent, never an intent superseded during the exchange or
 after shutdown. Local pause withdraws commands before waiting for the HA
 synchronization lock. Its confirmation can wait for an in-flight synchronization
 to finish, but the control receipt does not start another historical read.
-Its next periodic synchronization retains the complete snapshot,
-catalogue, observation and history flow. Resume still requires a plan generated
+Periodic reconciliation reads commit-aware plan status and fetches commands
+only for a different active identity. Catalogue, measurements and history
+use independent exchanges. Resume still requires a plan generated
 after the local resume boundary, so a receipt cannot revive older commands.
 
 The shared PostgreSQL engine also bounds each native driver I/O wait to thirty

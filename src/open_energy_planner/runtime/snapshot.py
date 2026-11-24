@@ -11,10 +11,32 @@ from open_energy_planner.home_assistant.observation_wire import (
 from open_energy_planner.home_assistant.source_choices import configured_sources
 from open_energy_planner.installation.api import catalogue as installation_catalogue
 from open_energy_planner.installation.api import warnings as installation_warnings
-from open_energy_planner.installation.commands import execution_document
 from open_energy_planner.installation.storage import document as installation_document
 from open_energy_planner.runtime.diagnostics.http import phase, timed_lock
 from open_energy_planner.storage.writes import complete_write
+
+
+def device_catalogue(installation, solar, setup, installation_basis, synthetic_batteries, live):
+    """Resolve configuration, Energy membership and synthetic capabilities consistently."""
+    devices = installation_catalogue(installation, solar, live.current_snapshot if live else None)
+    if installation_basis or installation.current is not None:
+        devices = setup.devices(devices)
+    if devices is not None:
+        return devices
+    return (
+        []
+        if live
+        else [
+            {
+                "id": unit.device_id,
+                "kind": "battery",
+                "name": "Battery",
+                "configured": True,
+                "can_follow_grid": unit.can_follow_grid,
+            }
+            for unit in synthetic_batteries
+        ]
+    )
 
 
 def create_snapshot_handler(
@@ -47,7 +69,7 @@ def create_snapshot_handler(
     outside the app lock and serialize refresh, state capture and encoding under it.
     """
 
-    async def snapshot(request):
+    async def snapshot(request, *, ha_requests=False):
         """Capture settlement inputs under the state lock and await their archive read outside it.
 
         Reacquire the lock to refresh live validity and assemble current state, so
@@ -58,18 +80,19 @@ def create_snapshot_handler(
         with phase(request, "snapshot_settlement"):
             settlement = await pending_settlement
         async with timed_lock(request, "snapshot_state_wait", lock):
-            with phase(request, "snapshot_appliance_tick"):
-                cancellation = await complete_write(
-                    appliances.tick,
-                    now(),
-                    repository.state["enabled"],
-                    repository.state["plan"],
-                )
-                if cancellation is not None:
-                    raise cancellation
-            if live:
-                with phase(request, "snapshot_live_refresh"):
-                    await live.refresh_async()
+            if not ha_requests:
+                with phase(request, "snapshot_appliance_tick"):
+                    cancellation = await complete_write(
+                        appliances.tick,
+                        now(),
+                        repository.state["enabled"],
+                        repository.state["plan"],
+                    )
+                    if cancellation is not None:
+                        raise cancellation
+                if live:
+                    with phase(request, "snapshot_live_refresh"):
+                        await live.refresh_async()
             with phase(request, "snapshot_bonus_history"):
                 pending_history = contract_api.history_request()
             with phase(request, "snapshot_forecast_history"):
@@ -83,27 +106,14 @@ def create_snapshot_handler(
                     or demand.consumers.request(demand.configuration, now()),
                 }
             with phase(request, "snapshot_document"):
-                devices = installation_catalogue(
-                    installation, solar, live.current_snapshot if live else None
+                devices = device_catalogue(
+                    installation,
+                    solar,
+                    setup_catalogue,
+                    installation_basis,
+                    synthetic_batteries,
+                    live,
                 )
-                if installation_basis or installation.current is not None:
-                    devices = setup_catalogue.devices(devices)
-                if devices is None:
-                    devices = (
-                        []
-                        if live
-                        else [
-                            {
-                                "id": unit.device_id,
-                                "kind": "battery",
-                                "name": "Battery",
-                                "configured": True,
-                                "can_follow_grid": unit.can_follow_grid,
-                            }
-                            for unit in synthetic_batteries
-                        ]
-                    )
-                execution_only = request.headers.get("X-OEP-View") == "commands"
                 document = {
                     "release": RELEASE,
                     "settlement_request": settlement,
@@ -111,9 +121,13 @@ def create_snapshot_handler(
                         "issue": savings_runtime.issue,
                         "action_required": savings_runtime.attention,
                     },
-                    **repository.state,
-                    "plan": execution_document(repository.state["plan"])
-                    if execution_only
+                    **(
+                        {"instance_id": repository.state["instance_id"]}
+                        if ha_requests
+                        else repository.state
+                    ),
+                    "plan": None
+                    if ha_requests
                     else {
                         key: value
                         for key, value in repository.state["plan"].items()
@@ -186,6 +200,9 @@ def create_snapshot_handler(
                         else None,
                     },
                 }
+            if ha_requests:
+                del document["plan"]
+                del document["plan_invalidated"]
             with phase(request, "snapshot_json"):
                 return web.json_response(document)
 
