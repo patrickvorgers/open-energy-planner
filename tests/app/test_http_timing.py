@@ -3,12 +3,13 @@
 import asyncio
 import re
 
+import pytest
 from aiohttp import web
 from aiohttp.test_utils import TestClient, TestServer
 
 from open_energy_planner.app import create_app
 from open_energy_planner.build_info import BUILD_INFO
-from open_energy_planner.runtime.diagnostics.http import phase, register
+from open_energy_planner.runtime.diagnostics import http
 from open_energy_planner.savings.runtime import SavingsRuntime
 
 
@@ -18,11 +19,11 @@ def test_timing_reports_work_and_error_duration_without_request_values():
     async def check():
         """Exercise prepared response headers for an ordinary response and a raised HTTP failure."""
         app = web.Application()
-        register(app)
+        http.register(app)
 
         async def handler(request):
             """Model a small awaited archive operation and an independently selected failure."""
-            with phase(request, "archive"):
+            with http.phase(request, "archive"):
                 await asyncio.sleep(0.010)
             if request.path == "/failed":
                 raise web.HTTPServiceUnavailable(text="Unavailable")
@@ -41,6 +42,33 @@ def test_timing_reports_work_and_error_duration_without_request_values():
                 durations = [float(metric.split("=")[1]) for metric in header.split(", ")]
                 assert durations[0] >= durations[1] >= 5
                 assert "PRIVATE" not in header
+
+    asyncio.run(check())
+
+
+def test_timed_lock_releases_after_direct_call_and_failed_timing(monkeypatch):
+    """Direct handler calls need no HTTP mapping, and failed timing must leave the lock usable."""
+
+    async def check():
+        """Check direct invocation and inject a timing failure after acquisition."""
+        request = object()
+        lock = asyncio.Lock()
+        with http.phase(request, "archive"):
+            async with http.timed_lock(request, "archive_wait", lock):
+                assert lock.locked()
+
+        def fail_recording(*_arguments):
+            """Raise at the point where acquisition latency would be recorded."""
+            assert lock.locked()
+            raise RuntimeError("timing failed")
+
+        monkeypatch.setattr(http, "_record_phase", fail_recording)
+        with pytest.raises(RuntimeError, match="timing failed"):
+            async with http.timed_lock(request, "archive_wait", lock):
+                pytest.fail("A failed timing hook entered the caller's lock body")
+        assert not lock.locked()
+        async with lock:
+            assert lock.locked()
 
     asyncio.run(check())
 
