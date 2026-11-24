@@ -51,7 +51,7 @@ def test_documentation_plan_contains_real_solar_storage_and_daily_variation(app_
         "canvas => Chart.getChart(canvas).data.datasets.map(series => ({name:series.label, values:series.data.map(point => point.y)}))"
     )
     for label in (
-        "Used solar: DC",
+        "Solar production: DC",
         "Grid import: AC",
         "Battery charge: DC",
         "Battery discharge: DC",

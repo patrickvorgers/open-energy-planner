@@ -106,7 +106,7 @@ def dispatch(problem, step, stored):
         > problem.grid_export_limit_w * step.duration_h / WATTS_PER_KW + ENERGY_TOLERANCE_KWH
     ):
         raise ValueError("Uncontrolled reference exceeds configured grid limit")
-    used_solar = {}
+    solar_production_by_source = {}
     available_solar = dict(step.pv_sources)
     for key, inverter in inverters.items():
         available = fsum(
@@ -120,16 +120,18 @@ def dispatch(problem, step, stored):
             for unit in problem.batteries
             if unit.inverter_id == key
         )
-        used = (
+        solar_production = (
             max(0, ac[key]) / inverter.efficiency
             - max(0, -ac[key]) * inverter.efficiency
             + terminal_use
         )
         # Proportional physical clipping describes the simulation, never measured source provenance.
-        fraction = min(1, max(0, used / available)) if available > 0 else 0
+        fraction = min(1, max(0, solar_production / available)) if available > 0 else 0
         for source in problem.pv_sources:
             if source.inverter_id == key:
-                used_solar[source.source_id] = available_solar[source.source_id] * fraction
+                solar_production_by_source[source.source_id] = (
+                    available_solar[source.source_id] * fraction
+                )
     return {
         "import_kwh": imported,
         "export_kwh": exported,
@@ -141,6 +143,7 @@ def dispatch(problem, step, stored):
             for key, value in ac.items()
         ],
         "solar": [
-            {"source_id": source_id, "used_kwh": used} for source_id, used in used_solar.items()
+            {"source_id": source_id, "used_kwh": production_kwh}
+            for source_id, production_kwh in solar_production_by_source.items()
         ],
     }

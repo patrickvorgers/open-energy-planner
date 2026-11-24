@@ -72,6 +72,109 @@ def test_savings_warning_has_an_explanation_and_clears_after_recovery(explanatio
     asyncio.run(scenario())
 
 
+def test_snapshot_notification_falls_through_in_priority_order():
+    """Persistent advice switches to the next unresolved issue and clears only after recovery."""
+    from unittest.mock import patch
+
+    from homeassistant.components import persistent_notification
+
+    async def scenario():
+        """Exercise competing app diagnostics through the real HA notification service."""
+        async with running_chain() as (hass, entry, _url, _root):
+            coordinator = entry.runtime_data
+            snapshot = coordinator.client.snapshot
+            diagnostics = {
+                "installation": {"issue": "broken", "warnings": ["fixed_pv_export_limit"]},
+                "bonus_history": {"issue": "bonus_counter_cache_unreadable"},
+                "demand": {"issue": "demand_forecast_update_failed"},
+                "solar": {"history_issues": {"sensor.solar": "recorder_unavailable"}},
+                "savings_status": {"action_required": True, "issue": "Settlement is incomplete"},
+            }
+
+            async def with_diagnostics():
+                """Update only the selected diagnostics on an authenticated snapshot."""
+                data = await snapshot()
+                for domain, evidence in diagnostics.items():
+                    data[domain] = {**data.get(domain, {}), **evidence}
+                return data
+
+            notification_id = f"{DOMAIN}.{entry.entry_id}"
+            with (
+                patch.object(coordinator.client, "snapshot", with_diagnostics),
+                patch.object(
+                    persistent_notification,
+                    "async_create",
+                    wraps=persistent_notification.async_create,
+                ) as notify,
+                patch.object(
+                    persistent_notification,
+                    "async_dismiss",
+                    wraps=persistent_notification.async_dismiss,
+                ) as dismiss,
+            ):
+                for domain, field, recovered, reason, message in (
+                    (
+                        "installation",
+                        "issue",
+                        None,
+                        "installation_configuration_unreadable",
+                        "Restore the installation settings backup",
+                    ),
+                    (
+                        "bonus_history",
+                        "issue",
+                        None,
+                        "bonus_counter_cache_unreadable",
+                        "The saved bonus counter cannot be read",
+                    ),
+                    (
+                        "demand",
+                        "issue",
+                        None,
+                        "demand_forecast_unusable",
+                        "The update retries automatically",
+                    ),
+                    (
+                        "solar",
+                        "history_issues",
+                        {},
+                        "solar_history_unavailable",
+                        "sensor.solar",
+                    ),
+                    (
+                        "installation",
+                        "warnings",
+                        [],
+                        "fixed_pv_export_limit",
+                        "The grid export limit is below",
+                    ),
+                    (
+                        "savings_status",
+                        "action_required",
+                        False,
+                        "savings_unavailable",
+                        "Settlement is incomplete",
+                    ),
+                ):
+                    previous_count = notify.call_count
+                    await coordinator.sync()
+                    assert coordinator.issue == reason
+                    assert notify.call_count == previous_count + 1
+                    assert message in notify.call_args.args[1]
+                    assert notify.call_args.kwargs["notification_id"] == notification_id
+                    dismiss.assert_not_called()
+                    diagnostics[domain][field] = recovered
+
+                await coordinator.sync()
+                assert coordinator.issue is None
+                assert coordinator.notification_message is None
+                dismiss.assert_called_once_with(hass, notification_id)
+                await coordinator.sync()
+                dismiss.assert_called_once_with(hass, notification_id)
+
+    asyncio.run(scenario())
+
+
 def test_loaded_integration_reports_a_different_build_as_action_required(monkeypatch):
     """A real HA coordinator refuses a different app/integration build even when their release numbers agree."""
     from custom_components.open_energy_planner import client as client_module
