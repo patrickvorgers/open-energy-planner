@@ -110,6 +110,10 @@ def test_new_device_measurement_refreshes_recent_input_without_refitting(
         "learner": "sensor.house",
         "replay_windows": replays,
     }
+    jobs = []
+    component(configuration, samples, (), NOW, False, replay_jobs=jobs, **options)
+    family, _, evaluate = jobs[0]
+    options["replay_evidence"] = {family: evaluate()}
     original_model, original, original_selection, _ = component(
         configuration, samples, (), NOW, False, **options
     )

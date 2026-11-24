@@ -9,6 +9,7 @@ HA OS exposes administration through authenticated HA ingress and pairs automati
 - `POST /v1/replan`: explicit synthetic source update (`initial_kwh`, optional first-slot `first_load_kwh`). Invalid input is rejected. In HA mode it requests a fresh calculation from accepted real measurements and the independent future-input provider. Synthetic initial-state fields are not used.
 - `PUT /v1/sources`: HA-mode app-owned source configuration with expected-revision checks.
 - `PUT /v1/setup`: validate the installation, solar and demand proposals together against current Energy membership and each expected version. Commit only changed settings in one transaction and return canonical settings, devices and warnings. Revoke obsolete plans before confirming the save. Forecast calculation, the planning snapshot and settlement history are outside this response.
+  See the [installation save sequence](INSTALLATION-PLANNING.md#saving-installation-settings) for commit, acknowledgement and recovery.
 - `POST /v1/observations`: HA-mode normalized readings/issues with per-source timestamps and configuration revision.
 - `POST /v1/history`: normalized hourly export evidence for the current app-requested missing bonus baseline, or an explicit read failure. Stale request versions cannot overwrite confirmed counters.
 - `POST /v1/ack`: receipt of the current plan ID, never physical execution confirmation.

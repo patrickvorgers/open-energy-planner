@@ -238,6 +238,10 @@ flowchart TD
     REFS["Forecast services<br/>Forecast references available at local midnight"] --> QUALITY["forecast_quality/<br/>Freeze the daily baseline and compare with actuals"]
     ARCHIVE -->|Forecast archives, measurements and plan activations| QUALITY
     WX["weather/ archive<br/>Original issued irradiance by weather version"] --> QUALITY
+    WX -->|Original temperature forecasts| REPLAY["Background device comparisons"]
+    ARCHIVE -->|Earlier training, measured test hours and control exclusions| REPLAY
+    REPLAY -->|Durable simulated predictions| ARCHIVE
+    REPLAY -->|Completed scores for the next regular evaluation| PREFS
     SAT["weather/satellite.py<br/>Independent satellite irradiance"] --> QUALITY
     QUALITY -->|Chronological comparison evidence| PREFS["forecast_selection/<br/>Model preferences for future forecasts"]
     ARCHIVE --> SAVINGS["savings/<br/>Measured operation versus the reference"]
@@ -255,7 +259,9 @@ flowchart TD
 Forecast Quality captures the original forecast for the local day independently
 of solver runs and compares it with matched measurements. Its weather view
 resolves forecast irradiance from the original weather reference and shows
-satellite irradiance separately. Savings compares settled measured operation
+satellite irradiance separately. A background device worker reuses the same
+original run archive and preserves historical test predictions in the database.
+Regular forecasts can publish while new historical tests run. Savings compares settled measured operation
 with its reference. The shared database also retains the frozen daily baseline,
 measurement evidence and settings changes. `app.py` composes these services and their authenticated
 routes. See [plan archive](PLAN-ARCHIVE.md),

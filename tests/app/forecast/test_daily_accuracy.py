@@ -4,6 +4,7 @@ from datetime import date, timedelta
 
 import pytest
 
+from open_energy_planner.demand.calculation.model import digest
 from open_energy_planner.demand.storage import DemandStore
 from open_energy_planner.forecast_selection.accuracy import choose_daily
 from open_energy_planner.forecast_selection.calculation.accuracy import comparison_hours
@@ -86,17 +87,25 @@ def test_restart_does_not_reconstruct_a_missing_day(tmp_path):
 def test_device_chooses_from_history_and_rechecks_after_one_live_day(tmp_path):
     """A completed live day replaces its replay and can change the best device model."""
     documents = make_store(tmp_path, DemandStore).documents
-    replay_day = (START + timedelta(days=1)).date().isoformat()
-    replays = (
-        {
-            "day": (START - timedelta(days=1)).date().isoformat(),
-            "source": "historical_replay",
-            "hours": 24,
-            "mae_kwh": {"baseline": 0.3, "candidate": 0.0},
-            "daily_energy_error_kwh": {"baseline": 7.2, "candidate": 0.0},
-        },
+    replay_day = (START - timedelta(days=1)).date()
+    hours, _ = comparison_hours(replay_day, "UTC")
+    replay = {
+        "day": replay_day.isoformat(),
+        "source": "historical_replay",
+        "hours": 24,
+        "actual_version": digest([0.2] * 24),
+        "mae_kwh": {"baseline": 0.3, "candidate": 0.0},
+        "daily_energy_error_kwh": {"baseline": 7.2, "candidate": 0.0},
+    }
+    initial = choose_daily(
+        documents,
+        "washer",
+        "UTC",
+        forecasts(START),
+        dict.fromkeys(hours, 0.2),
+        START,
+        replays=(replay,),
     )
-    initial = choose_daily(documents, "washer", "UTC", forecasts(START), {}, START, replays=replays)
     assert initial["selected"] == "candidate"
     assert initial["completed_windows"] == 1
     assert "required_windows" not in initial
@@ -109,10 +118,48 @@ def test_device_chooses_from_history_and_rechecks_after_one_live_day(tmp_path):
         forecasts(later),
         measured,
         later,
-        replays=({**replays[0], "day": replay_day},),
+        replays=(
+            {
+                **replay,
+                "day": (START + timedelta(days=1)).date().isoformat(),
+                "actual_version": digest([0.5] * 24),
+            },
+        ),
     )
     assert reevaluated["selected"] == "baseline"
     assert [window["source"] for window in reevaluated["windows"]] == ["live"]
+
+
+@pytest.mark.parametrize("correction", [None, 0.5])
+def test_device_reuses_only_replays_matching_current_measured_hours(tmp_path, correction):
+    """An omitted or corrected hour excludes only its day until that day is rescored."""
+    documents = make_store(tmp_path, DemandStore).documents
+    days = (date(2026, 10, 20), date(2026, 10, 21))
+    measured = {}
+    replays = []
+    for day in days:
+        hours, _ = comparison_hours(day, "UTC")
+        measured.update(dict.fromkeys(hours, 0.2))
+        replays.append(
+            {
+                "day": day.isoformat(),
+                "source": "historical_replay",
+                "hours": 24,
+                "actual_version": digest([0.2] * 24),
+                "mae_kwh": {"baseline": 0.3, "candidate": 0.0},
+                "daily_energy_error_kwh": {"baseline": 7.2, "candidate": 0.0},
+            }
+        )
+    if correction is None:
+        measured.pop(hours[0])
+    else:
+        measured[hours[0]] = correction
+    selected = choose_daily(
+        documents, "dryer", "UTC", forecasts(START), measured, START, replays=replays
+    )
+    assert selected["selected"] == "candidate"
+    assert selected["historical_seasons"] == {"winter": 0, "spring": 0, "summer": 0, "autumn": 1}
+    assert [window["day"] for window in selected["windows"]] == ["2026-10-20"]
 
 
 def test_device_selects_from_a_single_complete_original_day_without_replay(tmp_path):

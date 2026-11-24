@@ -137,6 +137,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ github.token }}
           OEP_REVIEW_COMMAND_TOKEN: ${{ secrets.OEP_REVIEW_COMMAND_TOKEN }}
+          OEP_GREPTILE_PAUSED: ${{ vars.OEP_GREPTILE_PAUSED }}
         run: python3 -m script.ci.review_orchestration"""
 
 
@@ -155,6 +156,7 @@ def test_review_orchestration_has_only_trusted_metadata_and_comment_capabilities
         ("checks: read", "checks: write"),
         ("steps:", "steps:\n      - run: docker compose up"),
         ("cancel-in-progress: false", "cancel-in-progress: true"),
+        ("vars.OEP_GREPTILE_PAUSED", "github.event.comment.body"),
         ("run: python3 -m script.ci.review_orchestration", "run: bash arbitrary.sh"),
         ("github.event.check_run.app.id == 867647", "github.event.check_run.app.id == 999999"),
         ("github.event.check_run.app.id == 1144995", "true"),

@@ -149,6 +149,30 @@ live state and reload history instead of combining different process epochs.
 Other modules can use this same subscription for structured health changes.
 They must not parse display strings or diagnostic logs.
 
+The process epoch determines whether the browser can apply incremental changes
+after reconnecting.
+
+```mermaid
+sequenceDiagram
+    participant Browser as Activity page
+    participant Events as Events API
+    participant Stream as Event buffer
+    Browser->>Events: GET /v1/events
+    Events->>Stream: Capture snapshot and cursor
+    Events-->>Browser: Return live state and cursor
+    Browser->>Events: Poll with the cursor
+    Events-->>Browser: Return newer changes or wait
+    Note over Browser,Events: Transport disconnects or the app restarts
+    Browser->>Events: Reconnect with the last cursor
+    alt Cursor can still be replayed
+        Events-->>Browser: Return missed changes and a new cursor
+        Browser->>Browser: Apply the changes
+    else Cursor expired or the process changed
+        Events-->>Browser: Return reset and a fresh snapshot
+        Browser->>Browser: Replace live state and reload history
+    end
+```
+
 Restart keeps retained history and marks persisted Running records Interrupted.
 Failure episodes are reconstructed from terminal evidence. Producers republish
 current health and schedules. They are not restored as allegedly current facts.

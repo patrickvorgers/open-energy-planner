@@ -1,9 +1,12 @@
 """Replay selected historical device days with original weather and earlier training outcomes."""
 
 import logging
+from collections import defaultdict
 from datetime import UTC, datetime, time, timedelta
+from functools import partial
 from hashlib import sha256
 from math import fsum
+from statistics import median
 from weakref import WeakKeyDictionary
 from zoneinfo import ZoneInfo
 
@@ -20,8 +23,10 @@ from open_energy_planner.forecast_selection.calculation.accuracy import (
 from open_energy_planner.runtime.diagnostics.logging import BackgroundLog
 from open_energy_planner.weather.model import TemperatureHour
 
-REPLAY_BUCKET_DAYS = 28
-REPLAY_BUCKETS = 13
+REPLAY_HISTORY_DAYS = 364
+REPLAY_WEEKDAYS_PER_SEASON = 4
+REPLAY_WEEKEND_DAYS_PER_SEASON = 2
+REPLAY_SEASONS = ("winter", "spring", "summer", "autumn")
 REPLAY_CALENDAR_LEAD_HOURS = 12
 REPLAY_WEATHER_HISTORY_DAYS = 366
 REPLAY_POLICY = "device-chronological-weather-replay-v1"
@@ -36,56 +41,99 @@ def replay_weather_history_floor(now):
 
 
 def replay_days(now, timezone, runs=()):
-    """Pick at most one full local day per fixed four-week block."""
+    """Keep the freshest complete original weather run for each eligible local day."""
     zone = ZoneInfo(timezone)
     today = now.astimezone(zone).date()
-    buckets = {}
+    days = {}
     for run in sorted(runs, key=lambda item: item.initialized_at, reverse=True):
         origin = max(run.forecast_origin, run.available_at or run.forecast_origin)
         day = origin.astimezone(zone).date() + timedelta(days=1)
         age = (today - day).days - 1
-        if not 0 <= age < REPLAY_BUCKET_DAYS * REPLAY_BUCKETS:
+        if not 0 <= age < REPLAY_HISTORY_DAYS or day in days:
             continue
         hours, _ = comparison_hours(day, timezone)
         if hours and {hour for hour in hours} <= {row.start for row in run.hours}:
-            buckets.setdefault(day.toordinal() // REPLAY_BUCKET_DAYS, (day, origin, run))
-    return tuple(buckets[bucket] for bucket in sorted(buckets, reverse=True)[:REPLAY_BUCKETS])
+            days[day] = (day, origin, run)
+    return tuple(sorted(days.values()))
 
 
 def calendar_replay_days(now, timezone):
     """Provide equivalent training/test ordering for devices without weather features."""
     today = now.astimezone(ZoneInfo(timezone)).date()
-    latest = today - timedelta(days=1 + (today.toordinal() - 1) % REPLAY_BUCKET_DAYS)
-    days = dict.fromkeys(
-        (
-            today - timedelta(days=1),
-            *(
-                latest - timedelta(days=offset * REPLAY_BUCKET_DAYS)
-                for offset in range(REPLAY_BUCKETS)
-            ),
-        )
-    )
+    days = (today - timedelta(days=offset) for offset in range(1, REPLAY_HISTORY_DAYS + 1))
     return tuple(
         (
             day,
             day_window(day.isoformat(), timezone)[0] - timedelta(hours=REPLAY_CALENDAR_LEAD_HOURS),
             None,
         )
-        for day in tuple(days)[:REPLAY_BUCKETS]
+        for day in days
     )
 
 
-def replay_scores(documents, configuration, samples, temperatures, windows, models, excluded_dates):
-    """Score only complete common days, retaining simulated predictions apart from live captures."""
-    if not documents or not windows or len(models) < 2 or "*" in excluded_dates:
-        return ()
-    by_time = {sample.start: sample.residual_kwh for sample in samples}
-    latest_origin = max(window[1] for window in windows)
-    observed = {row.start: row.celsius for row in temperatures if row.start + HOUR <= latest_origin}
-    needs_temperature = any(
-        getattr(model, "temperature_enabled", False) for model in models.values()
+def replay_season(day):
+    """Name the meteorological season of a local test day."""
+    return REPLAY_SEASONS[day.month % 12 // 3]
+
+
+def _temperature(day, run, timezone):
+    """Rank days by forecast temperature without consulting measured energy."""
+    hours, _ = comparison_hours(day, timezone)
+    expected = set(hours)
+    return fsum(row.celsius for row in run.hours if row.start in expected) / len(hours)
+
+
+def _priority(item, *, weekend, used, typical, warmer, first):
+    """Prefer unused weekdays and alternating cold and mild forecast temperatures."""
+    day, _, _ = item[0]
+    offset = day.weekday() - (5 if weekend else 0)
+    return (
+        day.weekday() in used,
+        (item[1] >= typical) != warmer,
+        -item[1] if warmer else item[1],
+        (offset - first) % (2 if weekend else 5),
+        -day.toordinal(),
     )
-    family = digest(
+
+
+def spread_replays(candidates, timezone, score, *, stopping=lambda: False):
+    """Fill seasonal weekday/weekend quotas, replacing unavailable dates within their group."""
+    groups = defaultdict(list)
+    for candidate in candidates:
+        day, _, run = candidate
+        groups[(replay_season(day), day.weekday() >= 5)].append(
+            (candidate, _temperature(day, run, timezone) if run else 0.0)
+        )
+    results = []
+    for (season, weekend), remaining in sorted(groups.items()):
+        limit = REPLAY_WEEKEND_DAYS_PER_SEASON if weekend else REPLAY_WEEKDAYS_PER_SEASON
+        typical = median(temperature for _, temperature in remaining)
+        # Rotate the starting weekday so small season groups do not favor one calendar day.
+        first = REPLAY_SEASONS.index(season)
+        used = set()
+        for index in range(limit):
+            priority = partial(
+                _priority,
+                weekend=weekend,
+                used=used,
+                typical=typical,
+                warmer=bool(index % 2),
+                first=first,
+            )
+            while remaining and not stopping():
+                choice = min(remaining, key=priority)
+                remaining.remove(choice)
+                result = score(choice[0])
+                if result is not None:
+                    used.add(choice[0][0].weekday())
+                    results.append(result)
+                    break
+    return tuple(sorted(results, key=lambda row: row["day"]))
+
+
+def replay_family(configuration, models):
+    """Bind durable predictions to their device configuration and model identities."""
+    return digest(
         [
             REPLAY_POLICY,
             configuration.version,
@@ -95,22 +143,52 @@ def replay_scores(documents, configuration, samples, temperatures, windows, mode
             ],
         ]
     )
+
+
+def replay_scores(
+    documents,
+    configuration,
+    samples,
+    temperatures,
+    windows,
+    models,
+    excluded_dates,
+    *,
+    controlled=lambda day: False,
+    stopping=lambda: False,
+):
+    """Score only complete common days, retaining simulated predictions apart from live captures."""
+    if not documents or not windows or len(models) < 2 or "*" in excluded_dates:
+        return ()
+    by_time = {sample.start: sample.residual_kwh for sample in samples}
+    latest_origin = max(window[1] for window in windows)
+    observed = {row.start: row.celsius for row in temperatures if row.start + HOUR <= latest_origin}
+    needs_temperature = any(
+        getattr(model, "temperature_enabled", False) for model in models.values()
+    )
+    family = replay_family(configuration, models)
     path = f"device-replay-{family}.json"
     try:
         envelope = documents.read(path)
         previous = envelope["replays"]
         if (
             not isinstance(previous, dict)
-            or len(previous) > REPLAY_BUCKETS
+            or len(previous) > REPLAY_HISTORY_DAYS
             or envelope["checksum"] != digest(previous)
         ):
             raise ValueError("Invalid archived device replay checksum or coverage")
     except FileNotFoundError:
         previous = {}
-    checked = {}
+    checked = {
+        day.isoformat(): previous[day.isoformat()]
+        for day, _, _ in windows
+        if day.isoformat() in previous
+    }
+    if checked != previous:
+        documents.write(path, {"replays": checked, "checksum": digest(checked)})
     fingerprint = sha256()
     training_end = 0
-    results = []
+    eligible = {}
     logs = _REPLAY_LOGS.setdefault(documents, {})
     log = logs.setdefault(family, BackgroundLog(_LOGGER, "Device forecast history replay"))
     attempted_fit = failed = False
@@ -137,6 +215,15 @@ def replay_scores(documents, configuration, samples, temperatures, windows, mode
         if not hours or any(value is None for value in measured):
             continue
         key = digest([family, origin, run.version if run else None, fingerprint.hexdigest()])
+        eligible[day] = training_end, measured, hours, key
+
+    def score(candidate):
+        """Recover compatible predictions or fit just this selected replacement day."""
+        nonlocal attempted_fit, failed
+        day, origin, run = candidate
+        if controlled(day):
+            return None
+        training_end, measured, hours, key = eligible[day]
         saved = previous.get(day.isoformat())
         if saved is None or saved["key"] != key:
             prefix = samples[:training_end]
@@ -168,17 +255,23 @@ def replay_scores(documents, configuration, samples, temperatures, windows, mode
                         expected=True,
                     )
                 failed = True
-                continue
+                return None
             saved = {
                 "key": key,
                 "predictions": predictions,
                 "origin": origin.isoformat(),
                 "weather_run": run.version if run else None,
             }
-        checked[day.isoformat()] = saved
+            if predictions is None:
+                retain(day, saved)
+                return None
         predictions = saved["predictions"]
         if predictions is None:
-            continue
+            return None
+        actual_version = digest(measured)
+        cached = saved.get("score")
+        if cached is not None and cached["actual_version"] == actual_version:
+            return cached
         if set(predictions) != set(models) or any(
             len(values) != len(hours) for values in predictions.values()
         ):
@@ -186,24 +279,36 @@ def replay_scores(documents, configuration, samples, temperatures, windows, mode
         for values in predictions.values():
             for value in values:
                 quantity(value)
-        results.append(
-            {
-                "day": day.isoformat(),
-                "source": "historical_replay",
-                "hours": len(hours),
-                "actual_version": digest(measured),
-                "forecast_version": digest(saved),
-                "mae_kwh": {
-                    role: mean_absolute_error(values, measured)
-                    for role, values in predictions.items()
-                },
-                "daily_energy_error_kwh": {
-                    role: abs(fsum(values) - fsum(measured)) for role, values in predictions.items()
-                },
-            }
-        )
-    if checked != previous:
+        result = {
+            "day": day.isoformat(),
+            "source": "historical_replay",
+            "hours": len(hours),
+            "actual_version": actual_version,
+            "forecast_version": digest(
+                {name: value for name, value in saved.items() if name != "score"}
+            ),
+            "mae_kwh": {
+                role: mean_absolute_error(values, measured) for role, values in predictions.items()
+            },
+            "daily_energy_error_kwh": {
+                role: abs(fsum(values) - fsum(measured)) for role, values in predictions.items()
+            },
+        }
+
+        retain(day, {**saved, "score": result})
+        return result
+
+    def retain(day, entry):
+        """Commit each finished test before any later fit can fail or be interrupted."""
+        checked[day.isoformat()] = entry
         documents.write(path, {"replays": checked, "checksum": digest(checked)})
+
+    results = spread_replays(
+        (window for window in windows if window[0] in eligible),
+        configuration.timezone,
+        score,
+        stopping=stopping,
+    )
     if attempted_fit and not failed and log.failure_key is not None:
         log.success("Historical device forecasts can be evaluated again.")
     return tuple(results)

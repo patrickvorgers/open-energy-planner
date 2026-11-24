@@ -77,7 +77,7 @@ def test_articles_remain_readable_without_javascript(documentation_url, browser)
         assert figure.evaluate("image => image.naturalWidth > 0")
 
 
-def test_all_flowcharts_render_at_each_reading_width(documentation_page, documentation_url):
+def test_all_diagrams_render_at_each_reading_width(documentation_page, documentation_url):
     """Load every guide with diagrams and follow a full-size image without an external renderer."""
     page = documentation_page
     routes = (
@@ -92,6 +92,10 @@ def test_all_flowcharts_render_at_each_reading_width(documentation_page, documen
         "docs/development/SAVINGS",
         "docs/development/SHIFTABLE-APPLIANCES",
         "docs/development/THERMAL-STORAGE",
+        "docs/development/ACTIVITY-EVENTS",
+        "docs/development/EMS-VISUALIZATION",
+        "docs/development/INSTALLATION-PLANNING",
+        "docs/development/STORAGE-MIGRATION-UI",
     )
     for route in routes:
         page.goto(documentation_url + route + "/")

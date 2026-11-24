@@ -45,6 +45,7 @@ FORECAST_URL = "https://api.open-meteo.com/v1/forecast"
 ARCHIVE_URL = "https://archive-api.open-meteo.com/v1/archive"
 LATEST_RUN_METADATA_URL = "https://api.open-meteo.com/data/ecmwf_ifs/static/meta.json"
 MAX_METADATA_RESPONSE_BYTES = 16 * BYTES_PER_KIB
+MAX_MISSING_RUN_RESPONSE_BYTES = 4 * BYTES_PER_KIB
 HISTORICAL_RUN_BATCH_SIZE = 4
 HISTORICAL_RUN_RETRY_MINUTES = 15
 MAX_HISTORICAL_RUN_RETRY_HOURS = 24
@@ -67,6 +68,10 @@ FIELDS = (
 )
 
 _LOGGER = logging.getLogger(__name__)
+
+
+class MissingOriginalRun(ClientResponseError):
+    """A provider-confirmed gap for the exact requested original run."""
 
 
 def forecast_weather_query(location, run_init):
@@ -248,7 +253,11 @@ class OpenMeteoWeatherSource:
             except (ClientResponseError, ValueError) as error:
                 if site != self._run_site:
                     return self.forecast_runs
-                if isinstance(error, ClientResponseError) and error.status != 404:
+                if (
+                    isinstance(error, ClientResponseError)
+                    and error.status != 404
+                    and not isinstance(error, MissingOriginalRun)
+                ):
                     self.history_retry_after = now + timedelta(minutes=HISTORICAL_RUN_RETRY_MINUTES)
                     raise
                 attempts = min(
@@ -467,7 +476,34 @@ class OpenMeteoWeatherSource:
             timeout=ClientTimeout(total=WEATHER_TIMEOUT_SECONDS),
             allow_redirects=False,
         ) as response:
-            response.raise_for_status()
+            try:
+                response.raise_for_status()
+            except ClientResponseError as error:
+                # aiohttp releases the response on raise_for_status outside a context.
+                if url != SINGLE_RUNS_URL or error.status != 400:
+                    raise
+                raw_error = bytearray()
+                async for part in response.content.iter_chunked(MAX_MISSING_RUN_RESPONSE_BYTES):
+                    raw_error.extend(part)
+                    if len(raw_error) > MAX_MISSING_RUN_RESPONSE_BYTES:
+                        raise
+                try:
+                    body = json.loads(raw_error)
+                except (UnicodeError, ValueError):
+                    raise error from None
+                expected = (
+                    "The requested model run is not available. "
+                    f"Model: {params['models']}, run: {params['run']}Z"
+                )
+                if (
+                    isinstance(body, dict)
+                    and body.get("error") is True
+                    and body.get("reason") == expected
+                ):
+                    raise MissingOriginalRun(
+                        error.request_info, error.history, status=400
+                    ) from None
+                raise
             raw = bytearray()
             async for part in response.content.iter_chunked(WEATHER_READ_CHUNK_BYTES):
                 raw.extend(part)
