@@ -26,6 +26,7 @@ from .market_prices import MarketPriceBridge
 from .observation_bridge import ObservationBridge
 from .protocol import RevokedPlan, Schedule, identifier, timestamp, validate_device_configuration
 from .settlement import SettlementBridge
+from .snapshot_notifications import select_snapshot_notification
 from .solar_forecasts import SolarForecastBridge
 from .wire_limits import MAX_SNAPSHOT_RESPONSE_BYTES, validate_projection_size
 
@@ -803,159 +804,7 @@ class PlanCoordinator:
                     accepted or data.get("acknowledged_plan") != self.schedule.plan.plan_id
                 ):
                     await self.client.acknowledge(self.schedule.plan.plan_id)
-                issues = self.observations.get("issues", []) if self.observations else []
-                required_sources = (
-                    {
-                        (binding.key, binding.entity_id)
-                        for binding in self.observation_bridge.bindings
-                        if binding.required
-                    }
-                    if self.observation_bridge
-                    else set()
-                )
-                actionable = [
-                    issue
-                    for issue in issues
-                    if (issue.get("key"), issue.get("entity_id")) in required_sources
-                    and issue.get("reason")
-                    in (
-                        "missing_entity",
-                        "unsupported_unit",
-                        "invalid_timestamp",
-                        "invalid_soc",
-                    )
-                ]
-                if data.get("installation", {}).get("issue"):
-                    self.action_required(
-                        "installation_configuration_unreadable",
-                        "Restore the installation settings backup or explicitly save corrected settings. No physical limits are guessed.",
-                    )
-                elif (self.planning_status or {}).get("reason") == "energy_configuration_changed":
-                    self.action_required(
-                        "energy_configuration_changed",
-                        "The Home Assistant Energy installation needs configuration. Complete its Energy dashboard and open the OEP app to confirm missing device ratings and measurement bindings. Historical plans are retained.",
-                    )
-                elif actionable:
-                    names = ", ".join(issue["entity_id"] for issue in actionable)
-                    self.action_required(
-                        "measurement_sources_unusable",
-                        "Check the selected measurement sources, units and timestamps: " + names,
-                    )
-                elif data.get("bonus_history", {}).get("issue") == "bonus_counter_cache_unreadable":
-                    self.action_required(
-                        "bonus_counter_cache_unreadable",
-                        "The saved bonus counter cannot be read. Restore its backup or "
-                        "explicitly confirm a recovered manual baseline in the app. "
-                        "Automatic history initialization is blocked to preserve saved evidence.",
-                    )
-                elif data.get("demand", {}).get("issue"):
-                    demand = data["demand"]
-                    if demand["issue"] == "demand_boundary_inconsistent":
-                        configuration = demand.get("configuration") or {}
-                        names = ", ".join(
-                            sorted(
-                                {
-                                    term["entity_id"]
-                                    for term in (
-                                        *configuration.get("terms", []),
-                                        *configuration.get("exclusions", []),
-                                    )
-                                }
-                            )
-                        )
-                        explanation = (
-                            "Household energy history contains negative balances beyond the "
-                            "measurement allowance. Those hours are excluded from forecast "
-                            "training. Check the Home Assistant Energy balance for overlapping "
-                            "sources and separately measured devices"
-                            + (": " + names if names else "")
-                            + ". Usable hours, when available, are retained. When too little history "
-                            "remains, forecasting uses the annual-consumption startup estimate. "
-                            "Recorder data is unchanged. A backup restore is not required."
-                        )
-                    elif demand["issue"] == "demand_configuration_unreadable":
-                        explanation = (
-                            "The saved household energy configuration cannot be read. "
-                            "Restore its settings backup or explicitly save corrected household "
-                            "settings in the app. Historical measurements are retained."
-                        )
-                    else:
-                        explanation = (
-                            "The household forecast could not be updated. Open Forecast quality "
-                            "in the app and check the app logs. The update retries automatically. "
-                            "Do not restore or remove measured history to resolve a forecast error."
-                        )
-                    self.action_required(
-                        "demand_boundary_inconsistent"
-                        if demand["issue"] == "demand_boundary_inconsistent"
-                        else "demand_forecast_unusable",
-                        explanation,
-                    )
-                elif data.get("demand", {}).get("history_issues"):
-                    names = ", ".join(sorted(data["demand"]["history_issues"]))
-                    self.action_required(
-                        "demand_history_unavailable",
-                        "Household energy history cannot be read from Recorder for: "
-                        + names
-                        + ". Check Recorder and select cumulative energy sensors with "
-                        "long-term statistics. The available forecast remains active. "
-                        "Without usable history the startup estimate is used.",
-                    )
-                elif data.get("solar", {}).get("issue") == "solar_configuration_unreadable":
-                    self.action_required(
-                        "solar_configuration_unreadable",
-                        "Restore the saved solar configuration or explicitly save corrected settings in the app.",
-                    )
-                elif solar_history_issues := {
-                    entity: issue
-                    for entity, issue in data.get("solar", {}).get("history_issues", {}).items()
-                    if issue
-                    in {
-                        "unsupported_statistics",
-                        "recorder_unavailable",
-                        "history_continuity_unavailable",
-                        "history_cache_unreadable",
-                    }
-                }:
-                    names = ", ".join(sorted(solar_history_issues))
-                    self.action_required(
-                        "solar_history_unavailable",
-                        "Check Recorder and the selected cumulative solar production sensors: "
-                        + names
-                        + ". The physical startup forecast remains available when weather is usable.",
-                    )
-                elif data.get("bonus_history", {}).get("issue"):
-                    self.action_required(
-                        "bonus_history_unavailable",
-                        "Export history cannot establish the bonus counter. Check Recorder "
-                        "and the selected export sensors. The app accepts manual export only "
-                        "for a missing period before a validated statistics reference.",
-                    )
-                elif "fixed_pv_export_limit" in data.get("installation", {}).get("warnings", []):
-                    self.action_required(
-                        "fixed_pv_export_limit",
-                        "The grid export limit is below the combined fixed-PV inverter ratings. "
-                        "Sunny intervals can have no feasible plan when local consumption and storage cannot absorb production. "
-                        "Check the ratings and configure PV on/off permission only if your automation can implement it. "
-                        "Automatic proportional export limiting is not modeled. A grid limit does not grant PV control permission.",
-                    )
-                elif data.get("savings_status", {}).get("action_required"):
-                    self.action_required(
-                        "savings_unavailable",
-                        "The savings comparison needs attention: "
-                        + str(
-                            data["savings_status"].get("issue")
-                            or "No detailed settlement explanation is available"
-                        )
-                        + ". Open Plan and savings in the app. Physical commands remain governed by their own plan validity.",
-                    )
-                else:
-                    if self.issue:
-                        persistent_notification.async_dismiss(
-                            self.hass, f"{DOMAIN}.{self.entry.entry_id}"
-                        )
-                    self.issue = None
-                    self.notification_message = None
+                self._update_snapshot_notification(data)
                 self.refresh()
                 from .solar_feedback import synchronize as synchronize_solar_feedback
 
@@ -1041,6 +890,29 @@ class PlanCoordinator:
                 # A temporary outage is not itself an action-required notification.
             finally:
                 self.refresh()
+
+    def _update_snapshot_notification(self, data):
+        """Apply the selected recovery advice or clear it after recovery."""
+        issues = self.observations.get("issues", []) if self.observations else []
+        required_sources = (
+            {
+                (binding.key, binding.entity_id)
+                for binding in self.observation_bridge.bindings
+                if binding.required
+            }
+            if self.observation_bridge
+            else set()
+        )
+        notification = select_snapshot_notification(
+            data, self.planning_status, issues, required_sources
+        )
+        if notification is not None:
+            self.action_required(*notification)
+            return
+        if self.issue:
+            persistent_notification.async_dismiss(self.hass, f"{DOMAIN}.{self.entry.entry_id}")
+        self.issue = None
+        self.notification_message = None
 
     def action_required(self, reason, message):
         """Refresh changed recovery advice while deduplicating identical persistent messages."""
