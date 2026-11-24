@@ -294,12 +294,9 @@ context and thermal context retain their execution safeguards.
 The [one-time command format update](INSTALLATION-PLANNING.md#one-time-grid-command-format-update)
 replaces former boolean grid fields and rehashes the changed records and
 contexts. It preserves plan IDs, activation history, and measurement/configuration
-evidence. Subsequent publications keep their exact original content. Archive reconstruction and
-read-only history can return those documents without recreating old solver
-classes, rerunning optimization or converting them to today's shape. Unsupported
-old execution schemas are not sent as executable advice. This cleanup requires
-no table, column, index or data migration and never rewrites historical plan
-content. Archive schema version 1 remains unchanged.
+evidence. Archive schema version 1 still describes the same SQL tables, columns
+and indexes. Read-only history reconstructs the stored documents directly.
+Executable advice requires the current plan wire schema.
 
 ### `oep_archive_meta`
 

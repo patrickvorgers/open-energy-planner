@@ -126,8 +126,8 @@ def test_optimizer_grid_strip_matches_selected_plan_and_chart_window(app_page):
     page.locator('[data-hours="0"]').click()
     assert blocks.count() > 1
     page.locator("#plan-version").select_option("documentation-inactive")
-    expect(blocks).to_have_count(0)
     expect(legend.get_by_text("Zero on the meter", exact=True)).to_have_count(1)
+    expect(blocks).to_have_count(0)
 
 
 def test_documentation_installation_shows_saved_limits_and_real_source_relationships(app_page):
