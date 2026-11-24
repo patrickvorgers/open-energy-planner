@@ -74,7 +74,7 @@ def test_documentation_plan_contains_real_solar_storage_and_daily_variation(app_
     capture(page, "planning-scenarios", ".scenario-card:has(#self-consumption-chart)")
 
 
-@pytest.mark.parametrize("app_site", ["documentation"], indirect=True)
+@pytest.mark.parametrize("app_site", ["documentation_with_plan_history"], indirect=True)
 def test_optimizer_grid_strip_matches_selected_plan_and_chart_window(app_page):
     """Exercise actual plan reads, aligned clipping, full period labels and responsive inspection."""
     page, url = app_page

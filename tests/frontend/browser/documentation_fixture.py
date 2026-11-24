@@ -145,12 +145,12 @@ def _validated_example(two_batteries=False, *, grid_follow=True):
     return document, schedule
 
 
-def seed(directory, *, two_batteries=False):
-    """Initialize an independent store with its own mutable copy of the validated example."""
+def seed(directory, *, two_batteries=False, include_inactive_plan=False):
+    """Copy the validated example into a fresh store, optionally with an inactive historical plan."""
     document, schedule = _validated_example(two_batteries)
     repository = SqlPlanRepository(directory)
     try:
-        if not two_batteries:
+        if include_inactive_plan:
             original, _ = _validated_example(grid_follow=False)
             inactive = deepcopy(original)
             inactive.update(
