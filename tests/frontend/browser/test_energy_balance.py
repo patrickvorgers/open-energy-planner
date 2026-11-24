@@ -163,7 +163,7 @@ def test_terminal_balance_losses_soc_and_mixed_duration_are_independent(app_page
     assert [point["value"] for point in series["Conversion losses"]["intervals"]] == pytest.approx(
         [-2.4, -0.56, -0.56]
     )
-    assert series["Used solar: DC"]["intervals"][0]["value"] == 16
+    assert series["Solar production: DC"]["intervals"][0]["value"] == 16
     assert [point[1] for point in series["Home battery: SoC"]["points"]][:2] == pytest.approx(
         [50, 65.2]
     )
@@ -214,7 +214,7 @@ def test_balance_axis_bounds_change_after_real_legend_and_time_controls(app_page
     """A 102-kW late import widens all three charts until hidden or outside the six-hour window.
 
     The last interval consumes 100 kWh and charges the converter with 2 kWh.
-    Its 102-kW grid import exceeds the earlier quarter's 4/0.25 = 16-kW used solar.
+    Its 102-kW grid import exceeds the earlier quarter's 4/0.25 = 16-kW solar production.
     This deliberately large simulated peak independently proves both UI handlers.
     """
     page, url = app_page
@@ -345,14 +345,14 @@ def test_rendered_balances_keep_real_widths_zero_sum_soc_and_accessible_inspecti
         ["2026-10-23T00:00:00Z", "2026-10-23T00:15:00Z"],
     )
     expect(popup).to_contain_text(f"From {formatted_timestamps[0]} to {formatted_timestamps[1]}")
-    expect(popup).to_contain_text("Used solar")
+    expect(popup).to_contain_text("Solar production")
     expect(popup.get_by_role("heading")).to_have_text(
         ["Production", "Consumption", "Battery state"]
     )
     expect(popup.locator("section").nth(2)).to_contain_text("SoC at start")
     expect(popup.locator("section").nth(2).locator(".chart-tooltip-value")).to_have_text("50.0")
     sections = popup.locator("section")
-    expect(sections.nth(0)).to_contain_text("Used solar")
+    expect(sections.nth(0)).to_contain_text("Solar production")
     expect(sections.nth(0)).to_contain_text("Grid import")
     expect(sections.nth(0)).to_contain_text("Battery discharge")
     expect(sections.nth(1)).to_contain_text("Household demand")
@@ -483,7 +483,7 @@ def test_separate_solar_and_shared_battery_converters_keep_ac_routes(app_page, s
         ) == pytest.approx(0)
     if storage:
         converter = {series["name"]: series for series in groups[1]["series"]}
-        assert converter["Used solar: DC"]["intervals"][0]["value"] == 0
+        assert converter["Solar production: DC"]["intervals"][0]["value"] == 0
         assert converter["AC supply to converter"]["intervals"][0]["value"] == 2
         assert converter["Battery charge: DC"]["intervals"][0]["value"] == pytest.approx(-1.44)
         assert converter["Conversion losses"]["intervals"][0]["value"] == pytest.approx(-0.56)
