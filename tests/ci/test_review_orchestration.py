@@ -2317,7 +2317,17 @@ def test_greptile_pause_rechecks_coderabbit_timeout_before_publishing(monkeypatc
 
 @pytest.mark.parametrize(
     "recovery",
-    ["normal", "lost-response", "changed-refusal", "codex-progress", "extra-feedback", "findings"],
+    [
+        "normal",
+        "lost-response",
+        "changed-refusal",
+        "codex-progress",
+        "codex-running",
+        "extra-feedback",
+        "findings",
+        "running-findings",
+        "invalid-finding-value",
+    ],
 )
 def test_greptile_credit_denial_requests_codex_once(recovery):
     """Recover a published Codex command without ever issuing a second command."""
@@ -2334,26 +2344,54 @@ def test_greptile_credit_denial_requests_codex_once(recovery):
         client.lose_response = False
         if recovery == "changed-refusal":
             denial["performed_via_github_app"]["id"] = 123
-        if recovery in {"codex-progress", "extra-feedback", "findings"}:
+        if recovery in {
+            "codex-progress",
+            "extra-feedback",
+            "findings",
+            "codex-running",
+            "running-findings",
+            "invalid-finding-value",
+        }:
             publication = client.published_result("codex")
-            publication["body"] = publication["body"].replace(
-                '"status":"completed"', '"status":"in_progress"'
+            completed = publication["body"]
+            running = recovery in {"codex-running", "running-findings", "invalid-finding-value"}
+            publication["body"] = completed.replace(
+                '"status":"completed"',
+                '"status":"running"' if running else '"status":"in_progress"',
             )
+            if running:
+                publication["body"] = (
+                    publication["body"]
+                    .replace('"has_any_findings":false', '"has_any_findings":null', 1)
+                    .replace('"has_unresolved_findings":false', '"has_unresolved_findings":null', 1)
+                )
             if recovery == "extra-feedback":
                 client.comment("Partial review findings", "greptile-apps[bot]")
             if recovery == "findings":
                 publication["body"] = publication["body"].replace(
                     '"has_any_findings":false', '"has_any_findings":true'
                 )
+            if recovery in {"running-findings", "invalid-finding-value"}:
+                value = "true" if recovery == "running-findings" else "0"
+                publication["body"] = publication["body"].replace(
+                    '"has_any_findings":null', f'"has_any_findings":{value}', 1
+                )
     client.run(minutes=2)
     client.run(minutes=3)
     assert client.state()["phase"] == (
-        "blocked" if recovery in {"changed-refusal", "extra-feedback", "findings"} else "codex"
+        "blocked"
+        if recovery
+        in {
+            "changed-refusal",
+            "extra-feedback",
+            "findings",
+            "running-findings",
+            "invalid-finding-value",
+        }
+        else "codex"
     )
-    if recovery == "codex-progress":
-        publication["body"] = publication["body"].replace(
-            '"status":"in_progress"', '"status":"completed"'
-        )
+    if recovery in {"codex-progress", "codex-running"}:
+        publication["body"] = completed
         client.run(minutes=4)
         assert client.state()["phase"] == "complete"
     assert client.provider_commands() == [
