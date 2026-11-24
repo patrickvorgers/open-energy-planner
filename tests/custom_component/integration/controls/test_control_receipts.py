@@ -125,6 +125,68 @@ def test_local_pause_withdraws_commands_while_existing_sync_holds_its_lock(monke
     asyncio.run(scenario())
 
 
+def test_current_capture_does_not_hold_new_plan_reconciliation(monkeypatch):
+    """Accept a new published plan while the independent observation upload is waiting."""
+
+    async def scenario():
+        """Retain real status, command and ACK traffic while gating the observation transport."""
+        async with running_chain() as (hass, entry, _url, _root):
+            coordinator = entry.runtime_data
+            coordinator.poll_cancel()
+            coordinator.poll_cancel = None
+            hass.states.async_set("sensor.grid_fixture", "0", {"unit_of_measurement": "W"})
+            original = coordinator.schedule.plan.plan_id
+            revision = coordinator.schedule.config_revision
+            coordinator._configure_measurements(
+                {
+                    "revision": revision,
+                    "bindings": [
+                        {
+                            "key": "grid.power",
+                            "entity_id": "sensor.grid_fixture",
+                            "quantity": "power",
+                            "required": True,
+                            "multiplier": 1,
+                            "maximum_age_s": 300,
+                            "timestamp_attribute": None,
+                        }
+                    ],
+                }
+            )
+            status = coordinator.client.plan_status
+            entered, release = asyncio.Event(), asyncio.Event()
+
+            async def measured_status():
+                """Require the installed live binding with the actual synthetic publication."""
+                return {**await status(), "measurements_required": True}
+
+            async def slow_upload(report):
+                """Hold a capture in flight while retaining its source and revision."""
+                assert report["config_revision"] == revision and report["readings"]
+                entered.set()
+                await release.wait()
+                return {"accepted": True, "config_revision": revision}
+
+            monkeypatch.setattr(coordinator.client, "plan_status", measured_status)
+            monkeypatch.setattr(coordinator.client, "observations", slow_upload)
+            capture = asyncio.create_task(coordinator.sync_observations())
+            try:
+                await asyncio.wait_for(entered.wait(), 2)
+                await coordinator.client.enabled(True, "observation-overlap")
+                async with asyncio.timeout(2):
+                    while (await status())["plan_id"] in (None, original):
+                        await asyncio.sleep(0.01)
+                    assert await coordinator.sync_plan()
+                assert coordinator.schedule.plan.plan_id != original
+                assert coordinator.projection.command is not None
+                assert not capture.done()
+            finally:
+                release.set()
+                assert await capture
+
+    asyncio.run(scenario())
+
+
 def test_invalid_receipt_retains_pending_intent_until_a_valid_retry(monkeypatch):
     """A malformed real HTTP receipt cannot confirm local intent. The same intent succeeds on retry."""
 

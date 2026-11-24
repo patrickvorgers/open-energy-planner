@@ -329,14 +329,19 @@ def create_app(
 
         Public pages, assets and bounded session metadata contain no commands or
         authenticated state. Their reads must not wait behind archive writes.
-        HA status and binding reads expose no command content. The status uses
+        Readiness, HA status and binding reads expose no command content. The status uses
         fail-closed committed authority even while the background flush is blocked.
         Other protected responses retain the durability barrier on handler failure.
         """
         if is_public(request) or (
             request.method in {"GET", "HEAD"}
             and request.path
-            in {"/setup/session", "/v1/ha/plan-status", "/v1/ha/measurement-config"}
+            in {
+                "/setup/session",
+                "/v1/readiness",
+                "/v1/ha/plan-status",
+                "/v1/ha/measurement-config",
+            }
         ):
             return await handler(request)
         try:
@@ -756,6 +761,17 @@ def create_app(
         """Serve HA setup and data requests separately from command transfers."""
         return await snapshot_handler(request, ha_requests=True)
 
+    async def readiness(_request):
+        """Read startup readiness for the container without projecting a plan or history."""
+        return web.json_response(
+            {
+                "source": source,
+                "planning_status": planner.status,
+                "plan_available": repository.committed_control_state()["plan"] is not None,
+            },
+            headers={"Cache-Control": "no-store"},
+        )
+
     async def enabled(request):
         """Persist explicit enable intent and request a fresh round for a new resume request."""
         body = await request.json()
@@ -971,6 +987,7 @@ def create_app(
     app.router.add_get("/v1/plans/{plan_id}", archived_plan)
 
     app.router.add_get("/v1/snapshot", snapshot)
+    app.router.add_get("/v1/readiness", readiness)
 
     app.router.add_put("/v1/enabled", enabled)
     app.router.add_post("/v1/ack", acknowledge)

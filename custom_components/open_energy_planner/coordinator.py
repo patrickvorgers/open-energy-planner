@@ -369,8 +369,9 @@ class PlanCoordinator:
 
         async def sync_current():
             """Resolve source bindings before sending the first current capture."""
-            await self.sync_plan()
-            if await self.sync_observations():
+            reconciled = await self.sync_plan()
+            observed = await self.sync_observations()
+            if reconciled and observed:
                 await self.sync_plan()
 
         await asyncio.gather(sync_current(), self.sync_services())
@@ -475,6 +476,11 @@ class PlanCoordinator:
                         plan, reply.get("devices"), reply.get("ev_points", [])
                     )
                     candidate = self.schedule.validate_candidate(plan, dt_util.utcnow())
+                    if (
+                        self.schedule.resume_after
+                        and candidate.generated_at <= self.schedule.resume_after
+                    ):
+                        return False
                     await self.client.acknowledge(plan_id)
                     if (
                         not self._same_intent(generation)

@@ -227,7 +227,7 @@ class ConsumerForecasts:
         self.weather_reference = weather_reference
         self.weather_valid_until = weather_valid_until
 
-    def _live_document(self, forecast, now):
+    def _live_document(self, forecast, now, *, for_ha=False):
         """Project a native issue onto the transport grid with the app-owned validity deadline."""
         issued_at = datetime.fromisoformat(forecast["issued_at"])
         valid_until = (self.checked_at or issued_at) + timedelta(minutes=FORECAST_MAX_AGE_MINUTES)
@@ -238,12 +238,43 @@ class ConsumerForecasts:
             for step in forecast["steps"]
         )
         return {
-            **forecast,
+            **(
+                {key: forecast[key] for key in ("model", "unit", "issued_at")}
+                if for_ha
+                else forecast
+            ),
             "valid_until": valid_until.isoformat(),
             "steps": [
                 {"start": step.start.isoformat(), "duration_h": step.duration_h, "kwh": step.kwh}
                 for step in forecast_window(steps, now)
             ],
+        }
+
+    def ha_projection(self, now):
+        """Project only membership and active forecasts consumed by HA virtual devices."""
+        result = self.result
+        return {
+            "options": [
+                {key: option[key] for key in ("entity_id", "name", "power_entity") if key in option}
+                for option in self.options
+            ],
+            "selected": [
+                {"entity_id": item["entity_id"], "weather_sensitive": item["weather_sensitive"]}
+                for item in self.selected
+            ],
+            "result": {
+                "status": result["status"],
+                "devices": [
+                    {
+                        "entity_id": device["entity_id"],
+                        "status": device.get("status", result["status"]),
+                        "forecast": self._live_document(device["forecast"], now, for_ha=True),
+                    }
+                    for device in result.get("devices", ())
+                ],
+            }
+            if result is not None
+            else None,
         }
 
     def document(self, *, forecasts=True, now=None):

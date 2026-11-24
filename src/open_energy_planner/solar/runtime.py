@@ -1154,6 +1154,15 @@ class SolarRuntime:
             "model", self.baseline.model if self.baseline else None
         )
 
+    def ha_history(self, now):
+        """Expose requested history and curtailment feedback independently of forecast diagnostics."""
+        return {
+            "feedback_requests": self.feedback_requests(now),
+            "issue": self.issue,
+            "history_issues": dict(self.history_issues),
+            "request": self.request(now),
+        }
+
     def document(self, now, *, series=False):
         """Expose active prediction, per-source candidates and actionable status without recomputation."""
         forecast = forecast_document(self.forecast, series=False)
@@ -1183,7 +1192,7 @@ class SolarRuntime:
                 statuses[source.source_id] = status
         return {
             "configuration": configuration_document(self.configuration),
-            "feedback_requests": self.feedback_requests(now),
+            **self.ha_history(now),
             "feedback_issues": dict(self.feedback_issues),
             "forecast": forecast,
             "candidate": candidate,
@@ -1225,8 +1234,6 @@ class SolarRuntime:
             }
             if self.configuration
             else {},
-            "issue": self.issue,
-            "history_issues": dict(self.history_issues),
             "weather_service": dict(self.weather_service),
             "history_import": self.history_import.status(
                 (source.entity_id for source in self.configuration.sources)
@@ -1234,5 +1241,4 @@ class SolarRuntime:
                 else (),
                 self.histories,
             ),
-            "request": self.request(now),
         }

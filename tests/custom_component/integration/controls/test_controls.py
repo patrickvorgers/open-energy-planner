@@ -312,15 +312,19 @@ def test_ev_native_controls_explicit_identity_blueprint_and_local_withdrawal(
                 coordinator.client.service_requests,
                 coordinator.client.request,
             )
+            original_status = coordinator.client.plan_status
             older = await original_snapshot()
             older.update(
-                plan=deepcopy(plan),
                 ev=deepcopy(coordinator.ev),
-                measurement_config=None,
-                config_revision=coordinator.schedule.config_revision,
                 source="demo",
                 installation={},
             )
+            earlier_status = {
+                **await original_status(),
+                "enabled": True,
+                "plan_id": plan["plan_id"],
+                "acknowledged_plan": plan["plan_id"],
+            }
             snapshot_started, release_snapshot, accepted_cancel = (
                 asyncio.Event(),
                 asyncio.Event(),
@@ -334,6 +338,12 @@ def test_ev_native_controls_explicit_identity_blueprint_and_local_withdrawal(
                     await release_snapshot.wait()
                     return older
                 raise ClientConnectionError("Synthetic app outage after accepted cancel")
+
+            async def status_then_disconnected():
+                """Keep the fixture plan authoritative until the same simulated app outage."""
+                if accepted_cancel.is_set():
+                    raise ClientConnectionError("Synthetic command outage after accepted cancel")
+                return earlier_status
 
             pending_write_permissions = []
 
@@ -352,6 +362,7 @@ def test_ev_native_controls_explicit_identity_blueprint_and_local_withdrawal(
                 return result
 
             monkeypatch.setattr(coordinator.client, "service_requests", delayed_then_disconnected)
+            monkeypatch.setattr(coordinator.client, "plan_status", status_then_disconnected)
             monkeypatch.setattr(coordinator.client, "request", confirmed_request)
             from homeassistant.core import callback
             from homeassistant.exceptions import HomeAssistantError
@@ -443,6 +454,7 @@ def test_ev_native_controls_explicit_identity_blueprint_and_local_withdrawal(
             assert fixture["data"]["points"][0]["power_w"] == 0
             assert retained_battery in coordinator.projection.command.devices
             monkeypatch.setattr(coordinator.client, "service_requests", original_snapshot)
+            monkeypatch.setattr(coordinator.client, "plan_status", original_status)
             monkeypatch.setattr(coordinator.client, "request", original_request)
             await coordinator.sync()
             assert (
