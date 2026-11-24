@@ -1,6 +1,6 @@
 # Set up your first plan
 
-Follow this route to install the preview, reuse your Home Assistant Energy configuration and obtain a plan for your own installation. You do not need a development environment or a Python demo to configure an installed app.
+Follow this route to install OEP, reuse your Home Assistant Energy configuration and obtain a plan for your own installation. You do not need a development environment or a Python demo to configure an installed app.
 
 ## 1. Install and open the matched app and integration
 

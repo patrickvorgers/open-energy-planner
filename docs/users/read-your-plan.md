@@ -52,6 +52,8 @@ Above zero is supply to the modeled balance: used solar, grid import and battery
 
 The complete balance sums to zero before visual rounding or hiding series. Lines show SoC on the right axis. Bars show mean kW per quarter. Partial quarters identify their covered period in the tooltip.
 
+Hover over a date, focus it with the keyboard or tap it to see its energy totals. The **Optimizer** and **Battery self-consumption** day tooltips also show the expected benefit versus **Without battery** for the visible planned hours of that day. A negative amount means the scenario costs more than the baseline. The comparison uses the original plan's contract rates and displays **Unavailable** when comparable costs are missing.
+
 The blue **Zero on the meter** strip above the Optimizer time labels marks when the selected plan schedules that mode. Gaps mean it is inactive. Point to a blue block, focus it with the keyboard or tap it to see the full planned time range. The strip follows the visible chart range. Its schedule describes planned control, while the bars show expected energy flows.
 
 ### Read the battery plan
