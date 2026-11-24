@@ -134,6 +134,7 @@ def test_weather_candidate_waiting_rejected_and_validated_are_separate_from_acti
             model_selection={
                 "status": "accuracy_validated",
                 "completed_windows": 1,
+                "historical_seasons": {"winter": 0, "spring": 0, "summer": 0, "autumn": 1},
                 "windows": [
                     {
                         "day": "2026-10-25",
@@ -169,6 +170,9 @@ def test_weather_candidate_waiting_rejected_and_validated_are_separate_from_acti
     expect(page.locator(".quality-current-summary")).to_contain_text("Component forecast model")
     if status == "historical_replay":
         expect(details).to_contain_text("1 complete local day, including 1 historical replay")
+        expect(details).to_contain_text(
+            "Historical test days by season: Winter: 0, Spring: 0, Summer: 0, Autumn: 1."
+        )
         expect(details).to_contain_text("(historical replay)")
         expect(details).to_contain_text("Absolute daily energy error")
     else:

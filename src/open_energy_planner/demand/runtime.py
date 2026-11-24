@@ -63,6 +63,8 @@ class DemandRuntime:
         self.weather_location = None
         self.original_weather_runs = ()
         self.original_weather_revision = 0
+        self.replay_revision = 0
+        self._replay_evidence = None
 
     def save_configuration(self, configuration):
         """Persist then restore settings while the caller holds the application lock."""
@@ -151,6 +153,7 @@ class DemandRuntime:
             self.consumers.key(),
             self.weather_location,
             self.original_weather_revision,
+            self.replay_revision,
         )
 
     def request(self, now):
@@ -292,7 +295,54 @@ class DemandRuntime:
             self.live_weather_ref(now),
             self.live_weather_until,
             self.original_weather_runs,
+            self._replay_evidence[1]
+            if self._replay_evidence and self._replay_evidence[0] == self.replay_binding()
+            else {},
+            self.replay_binding(),
         )
+
+    def replay_binding(self):
+        """Bind scores to the current household, device membership and weather site."""
+        return (
+            self.configuration.version if self.configuration else None,
+            self.consumers.version,
+            self.weather_location,
+        )
+
+    def install_replays(self, binding, evidence):
+        """Make newly scored dates available to the next regular live prediction."""
+        if binding == self.replay_binding() and self._replay_evidence != (binding, evidence):
+            self._replay_evidence = binding, evidence
+            self.replay_revision += 1
+
+    def evaluate_replays(self, binding, jobs, timezone, stop):
+        """Evaluate a single historical batch without claiming the live prediction worker."""
+        from open_energy_planner.core.calendar import day_window
+        from open_energy_planner.forecast_quality.daily import controlled_consumers
+
+        control_cache = {}
+        results = {}
+
+        def controlled(day):
+            """Share each read-only historical control query across devices in this batch."""
+            if self.plans is None:
+                return ()
+            if day not in control_cache:
+                start, end = day_window(day.isoformat(), timezone)
+                control_cache[day] = controlled_consumers(self.plans, start, end)
+            return control_cache[day]
+
+        for family, learner, evaluate in jobs:
+            if stop.is_set():
+                break
+            try:
+                results[family] = evaluate(
+                    controlled=lambda day, learner=learner: learner in controlled(day),
+                    stopping=stop.is_set,
+                )
+            except (OSError, ValueError, TypeError, KeyError):
+                _LOGGER.warning("Device replay evidence unavailable. Live forecasts remain usable.")
+        return binding, results
 
     def reuse_forecast(self, key, now):
         """Advance the live quarter only when the installed issue still covers the full horizon."""
@@ -324,7 +374,8 @@ class DemandRuntime:
 
     def failed(self, key, now):
         """Back off a current failed archive/training job. Never attach an old failure to new inputs."""
-        if key != self.key(now):
+        current = self.key(now)
+        if current is None or key[:-2] != current[:-2]:
             return False
         self.failed_key, self.retry_after = key, now + timedelta(minutes=MODEL_RETRY_MINUTES)
         self.issue = "demand_forecast_update_failed"
@@ -378,7 +429,7 @@ class DemandRuntime:
             }
         return result
 
-    def build(self, job):
+    def build(self, job, replay_jobs=None):
         """Train and archive forecasts off-loop using independently retained daily accuracy.
 
         Measurement separation is active independently of learned-model admission.
@@ -403,6 +454,8 @@ class DemandRuntime:
             weather_reference,
             weather_until,
             original_weather_runs,
+            replay_evidence,
+            _replay_binding,
         ) = job
         grid = live_forecast_grid(now, temperatures) if weather_reference else None
         projection = {"grid": grid, "weather_version": weather_reference}
@@ -472,9 +525,7 @@ class DemandRuntime:
             if any(not row["weather_sensitive"] for row in consumers[1])
             else ()
         )
-        controlled_days = self.control_days(
-            now, {window[0] for window in (*device_replays, *calendar_replays)}
-        )
+        controlled_days = self.control_days(now)
         composite, consumer_result = build_components(
             configuration,
             histories,
@@ -485,6 +536,8 @@ class DemandRuntime:
             controlled_days=controlled_days,
             replay_windows=device_replays,
             calendar_windows=calendar_replays,
+            replay_jobs=replay_jobs,
+            replay_evidence=replay_evidence,
             **projection,
         )
         consumer_features = "consumers:" + consumers[0]
@@ -593,7 +646,9 @@ class DemandRuntime:
             history_quality,
             daily_selection,
         ) = result
-        if key != self.key(now):
+        current = self.key(now)
+        # New replay evidence schedules the next build without rejecting the current forecast.
+        if current is None or key[:-2] != current[:-2]:
             return False
         self.last_key, self.forecast, self.candidate = key, forecast, candidate
         self.failed_key, self.retry_after = None, None

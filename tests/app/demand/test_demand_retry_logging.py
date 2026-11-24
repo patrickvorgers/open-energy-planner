@@ -197,7 +197,7 @@ def test_demand_worker_reports_only_current_generation_backoff(
             raise OSError("Controlled demand capture failure")
         return original_job(runtime, now)
 
-    def fail_build(runtime, job):
+    def fail_build(runtime, job, _replay_jobs):
         """Represent a training failure after optional acceptance of newer weather inputs."""
         jobs.append(job)
         if failure == "stale":

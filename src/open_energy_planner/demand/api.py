@@ -3,13 +3,14 @@
 import asyncio
 import logging
 from datetime import UTC, datetime
+from threading import Event
 
 from aiohttp import web
 
 from open_energy_planner.core.units import BYTES_PER_KIB
 from open_energy_planner.demand.wire import parse_configuration as parse_demand_configuration
 from open_energy_planner.history.importer import HistoryContinuityError, parse_report
-from open_energy_planner.runtime.diagnostics.logging import request_error_message
+from open_energy_planner.runtime.diagnostics.logging import BackgroundLog, request_error_message
 from open_energy_planner.storage.writes import complete_write
 
 PUBLIC_VALIDATION_MESSAGES = (
@@ -29,9 +30,13 @@ def register(app, demand, live, setup_catalogue, lock, persist_then_install, sna
         async with lock:
             return web.json_response(demand.document(datetime.now(UTC)))
 
-    async def build_demand(job):
-        """Drain the worker's archive write before propagating HTTP/lifecycle cancellation."""
-        worker = asyncio.create_task(asyncio.to_thread(demand.build, job))
+    ready = asyncio.Event()
+    stop = Event()
+    pending = None
+
+    async def off_loop(operation, *args):
+        """Drain the worker's archive writes before propagating cancellation."""
+        worker = asyncio.create_task(asyncio.to_thread(operation, *args))
         cancellation = None
         while True:
             try:
@@ -44,6 +49,49 @@ def register(app, demand, live, setup_catalogue, lock, persist_then_install, sna
         if cancellation is not None:
             raise cancellation
         return result
+
+    async def build_demand(job):
+        """Publish the live result independently of the newest historical batch."""
+        nonlocal pending
+        binding = job[-1]
+        jobs = []
+        result = await off_loop(demand.build, job, jobs)
+        if jobs and binding == demand.replay_binding():
+            pending = binding, jobs, job[1].timezone, stop
+            ready.set()
+        return result
+
+    async def replay_lifecycle(_app):
+        """Coalesce pending historical work and finish the active day on shutdown."""
+
+        async def replay_worker():
+            """Install only checked evidence for the current site and device configuration."""
+            logger = BackgroundLog(_LOGGER, "Device history evaluation")
+            nonlocal pending
+            while not stop.is_set():
+                await ready.wait()
+                if stop.is_set():
+                    return
+                ready.clear()
+                batch, pending = pending, None
+                try:
+                    result = await off_loop(demand.evaluate_replays, *batch)
+                    async with lock:
+                        demand.install_replays(*result)
+                    if logger.failure_key is not None:
+                        logger.success("Device comparison evidence is available again.")
+                except Exception:
+                    logger.exception("Current device forecasts remain available.")
+
+        worker = asyncio.create_task(replay_worker())
+        try:
+            yield
+        finally:
+            stop.set()
+            ready.set()
+            await worker
+
+    app.cleanup_ctx.append(replay_lifecycle)
 
     def accept_history(body, pending, now, household):
         """Parse and commit one admitted source while the async caller retains its owner lock."""

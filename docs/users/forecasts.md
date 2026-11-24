@@ -39,6 +39,10 @@ soon as it has enough training history and a complete comparable test day.
 Each replay trains on earlier data and predicts the test day using an archived
 weather forecast when temperature is required. Later, each complete measured
 day can add a comparison with the forecasts originally saved for that day.
+Historical testing runs in the background while OEP publishes its normal
+forecasts. OEP reuses completed tests after restart and compares up to 24
+historical days per device, spread over available seasons, weekdays and
+weekends. The comparison shows how many historical days each season contributes.
 The model with the lowest average hourly error is selected. The day-total
 error breaks a tie. Until there is usable comparison evidence, the weekday
 profile remains available. Measurement separation can already use that profile.

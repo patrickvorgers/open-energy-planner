@@ -3,6 +3,7 @@
 from contextlib import contextmanager
 from dataclasses import replace
 from datetime import datetime, timedelta
+from functools import partial
 from zoneinfo import ZoneInfo
 
 from open_energy_planner.appliances.sources import SOURCE_OWNERSHIP_UNAVAILABLE, validate_membership
@@ -288,6 +289,8 @@ def build_components(
     weather_version=None,
     replay_windows=(),
     calendar_windows=(),
+    replay_jobs=None,
+    replay_evidence=None,
 ):
     """Build household demand from its remainder and ready disjoint consumers exactly once.
 
@@ -339,6 +342,8 @@ def build_components(
                 grid=grid,
                 weather_version=weather_version,
                 replay_windows=replay_windows if item["weather_sensitive"] else calendar_windows,
+                replay_jobs=replay_jobs,
+                replay_evidence=replay_evidence,
                 excluded_dates=("*",)
                 if control_history_unavailable
                 else controlled_days.get(item["entity_id"], ()),
@@ -483,6 +488,8 @@ def component(
     grid=None,
     weather_version=None,
     replay_windows=None,
+    replay_jobs=None,
+    replay_evidence=None,
 ):
     """Select suitable models by preserved daily accuracy, retaining a measured weekday baseline.
 
@@ -513,7 +520,7 @@ def component(
         provide promotion evidence. Unreadable comparison evidence keeps the baseline.
     """
     from open_energy_planner.forecast_selection.accuracy import choose_daily
-    from open_energy_planner.forecast_selection.device_history import replay_scores
+    from open_energy_planner.forecast_selection.device_history import replay_family, replay_scores
 
     if not component_history_ready(configuration, samples):
         raise ValueError("At least seven complete days covering every hour are required")
@@ -567,14 +574,9 @@ def component(
         except (ValueError, ImportError, OSError):
             pass
     replays = None
-    replay_issue = False
     if replay_windows is not None:
-        try:
-            replays = replay_scores(
-                documents, configuration, samples, weather, replay_windows, models, excluded_dates
-            )
-        except (OSError, ValueError, TypeError, KeyError):
-            replays, replay_issue = (), True
+        family = replay_family(configuration, models)
+        replays = (replay_evidence or {}).get(family, ())
     selection = choose_daily(
         documents,
         [
@@ -597,8 +599,26 @@ def component(
         excluded_dates=excluded_dates,
         replays=replays,
     )
-    if replay_issue:
-        selection["replay_issue"] = "historical_evidence_unavailable"
+    if replay_jobs is not None and documents is not None and replay_windows and len(models) > 1:
+        original_days = {
+            window["day"] for window in selection["windows"] if window.get("source") == "live"
+        }
+        replay_jobs.append(
+            (
+                family,
+                learner,
+                partial(
+                    replay_scores,
+                    documents,
+                    configuration,
+                    samples,
+                    weather,
+                    replay_windows,
+                    models,
+                    (*excluded_dates, *original_days),
+                ),
+            )
+        )
     chosen = selection["selected"]
     selection["selected_model"] = models[chosen].model_id
     if "weather" in models:
