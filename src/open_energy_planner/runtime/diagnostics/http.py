@@ -1,6 +1,6 @@
 """Expose bounded operation durations through standard HTTP diagnostics, never request data."""
 
-from contextlib import contextmanager
+from contextlib import asynccontextmanager, contextmanager
 from time import perf_counter
 
 from aiohttp import web
@@ -24,6 +24,17 @@ def phase(request, name):
         request.setdefault(REQUEST_PHASES, []).append(
             (name, (perf_counter() - started) * MILLISECONDS_PER_SECOND)
         )
+
+
+@asynccontextmanager
+async def timed_lock(request, name, lock):
+    """Record acquisition latency separately from work performed while holding the lock."""
+    with phase(request, name):
+        await lock.acquire()
+    try:
+        yield
+    finally:
+        lock.release()
 
 
 def register(app):

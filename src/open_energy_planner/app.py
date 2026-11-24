@@ -345,10 +345,11 @@ def create_app(
             return await handler(request)
         finally:
             if repository.pending_invalidation:
-                async with lock:
+                async with timed_lock(request, "revocation_wait", lock):
                     if repository.pending_invalidation:
                         try:
-                            await save_state()
+                            with phase(request, "revocation_save"):
+                                await save_state()
                         except OSError:
                             raise web.HTTPServiceUnavailable(
                                 text="Plan archive unavailable. Commands revoked"
@@ -358,7 +359,7 @@ def create_app(
         middlewares=[authentication, persist_invalidations],
         client_max_size=DEFAULT_REQUEST_LIMIT_KIB * BYTES_PER_KIB,
     )
-    from .runtime.diagnostics.http import phase
+    from .runtime.diagnostics.http import phase, timed_lock
     from .runtime.diagnostics.http import register as register_request_timing
 
     register_request_timing(app)
@@ -749,46 +750,62 @@ def create_app(
         Reacquire the lock to refresh live validity and assemble current state, so
         intervening controls are reflected rather than overwritten by captured state.
         """
-        async with lock:
+        async with timed_lock(request, "snapshot_capture_wait", lock):
             pending_settlement = settlement_request()
-        settlement = await pending_settlement
-        async with lock:
-            cancellation = await complete_write(
-                appliances.tick,
-                datetime.now(UTC),
-                repository.state["enabled"],
-                repository.state["plan"],
-            )
-            if cancellation is not None:
-                raise cancellation
-            if live:
-                await live.refresh_async()
-            pending_history = contract_api.history_request()
-            devices = installation_catalogue(
-                installation, solar, live.current_snapshot if live else None
-            )
-            if installation_basis or installation.current is not None:
-                devices = setup_catalogue.devices(devices)
-            if devices is None:
-                devices = (
-                    []
-                    if live
-                    else [
-                        {
-                            "id": unit.device_id,
-                            "kind": "battery",
-                            "name": "Battery",
-                            "configured": True,
-                            "can_follow_grid": unit.can_follow_grid,
-                        }
-                        for unit in synthetic_batteries
-                    ]
+        with phase(request, "snapshot_settlement"):
+            settlement = await pending_settlement
+        async with timed_lock(request, "snapshot_state_wait", lock):
+            with phase(request, "snapshot_appliance_tick"):
+                cancellation = await complete_write(
+                    appliances.tick,
+                    datetime.now(UTC),
+                    repository.state["enabled"],
+                    repository.state["plan"],
                 )
-            from .installation.commands import execution_document
+                if cancellation is not None:
+                    raise cancellation
+            if live:
+                with phase(request, "snapshot_live_refresh"):
+                    await live.refresh_async()
+            with phase(request, "snapshot_bonus_history"):
+                pending_history = contract_api.history_request()
+            with phase(request, "snapshot_forecast_history"):
+                quality_request = (
+                    forecast_history_request(datetime.now(UTC))
+                    if source == "home_assistant"
+                    else None
+                )
+            with phase(request, "snapshot_demand"):
+                demand_state = {
+                    **demand.document(datetime.now(UTC)),
+                    "request": demand.request(datetime.now(UTC))
+                    or demand.consumers.request(demand.configuration, datetime.now(UTC)),
+                }
+            with phase(request, "snapshot_document"):
+                devices = installation_catalogue(
+                    installation, solar, live.current_snapshot if live else None
+                )
+                if installation_basis or installation.current is not None:
+                    devices = setup_catalogue.devices(devices)
+                if devices is None:
+                    devices = (
+                        []
+                        if live
+                        else [
+                            {
+                                "id": unit.device_id,
+                                "kind": "battery",
+                                "name": "Battery",
+                                "configured": True,
+                                "can_follow_grid": unit.can_follow_grid,
+                            }
+                            for unit in synthetic_batteries
+                        ]
+                    )
+                from .installation.commands import execution_document
 
-            execution_only = request.headers.get("X-OEP-View") == "commands"
-            return web.json_response(
-                {
+                execution_only = request.headers.get("X-OEP-View") == "commands"
+                document = {
                     "release": RELEASE,
                     "settlement_request": settlement,
                     "savings_status": {
@@ -815,14 +832,8 @@ def create_app(
                     "market_price_request": price_request(prices, datetime.now(UTC))
                     if source == "home_assistant"
                     else None,
-                    "forecast_quality_request": forecast_history_request(datetime.now(UTC))
-                    if source == "home_assistant"
-                    else None,
-                    "demand": {
-                        **demand.document(datetime.now(UTC)),
-                        "request": demand.request(datetime.now(UTC))
-                        or demand.consumers.request(demand.configuration, datetime.now(UTC)),
-                    },
+                    "forecast_quality_request": quality_request,
+                    "demand": demand_state,
                     "consumers": demand.consumers.document(now=datetime.now(UTC)),
                     "appliances": appliances.document(
                         datetime.now(UTC), repository.state["enabled"], repository.state["plan"]
@@ -878,7 +889,8 @@ def create_app(
                         else None,
                     },
                 }
-            )
+            with phase(request, "snapshot_json"):
+                return web.json_response(document)
 
     async def enabled(request):
         """Persist explicit enable intent and request a fresh round for a new resume request."""
