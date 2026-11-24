@@ -1230,6 +1230,7 @@ def test_user_automation_can_capture_commands_and_fallback_without_hardware():
         async with running_chain() as (hass, entry, _url, _root):
             entry.runtime_data.poll_cancel()
             entry.runtime_data.poll_cancel = None
+            old = entry.runtime_data.schedule.plan.plan_id
             captured = []
             hass.bus.async_listen(
                 "oep_test_capture", lambda event_item: captured.append(event_item.data)
@@ -1265,7 +1266,10 @@ def test_user_automation_can_capture_commands_and_fallback_without_hardware():
             await entry.runtime_data.set_enabled(True)
             await hass.async_block_till_done()
             assert captured[-1]["status"] != "active"
-            await entry.runtime_data.sync()
+            async with asyncio.timeout(2):
+                while (await entry.runtime_data.client.plan_status())["plan_id"] in (None, old):
+                    await asyncio.sleep(0.01)
+            assert await entry.runtime_data.sync_plan()
             await hass.async_block_till_done()
             assert captured[-1]["status"] == "active"
             assert captured[-1]["mode"] == "fixed_power"
