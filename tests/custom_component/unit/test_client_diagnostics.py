@@ -8,7 +8,11 @@ from aiohttp import ClientResponseError, ClientSession, web
 from aiohttp.test_utils import TestServer
 
 from custom_components.open_energy_planner import client as client_module
-from custom_components.open_energy_planner.client import LocalClient
+from custom_components.open_energy_planner.client import (
+    AuthenticationError,
+    LocalClient,
+    ReleaseMismatchError,
+)
 from open_energy_planner.build_info import BUILD_INFO, HEADER_FIELDS
 
 
@@ -96,3 +100,32 @@ def test_measurement_timeout_logs_the_actual_route(caplog, monkeypatch):
     assert "App request POST /v1/observations failed after " in caplog.text
     assert "(TimeoutError)" in caplog.text
     assert "synthetic-private" not in caplog.text
+
+
+@pytest.mark.parametrize(
+    ("status", "headers", "error_type"),
+    [
+        (401, {}, AuthenticationError),
+        (403, {}, AuthenticationError),
+        (409, {"X-OEP-Mismatch": "true"}, ReleaseMismatchError),
+    ],
+)
+def test_request_logs_status_for_app_rejections(caplog, status, headers, error_type):
+    """Log the HTTP status even when the app rejection has a specific exception type."""
+
+    async def scenario():
+        """Return an app rejection and preserve the exception used by recovery handling."""
+
+        async def respond(_request):
+            """Return the synthetic status and optional release-mismatch header."""
+            return web.Response(status=status, headers=headers)
+
+        application = web.Application()
+        application.router.add_get("/v1/snapshot", respond)
+        async with TestServer(application) as server, ClientSession() as session:
+            client = LocalClient(session, str(server.make_url("")), "synthetic-private-token")
+            with pytest.raises(error_type):
+                await client.snapshot()
+
+    asyncio.run(scenario())
+    assert f"({error_type.__name__} (HTTP {status}))" in caplog.text

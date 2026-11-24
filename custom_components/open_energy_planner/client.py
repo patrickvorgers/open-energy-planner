@@ -20,11 +20,20 @@ HTTP_TIMEOUT_SECONDS = 5
 _LOGGER = logging.getLogger(__name__)
 
 
-class AuthenticationError(ValueError):
+class _HTTPRejection(ValueError):
+    """Preserve a response status when the client raises a domain error."""
+
+    def __init__(self, message, *, status=None):
+        """Keep the existing error text along with optional safe HTTP metadata."""
+        super().__init__(message)
+        self.status = status
+
+
+class AuthenticationError(_HTTPRejection):
     """An installation token needs user attention."""
 
 
-class ReleaseMismatchError(ValueError):
+class ReleaseMismatchError(_HTTPRejection):
     """The loaded app and integration do not identify the same release build."""
 
 
@@ -83,7 +92,10 @@ class LocalClient:
             result = await self._exchange(method, path, body, identity_snapshot)
         except (ClientError, TimeoutError, ValueError, TypeError, KeyError) as error:
             failure = type(error).__name__
-            if isinstance(error, ClientResponseError):
+            if (
+                isinstance(error, (ClientResponseError, _HTTPRejection))
+                and error.status is not None
+            ):
                 failure = f"{failure} (HTTP {error.status})"
             level = (
                 logging.DEBUG
@@ -123,12 +135,14 @@ class LocalClient:
             ssl=self.fingerprint,
         ) as response:
             if response.status in (HTTPStatus.UNAUTHORIZED, HTTPStatus.FORBIDDEN):
-                raise AuthenticationError("Local API token rejected")
+                raise AuthenticationError("Local API token rejected", status=response.status)
             if (
                 response.status == HTTPStatus.CONFLICT
                 and response.headers.get("X-OEP-Mismatch") == "true"
             ):
-                raise ReleaseMismatchError("App rejected a different integration release build")
+                raise ReleaseMismatchError(
+                    "App rejected a different integration release build", status=response.status
+                )
             response.raise_for_status()
             received = {
                 "version": response.headers.get("X-OEP-Release"),
@@ -137,7 +151,9 @@ class LocalClient:
             if path.startswith("/v1/") and any(
                 received[field] != BUILD_INFO[field] for field in received
             ):
-                raise ReleaseMismatchError("App and integration release builds differ")
+                raise ReleaseMismatchError(
+                    "App and integration release builds differ", status=response.status
+                )
             # Settings may return a complete snapshot too. Bound by the response contract.
             snapshot_response = path in (
                 "/v1/snapshot",
