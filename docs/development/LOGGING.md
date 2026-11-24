@@ -45,6 +45,13 @@ state or the existing validity/publication guards.
 
 ## Privacy and diagnostics
 
+In Home Assistant Core logs, the integration's HTTP client reports failed app
+requests with the HTTP method, route, elapsed seconds and exception type. HTTP
+response errors also report the status code. First or changed failures per route
+are WARNING, unchanged repeats are DEBUG and successful exchanges after a
+failure are INFO. These entries omit hosts, query strings, tokens, request data
+and response contents.
+
 Expected transport failures use bounded descriptions such as HTTP status,
 timeout or connection failure. Never interpolate arbitrary provider exception
 text, response bodies, tokens, credentials, raw configuration or URLs containing

@@ -1,9 +1,11 @@
 """Only local HTTP and JSON. Never import the app package."""
 
 import json
+import logging
 from http import HTTPStatus
+from time import monotonic
 
-from aiohttp import ClientSession, ClientTimeout, Fingerprint
+from aiohttp import ClientError, ClientResponseError, ClientSession, ClientTimeout, Fingerprint
 
 from .const import BUILD_INFO
 from .wire_limits import (
@@ -15,6 +17,7 @@ from .wire_limits import (
 RESPONSE_READ_CHUNK_BYTES = 16384
 
 HTTP_TIMEOUT_SECONDS = 5
+_LOGGER = logging.getLogger(__name__)
 
 
 class AuthenticationError(ValueError):
@@ -48,6 +51,7 @@ class LocalClient:
         self.instance_confirmed = False
         self.instance_mismatch = False
         self.instance_generation = 0
+        self._request_failures: dict[tuple[str, str], str] = {}
 
     async def request(self, method, path, body=None):
         """Send authenticated HTTP without redirects and require a bounded object response.
@@ -73,6 +77,36 @@ class LocalClient:
             and not identity_snapshot
         ):
             await self.snapshot()
+        operation = (method, path.partition("?")[0])
+        started_at = monotonic()
+        try:
+            result = await self._exchange(method, path, body, identity_snapshot)
+        except (ClientError, TimeoutError, ValueError, TypeError, KeyError) as error:
+            failure = type(error).__name__
+            if isinstance(error, ClientResponseError):
+                failure = f"{failure} (HTTP {error.status})"
+            level = (
+                logging.DEBUG
+                if self._request_failures.get(operation) == failure
+                else logging.WARNING
+            )
+            self._request_failures[operation] = failure
+            _LOGGER.log(
+                level,
+                "App request %s %s failed after %.3f s (%s).",
+                *operation,
+                monotonic() - started_at,
+                failure,
+            )
+            raise
+        if self._request_failures.pop(operation, None) is not None:
+            _LOGGER.info(
+                "App request %s %s recovered in %.3f s.", *operation, monotonic() - started_at
+            )
+        return result
+
+    async def _exchange(self, method, path, body, identity_snapshot):
+        """Perform one HTTP exchange and validate the response and installation identity."""
         generation = self.instance_generation
         async with self.session.request(
             method,
