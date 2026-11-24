@@ -273,6 +273,8 @@ function planningDayHeading(instance, series, tooltip, summary, heading, {date, 
             periodLabel: `From ${when(from)} to ${when(to)}.`, afterBody: notes, caretX: bounds.left + bounds.width / 2 - canvas.left, caretY: bounds.bottom - canvas.top}}, tooltip, true);
         tooltip.classList.add("chart-tooltip-day");
         button.setAttribute("aria-describedby", tooltip.id);
+        const scenario = {"plan-chart": "optimizer", "self-consumption-chart": "self_consumption"}[instance.canvas.id];
+        if (scenario) showDayBenefit(tooltip, button, scenario, from, to);
         positionDayTooltip(tooltip, button);
         tooltip.onmouseleave = event => { if (!focused && !button.contains(event.relatedTarget)) hide(); };
     };
@@ -618,6 +620,42 @@ function originalScenarioCosts(plan) {
         without_battery: {costs: baseline?.reference_costs}
     };
 }
+/** Share pending and successful original-contract cost slices for the displayed plan. */
+function planWindowCosts(plan, start, end) {
+    const key = `${start}:${end}`;
+    if (!plan.windows.has(key)) {
+        const query = new URLSearchParams({start: new Date(start).toISOString(), end: new Date(end).toISOString()});
+        const result = api(`v1/plans/${encodeURIComponent(plan.id)}/comparison?${query}`).catch(error => {
+            plan.windows.delete(key);
+            throw error;
+        });
+        plan.windows.set(key, result);
+    }
+    return plan.windows.get(key);
+}
+/** Add the financial comparison for exactly the covered interval already shown in the tooltip. */
+async function showDayBenefit(tooltip, button, scenario, start, end) {
+    const plan = periodCostPlan;
+    const line = document.createElement("p");
+    line.className = "chart-tooltip-day-benefit";
+    line.setAttribute("aria-live", "polite");
+    const label = `Expected benefit versus without battery${plan?.projection.valuation ? " (original contract)" : ""}`;
+    line.textContent = `${label}: ${plan ? "Loading…" : "Unavailable"}`;
+    tooltip.querySelector(".chart-tooltip-period").after(line);
+    if (!plan) return;
+    let benefit;
+    try {
+        const scenarios = start === plan.start && end === plan.end
+            ? originalScenarioCosts(plan) : (await planWindowCosts(plan, start, end)).scenarios;
+        benefit = scenarios?.[scenario]?.benefit_vs_without_battery;
+    } catch { /* Keep energy totals usable when the financial comparison fails. */ }
+    if (periodCostPlan !== plan || !line.isConnected || tooltip.hidden) return;
+    const known = Number.isFinite(benefit);
+    const zero = known && money(Math.abs(benefit)) === money(0);
+    const amount = known ? `${money(zero ? 0 : benefit)} ${plan.currency}`.trim() : "Unavailable";
+    line.textContent = `${label}: ${amount}`;
+    positionDayTooltip(tooltip, button);
+}
 /** Keep successful full-plan valuations visible independently of selected-period loading or failure. */
 function renderPeriodCosts(period, scenarios, currency, message, plan = null) {
     const valuation = plan?.projection.valuation, original = plan ? originalScenarioCosts(plan) : null;
@@ -650,8 +688,7 @@ async function showPeriodCosts(start, end) {
     }
     renderPeriodCosts(null, null, plan.currency, "Loading expected costs for the selected period…", plan);
     try {
-        const query = new URLSearchParams({start: new Date(start).toISOString(), end: new Date(end).toISOString()});
-        const data = await api(`v1/plans/${encodeURIComponent(plan.id)}/comparison?${query}`, AbortSignal.timeout(PLAN_READ_TIMEOUT_MILLISECONDS));
+        const data = await planWindowCosts(plan, start, end);
         if (request !== periodCostRequest || periodCostPlan !== plan) return;
         renderPeriodCosts(data.period, data.scenarios, plan.currency, undefined, plan);
         if (plan.projection.valuation) for (const caption of document.querySelectorAll(".scenario-period")) {
@@ -949,7 +986,7 @@ function renderPlanComparisons(data, plan, {deferRange = false} = {}) {
     $("expected-benefit").textContent = message.trim();
     if (!confirmedProjection) {
         chart("energy-chart", gridExchangeSeries(plan, comparison, baseline), {unit: "W", preserveVisibility: samePlan, deferRange: true});
-        periodCostPlan = {id, currency, projection: data, scenarios: data.scenarios, period, start: inspectSteps[0]?.start, end: inspectSteps.at(-1)?.end};
+        periodCostPlan = {id, currency, projection: data, scenarios: data.scenarios, period, start: inspectSteps[0]?.start, end: inspectSteps.at(-1)?.end, windows: new Map()};
         periodCostKey = ""; periodCostRequest++;
     }
     inspect(); if (!deferRange) applyRange();
