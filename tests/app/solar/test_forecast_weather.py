@@ -506,6 +506,33 @@ def test_slow_historical_provider_does_not_block_current_forecast():
     asyncio.run(scenario())
 
 
+def test_solar_archive_reuses_already_normalized_run_versions(tmp_path, monkeypatch):
+    """Only a nondefault simulation origin needs a new original-run object and version."""
+    from open_energy_planner.solar.runtime import SolarRuntime
+    from tests.app.solar.support import plant
+
+    source = OpenMeteoWeatherSource(LatestRunSession())
+    now = INITIALIZED + timedelta(hours=8)
+    weather = asyncio.run(source.read(SITE, now))
+    (original,) = source.forecast_runs
+    assert source.current_run is not original
+    assert source.current_run.as_original().version == original.version
+    assert original.as_original() is original
+    store = make_store(tmp_path, SolarStore)
+    store.save(plant())
+    runtime = SolarRuntime(store)
+    runtime.set_weather(SITE, weather, service=source.service)
+
+    def no_rehash(_body):
+        """Reject recomputing the weather-run hash already held by the frozen original."""
+        pytest.fail("Already-normalized weather run lost its cached version")
+
+    monkeypatch.setattr("open_energy_planner.weather.run.version", no_rehash)
+    assert runtime.set_forecast_runs(SITE, (original,), authoritative=False)
+    assert runtime.forecast_runs[0] is original
+    assert not runtime.set_forecast_runs(SITE, (original,), authoritative=False)
+
+
 def test_new_background_runs_do_not_discard_usable_jobs_and_remain_coalesced(tmp_path, monkeypatch):
     """A worker publishes its captured valid result when only new ordinary training evidence arrives."""
     from open_energy_planner.solar.runtime import SolarRuntime
