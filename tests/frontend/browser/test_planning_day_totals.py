@@ -55,6 +55,8 @@ def test_all_planning_dates_expose_daily_energy(app_page):
     page.get_by_role("button", name="Connect", exact=True).click()
     expect(page.locator("#overview-status")).to_contain_text("Connected")
     snapshots = scenario_snapshots(page, url)
+    directory = Path("results/ci/planning-day-totals")
+    directory.mkdir(parents=True, exist_ok=True)
     for identity in ("plan-chart", "self-consumption-chart", "reference-chart"):
         card = page.locator("#" + identity).locator("..")
         heading = card.get_by_role("button", name="Expected energy totals for", exact=False).first
@@ -72,6 +74,7 @@ def test_all_planning_dates_expose_daily_energy(app_page):
         expect(tooltip).to_contain_text("kWh")
         expect(tooltip).not_to_contain_text("SoC")
         expect(tooltip).to_contain_text("Totals cover this complete calendar day.")
+        expect(tooltip.locator(".chart-tooltip-period")).to_have_count(0)
         expect_day_benefit(page, url, tooltip, identity, START, START + timedelta(days=1))
         snapshot = snapshots[identity]
         # The fixture starts at UTC midnight. Read independently archived kWh, not chart means.
@@ -98,8 +101,6 @@ def test_all_planning_dates_expose_daily_energy(app_page):
         )
         assert tooltip_bounds["x"] >= 0
         assert tooltip_bounds["x"] + tooltip_bounds["width"] <= page.viewport_size["width"]
-        directory = Path("results/ci/planning-day-totals")
-        directory.mkdir(parents=True, exist_ok=True)
         page.screenshot(path=str(directory / f"{identity}-{page.viewport_size['width']}.png"))
         heading.focus()
         page.evaluate("id => Chart.getChart(document.getElementById(id)).draw()", identity)
@@ -128,7 +129,10 @@ def test_all_planning_dates_expose_daily_energy(app_page):
         expect(tooltip).to_contain_text("Partial day. Totals cover only the shown planned period.")
         expect_day_benefit(page, url, tooltip, identity, START, START + timedelta(hours=6))
         expect(tooltip.locator(".chart-tooltip-period")).to_be_in_viewport()
-        expect(tooltip.locator(".chart-tooltip-period")).to_contain_text("From ")
+        expect(tooltip.locator(".chart-tooltip-period")).to_have_text("From 00:00 to 06:00.")
+        page.screenshot(
+            path=str(directory / f"{identity}-partial-{page.viewport_size['width']}.png")
+        )
         base = tooltip.locator("tr").filter(has_text="Household base: AC").locator("td").nth(1)
         expect(base).to_have_text("-1.26")
         totals = tooltip.locator(".chart-tooltip-total .chart-tooltip-value").all_text_contents()

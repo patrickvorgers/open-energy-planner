@@ -261,7 +261,9 @@ function planningDayHeading(instance, series, tooltip, summary, heading, {date, 
             parsed: {y: balancePeriodEnergy(entry.intervals, from, to)}
         }]);
         const items = balanceItems.filter(item => instance.isDatasetVisible(item.datasetIndex));
-        const partial = from > calendarDayStart(date) || to < calendarDayStart(nextDate(date));
+        const nextDayStart = calendarDayStart(nextDate(date));
+        const partial = from > calendarDayStart(date) || to < nextDayStart;
+        const endDay = to === nextDayStart ? " (next day)" : "";
         const notes = [partial ? "Partial day. Totals cover only the shown planned period." : "Totals cover this complete calendar day."];
         if (balanceItems.some(item => item.parsed.y == null)) notes.push("A dash means that energy is unavailable because interval evidence is missing or inconsistent.");
         if (summary.owner !== button) {
@@ -270,7 +272,7 @@ function planningDayHeading(instance, series, tooltip, summary, heading, {date, 
         }
         const bounds = button.getBoundingClientRect(), canvas = instance.canvas.getBoundingClientRect();
         renderTooltip({chart: instance, tooltip: {opacity: 1, dataPoints: items, balanceItems, title: [`Expected energy totals: ${dateLabel(date)}`],
-            periodLabel: `From ${when(from)} to ${when(to)}.`, afterBody: notes, caretX: bounds.left + bounds.width / 2 - canvas.left, caretY: bounds.bottom - canvas.top}}, tooltip, true);
+            periodLabel: partial ? `From ${calendarTime(from)} to ${calendarTime(to)}${endDay}.` : null, afterBody: notes, caretX: bounds.left + bounds.width / 2 - canvas.left, caretY: bounds.bottom - canvas.top}}, tooltip, true);
         tooltip.classList.add("chart-tooltip-day");
         button.setAttribute("aria-describedby", tooltip.id);
         const scenario = {"plan-chart": "optimizer", "self-consumption-chart": "self_consumption"}[instance.canvas.id];
@@ -641,7 +643,7 @@ async function showDayBenefit(tooltip, button, scenario, start, end) {
     line.setAttribute("aria-live", "polite");
     const label = `Expected benefit versus without battery${plan?.projection.valuation ? " (original contract)" : ""}`;
     line.textContent = `${label}: ${plan ? "Loading…" : "Unavailable"}`;
-    tooltip.querySelector(".chart-tooltip-period").after(line);
+    tooltip.querySelector(".balance-tooltip-groups").before(line);
     if (!plan) return;
     let benefit;
     try {
