@@ -160,24 +160,33 @@ base and progress in an **OEP review** PR comment. It applies this order:
 3. If CodeRabbit explicitly reports no included capacity, request Greptile once
    with `@greptileai review this draft` and an `oep-greptile-head` marker.
    A confirmed rate limit on the actual CodeRabbit request or its authentic
-   terminal `timed_out` check follows the same route.
+   terminal `timed_out` check follows the same route. When the repository's
+   Greptile pause is enabled, send one `@codex review` for this new fallback.
 4. A genuine current-head `Greptile Review` check from app `867647` with
    `status: completed` and `conclusion: timed_out` permits one Kody-ai request.
    Use `@kody start-review` with an `oep-kody-head` marker. The exact merge-only
    Kody skip instead selects `@kody review --force`, as described below.
-5. A genuine terminal Kody `timed_out` check or failed check titled
+5. When the Greptile App explicitly refuses the active request because its review
+   credits are exhausted, proceed directly to GitHub Codex. The controller
+   recognizes the observed `Your organization has run out of review credits.`
+   reply with its `greptile-credit-pause` marker. It requires the real GitHub bot
+   and App IDs and one unedited reply posted after the active command on the
+   frozen Draft. It checks for ongoing work and other feedback and revalidates
+   the refusal before publication and when recovering a published command.
+6. A genuine terminal Kody `timed_out` check or failed check titled
    `Code Review Failed` permits one final `@codex review` request with an
-   `oep-codex-head` marker. This uses the already authorized GitHub Codex
+   `oep-codex-head` marker. Both Codex paths share the same single-request limit
+   and use the already authorized GitHub Codex
    connection, not an OpenAI API key or another local reviewer.
-6. Stop after any substantive current-head review completes, even if it reports
+7. Stop after any substantive current-head review completes, even if it reports
    findings. Evaluate every finding before Ready. Open discussions and effective
    formal change requests block technical-failure fallback. Newly published provider
    comments, submitted reviews and uncertain partial publications also require
    operator inspection before fallback. No provider switch
    disposes of a finding or clears an objection.
 
-Only observed provider output formats are parsed. Greptile quota/failure prose
-has no verified parser and therefore stops the flow for inspection. An unknown
+Only observed provider output formats are parsed. Any other Greptile quota or
+failure text requires inspection. An unknown
 failure, skip, warning, missing publication or local two-hour deadline never
 proves that provider work ended. Do not start an overlapping fallback.
 
@@ -272,6 +281,19 @@ The controller never falls back to publishing provider commands with its workflo
 bot credential. Missing, expired, malformed or unauthorized credentials block
 visibly with administrator recovery advice. No raw token or API error body is
 included in status comments or logs.
+
+### Temporarily pause Greptile for this repository
+
+A repository administrator can set the GitHub Actions repository variable
+`OEP_GREPTILE_PAUSED` to `true` after confirming the Greptile review-credit
+outage. Only the trusted main orchestration job reads the variable. The pause
+changes the target of eligible new fallbacks after a confirmed CodeRabbit quota
+refusal or authenticated terminal timeout. The workflow still checks the frozen
+head/base, reviewer activity, command permissions and existing findings. A
+previously issued Greptile request stays on its existing path, including during
+silence. When credits return, the administrator removes the variable or sets it
+to `false`. The default route resumes, including direct Codex fallback for an
+authenticated Greptile credit refusal.
 
 ### Configure the provider command credential
 
