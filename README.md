@@ -95,9 +95,9 @@ OEP reuses three kinds of information from Home Assistant. The setup wizard show
 
 In OEP, add your electricity contract and confirm planning details such as grid import and export limits, equipment ratings, inverter relationships and which actions the planner may propose. See [what to prepare in Home Assistant Energy](docs/users/before-you-start.md#prepare-home-assistant-energy).
 
-[![Saved connection settings with import/export limits and an annual household consumption estimate.](docs/assets/installation-connection.png)](docs/assets/installation-connection.png)
+[![The Home Assistant stage of the installation wizard shows detected grid meters, solar and battery sources, and annual household consumption from recorded history.](docs/assets/installation-energy-discovery.png)](docs/assets/installation-energy-discovery.png)
 
-*Power limits use kW. Annual household demand uses kWh. The synthetic example disables feed-in. A zero-export plan still requires enough consumption, storage or explicitly controllable solar to handle surplus.*
+*This synthetic example shows the Energy sources the wizard detected and the annual household consumption calculated from Home Assistant history.*
 
 Existing history can supply an annual-use estimate. Without enough usable history, you can confirm your own annual whole-home estimate and obtain a provisional demand profile. Solar and batteries are optional. See [installation settings](docs/users/installation.md).
 
