@@ -1,6 +1,6 @@
 """Frozen original forecast runs with separate simulation, initialization and receipt clocks."""
 
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from datetime import UTC, datetime, timedelta
 from functools import cached_property
 
@@ -83,6 +83,13 @@ class ForecastWeatherRun:
         object.__setattr__(self, "forecast_origin", origin)
         object.__setattr__(self, "available_at", available)
         object.__setattr__(self, "hours", hours)
+
+    def as_original(self):
+        """Use the default simulation origin and retain the cached version of an original run."""
+        default_origin = self.initialized_at + timedelta(hours=DEFAULT_FORECAST_ORIGIN_DELAY_HOURS)
+        if self.forecast_origin == default_origin:
+            return self
+        return replace(self, forecast_origin=None)
 
     @cached_property
     def version(self):

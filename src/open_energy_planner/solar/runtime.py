@@ -436,7 +436,7 @@ class SolarRuntime:
             for run in selected
         ) or len({run.initialized_at for run in selected}) != len(selected):
             raise ValueError("Invalid original solar forecast run cohort")
-        selected = tuple(replace(run, forecast_origin=None) for run in selected)
+        selected = tuple(run.as_original() for run in selected)
         destructive, revisions, run_revision = self.training.accept_runs(
             site,
             selected,

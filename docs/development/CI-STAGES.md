@@ -173,6 +173,9 @@ base and progress in an **OEP review** PR comment. It applies this order:
    and App IDs and one unedited reply posted after the active command on the
    frozen Draft. It checks for ongoing work and other feedback and revalidates
    the refusal before publication and when recovering a published command.
+   Recovery can accept the authenticated Codex `running` state for that head
+   while its findings fields are still unset. Other provider evidence must
+   still match the fingerprint saved before publication.
 6. A genuine terminal Kody `timed_out` check or failed check titled
    `Code Review Failed` permits one final `@codex review` request with an
    `oep-codex-head` marker. Both Codex paths share the same single-request limit

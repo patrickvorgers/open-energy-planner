@@ -399,9 +399,11 @@ def require_recovery_feedback(state, comments, published):
     codex = codex_review_state(comments, state["head"])
     if (
         codex
-        and codex.get("status") == "in_progress"
-        and codex.get("has_any_findings", False) is False
-        and codex.get("has_unresolved_findings", False) is False
+        and codex.get("status") in ("in_progress", "running")
+        and all(
+            value is None or value is False
+            for value in (codex.get("has_any_findings"), codex.get("has_unresolved_findings"))
+        )
     ):
         progress = [
             row
