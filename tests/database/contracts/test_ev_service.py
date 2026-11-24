@@ -759,19 +759,20 @@ def test_consumer_api_preserves_saved_charging_membership_without_timezone(servi
     from aiohttp import web
     from aiohttp.test_utils import TestClient, TestServer
 
+    from open_energy_planner.appliances.cycles.service import ApplianceService
     from open_energy_planner.demand.consumer_api import register
+    from open_energy_planner.runtime.settings_reads import ApplicationStateLock
 
     async def scenario():
         """Read the consumer endpoint without invoking the timezone-dependent EV status document."""
         service.consumers.sync({"entities": [], "suggestions": {"consumers": []}})
         app = web.Application()
-        register(
-            app,
-            SimpleNamespace(consumers=service.consumers, forecast=None),
-            asyncio.Lock(),
-            service,
-            SimpleNamespace(state={"stores": [{"energy_entity": "sensor.boiler_energy"}]}),
-        )
+        demand = SimpleNamespace(consumers=service.consumers, forecast=None)
+        thermal = SimpleNamespace(state={"stores": [{"energy_entity": "sensor.boiler_energy"}]})
+        lock = ApplicationStateLock()
+        appliances = ApplianceService(service.documents, service.consumers)
+        lock.bind_settings(appliances, demand, service, thermal)
+        register(app, demand, lock, service, thermal)
         async with TestClient(TestServer(app)) as client:
             response = await client.get("/v1/consumers")
             assert response.status == 200
