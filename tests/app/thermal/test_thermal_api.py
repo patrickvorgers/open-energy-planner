@@ -9,7 +9,9 @@ import pytest
 from aiohttp import ClientSession, Fingerprint
 
 from open_energy_planner.app import create_app
+from open_energy_planner.appliances.thermal.applications import attribute_history
 from open_energy_planner.discovery import certificate, connection_app
+from open_energy_planner.history.importer import CumulativeHistory, EnergyEndpoint
 from open_energy_planner.pairing import PAIRING_KEY
 from tests.ha_contract.support.connection import server
 from tests.ha_contract.support.metadata import setup_metadata
@@ -103,6 +105,192 @@ def configuration():
             }
         ]
     }
+
+
+def test_shared_heat_source_keeps_one_weather_forecast_and_configured_boiler(tmp_path):
+    """Share one meter across room and water without changing the configured boiler or meter total."""
+
+    async def scenario():
+        """Exercise versioned configuration, observed targets and mode reports over authenticated HTTP."""
+        app = create_app(tmp_path, TOKEN, source="home_assistant")
+        metadata = catalogue()
+        metadata["areas"] = [
+            {"id": "living", "name": "Living room"},
+            {"id": "attic", "name": "Attic"},
+            {"id": "hall", "name": "Hall"},
+        ]
+        quatt, airco, attic = "sensor.shared_heat", "sensor.room_airco", "sensor.attic_airco"
+        thermostat = "climate.central"
+        for identity, area in (
+            (quatt, "hall"),
+            (airco, "living"),
+            (attic, "attic"),
+            (thermostat, "hall"),
+        ):
+            climate = identity == thermostat
+            metadata["entities"].append(
+                {
+                    "entity_id": identity,
+                    "name": identity,
+                    "area_id": area,
+                    "device_id": "",
+                    "unit": "" if climate else "kWh",
+                    "device_class": "" if climate else "energy",
+                    "state_class": "" if climate else "total_increasing",
+                }
+            )
+            if not climate:
+                metadata["suggestions"]["consumers"].append(
+                    {"entity_id": identity, "upstream": None}
+                )
+        room_id = "00000000-0000-4000-8000-000000000201"
+        attic_id = "00000000-0000-4000-8000-000000000202"
+        tank_id = "00000000-0000-4000-8000-000000000203"
+        physical = configuration()
+        applications = [
+            {
+                "id": room_id,
+                "kind": "space_heating",
+                "area_id": "living",
+                "name": "Saved room name",
+                "climate_entity": thermostat,
+                "maximum_preheat_c": 0.5,
+                "sources": [
+                    {"energy_entity": airco, "allow_scheduling": True},
+                    {"energy_entity": quatt, "allow_scheduling": False},
+                ],
+            },
+            {
+                "id": attic_id,
+                "kind": "space_heating",
+                "area_id": "attic",
+                "name": "Attic",
+                "climate_entity": None,
+                "maximum_preheat_c": None,
+                "sources": [{"energy_entity": attic, "allow_scheduling": False}],
+            },
+            {
+                "id": tank_id,
+                "kind": "hot_water",
+                "area_id": None,
+                "name": "Hot water",
+                "climate_entity": None,
+                "maximum_preheat_c": None,
+                "sources": [{"energy_entity": quatt, "allow_scheduling": False}],
+            },
+        ]
+        authorization = {"Authorization": "Bearer " + TOKEN}
+        async with server(app) as url, ClientSession(headers=authorization) as client:
+            async with client.post(url + "/v1/ha/catalogue", json=metadata) as response:
+                assert response.status == 200, await response.text()
+            async with client.get(url + "/v1/thermal") as response:
+                initial = await response.json()
+            body = {
+                "configuration": {**physical, "applications": applications},
+                "expected_version": initial["configuration_version"],
+            }
+            async with client.post(url + "/v1/thermal/configuration", json=body) as response:
+                assert response.status == 200, await response.text()
+                saved = await response.json()
+            assert saved["configuration"]["stores"] == physical["stores"]
+            assert saved["applications"][0]["name"] == "Living room"
+            assert set(saved["shared_sources"]) == {quatt}
+            async with client.get(url + "/v1/consumers?view=settings") as response:
+                consumers = await response.json()
+                selected = consumers["selected"]
+            assert selected == [
+                {"entity_id": attic, "weather_sensitive": True},
+                {"entity_id": "sensor.boiler_energy", "weather_sensitive": False},
+                {"entity_id": airco, "weather_sensitive": True},
+                {"entity_id": quatt, "weather_sensitive": True},
+            ]
+            assert consumers["thermal_meters"] == [attic, "sensor.boiler_energy", airco, quatt]
+            duplicate = deepcopy(body)
+            duplicate["expected_version"] = saved["configuration_version"]
+            duplicate["configuration"]["applications"][1]["area_id"] = "living"
+            async with client.post(url + "/v1/thermal/configuration", json=duplicate) as response:
+                assert response.status == 400
+                assert "only one space heating application" in (await response.text())
+            for target, reporting_age in ((20, timedelta(minutes=30)), (21.5, timedelta())):
+                now = datetime.now(UTC)
+                observed_at = (now - reporting_age).isoformat()
+                observation = {
+                    "configuration_version": saved["configuration_version"],
+                    "at": now.isoformat(),
+                    "readings": [],
+                    "climate": [
+                        {
+                            "id": room_id,
+                            "entity_id": thermostat,
+                            "temperature_c": 19.5,
+                            "target_c": target,
+                            "observed_at": observed_at,
+                        }
+                    ],
+                }
+                async with client.post(
+                    url + "/v1/thermal/observations", json=observation
+                ) as response:
+                    assert response.status == 200, await response.text()
+                    changed = await response.json()
+                assert changed["applications"][0]["preheat_limit_c"] == target + 0.5
+                assert changed["applications"][0]["actual"]["observed_at"] == observed_at
+                assert changed["applications"][0]["actual"]["captured_at"] == now.isoformat()
+                assert (
+                    changed["applications"][0]["planning_status"]
+                    == "Space heating scheduling is not available yet"
+                )
+                assert changed["applications"][1]["planning_status"] == "Forecast only"
+            async with client.post(
+                url + "/v1/thermal/mode", json={"meter": quatt, "application_id": tank_id}
+            ) as response:
+                assert response.status == 200, await response.text()
+                assert (await response.json())["source_modes"][quatt]["application_id"] == tank_id
+            async with client.post(
+                url + "/v1/thermal/mode", json={"meter": quatt, "application_id": attic_id}
+            ) as response:
+                assert response.status == 400
+            metadata["suggestions"]["consumers"] = [
+                source
+                for source in metadata["suggestions"]["consumers"]
+                if source["entity_id"] != attic
+            ]
+            async with client.post(url + "/v1/ha/catalogue", json=metadata) as response:
+                assert response.status == 200, await response.text()
+            detached = deepcopy(body)
+            detached["expected_version"] = saved["configuration_version"]
+            detached["configuration"]["applications"][1]["sources"] = []
+            async with client.post(url + "/v1/thermal/configuration", json=detached) as response:
+                assert response.status == 200, await response.text()
+            async with client.get(url + "/v1/consumers?view=settings") as response:
+                remaining = await response.json()
+            assert attic not in remaining["thermal_meters"]
+            assert attic not in {source["entity_id"] for source in remaining["selected"]}
+
+    asyncio.run(scenario())
+
+
+def test_shared_source_attribution_uses_only_complete_agreeing_mode_reports():
+    """Preserve cumulative kWh once, keeping disconnected or ambiguous hours unknown."""
+    start = datetime(2026, 10, 1, 12, tzinfo=UTC)
+    hour = timedelta(hours=1)
+    history = CumulativeHistory(
+        "sensor.heat",
+        tuple(
+            EnergyEndpoint(start + index * hour, value)
+            for index, value in enumerate((10, 12, 15, 19))
+        ),
+    )
+    reports = [
+        {
+            "observed_at": (start + hour + timedelta(minutes=minute)).isoformat(),
+            "application_id": "water",
+        }
+        for minute in range(0, 60, 4)
+    ]
+    reports.append({"observed_at": (start + 2 * hour).isoformat(), "application_id": "room"})
+    result = attribute_history(history, reports, {"room", "water"}, start, timedelta(minutes=5))
+    assert result == {"applications_kwh": {"room": 0, "water": 2}, "unknown_kwh": 7}
 
 
 def test_thermal_api_versioning_telemetry_and_peer_authority(tmp_path):

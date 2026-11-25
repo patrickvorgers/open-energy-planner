@@ -768,7 +768,7 @@ def test_consumer_api_preserves_saved_charging_membership_without_timezone(servi
         service.consumers.sync({"entities": [], "suggestions": {"consumers": []}})
         app = web.Application()
         demand = SimpleNamespace(consumers=service.consumers, forecast=None)
-        thermal = SimpleNamespace(state={"stores": [{"energy_entity": "sensor.boiler_energy"}]})
+        thermal = SimpleNamespace(meters=frozenset({"sensor.boiler_energy"}))
         lock = ApplicationStateLock()
         appliances = ApplianceService(service.documents, service.consumers)
         lock.bind_settings(appliances, demand, service, thermal)

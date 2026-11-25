@@ -192,3 +192,42 @@ own store. Existing configuration, source IDs and history remain intact. New
 simulated idle prehistory belongs only to the new boiler meter. Heater permission
 is cleared on restart. The live grid incorporates the boiler's measured
 electricity exactly once.
+
+## Space heating evidence and planning admission
+
+The space heating application currently attaches its meter to the existing
+weather-sensitive consumer forecast. That forecast contributes to household
+demand once per Energy meter, even when the source also heats domestic water.
+The current climate reading supplies the Home Assistant setpoint in Celsius.
+The configured margin bounds the maximum preheating setpoint. A new usable
+reading replaces the previous target. Missing or stale readings withdraw the
+effective limit.
+
+Active planning needs a validated room model before replacing any baseline or
+publishing a heating target. Fit a lumped heat balance to aligned room
+temperature, outdoor temperature and interval electrical energy. Use idle
+periods to identify passive heat loss and individually observed heating periods
+to estimate each source's effective temperature increase per electrical kWh.
+Solar gains, other heat sources and internal gains can confound the estimate.
+For a source with no thermal output measurement, the fitted coefficient reflects
+the joint effect of thermal mass and conversion efficiency. A separate COP
+requires independent thermal-energy evidence or a verified COP curve. An
+electrical rating alone supplies neither quantity.
+
+Test predictive error and comfort on withheld chronological periods, including
+cold days, and require usable evidence across the temperature range in which
+planning is allowed. Missing temperature or weather data, indistinguishable
+sources and unobserved hybrid operating modes keep the source in forecasting.
+For shared devices, attribute only meter intervals with fresh, consistent mode
+reports. Leave uncertain energy at the shared meter. The first active model
+must reserve that meter and source capacity across applications. Concurrent
+heating needs an independently validated model of how the shared capacity is
+split. The planner must include the eligible source's planned electrical intake
+exactly once and preserve its ordinary baseline when active work is withheld.
+
+Verify active planning with independent comfort and energy arithmetic, a change
+of live thermostat target during the horizon, withdrawn inputs, exclusive
+shared capacity, and a controller that ignores stale or replaced commands.
+Home Assistant consumes valid OEP virtual targets through user-owned
+automations. The simulated plan establishes the app contract. Device-specific
+comfort and protection remain the responsibility of the physical controls.

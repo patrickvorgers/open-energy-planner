@@ -4,7 +4,7 @@ import asyncio
 from copy import deepcopy
 from datetime import timedelta
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, call, patch
 
 import pytest
 
@@ -20,6 +20,7 @@ from custom_components.open_energy_planner.thermal_controls import (
     ThermalEnabled,
     ThermalHeating,
     ThermalMinimum,
+    ThermalOperatingMode,
     ThermalSensor,
 )
 from tests.custom_component.support.ev import available_ev
@@ -81,6 +82,79 @@ def report(hass, temperature=40, unit="°C", power=2, power_unit="kW"):
     hass.states.async_set(
         "sensor.boiler_power", power, {"device_class": "power", "unit_of_measurement": power_unit}
     )
+
+
+def test_climate_and_mode_share_normal_ha_virtual_control(tmp_path):
+    """Use HA climate state and a native select to report context without executing heating."""
+
+    async def scenario():
+        """Capture a live target and send only a documented observed mode to the application."""
+        hass = HomeAssistant(str(tmp_path))
+        try:
+            hass.states.async_set(
+                "climate.hall", "heat", {"current_temperature": 19, "temperature": 21}
+            )
+            now = dt_util.utcnow()
+            data = coordinator(hass, device(now))
+            meter = "sensor.heat_pump"
+            projection = receive(
+                {
+                    **data.thermal,
+                    "applications": [
+                        {"id": "room", "kind": "space_heating", "climate_entity": "climate.hall"}
+                    ],
+                    "shared_sources": {
+                        meter: {
+                            "meter": meter,
+                            "name": "Heat pump",
+                            "options": [
+                                {"id": "room", "name": "Living room"},
+                                {"id": "tank", "name": "Hot water"},
+                            ],
+                        }
+                    },
+                }
+            )
+            data.thermal = projection
+            readings = capture(data, projection, now)["climate"]
+            assert [(row["temperature_c"], row["target_c"]) for row in readings] == [(19, 21)]
+            mode = ThermalOperatingMode(data, projection["shared_sources"][0], "operating_mode")
+            assert mode.options == ["Unknown", "Living room", "Hot water"]
+            assert mode.current_option == "Unknown"
+            projection["shared_sources"][0]["mode"] = {
+                "application_id": "tank",
+                "observed_at": (now - timedelta(minutes=6)).isoformat(),
+            }
+            assert mode.current_option == "Unknown"
+            await mode.async_select_option("Hot water")
+            projection["shared_sources"][0]["mode"]["observed_at"] = now.isoformat()
+            assert mode.current_option == "Hot water"
+            await mode.async_select_option("Hot water")
+            mode_report = call(
+                "POST", "/v1/thermal/mode", {"meter": meter, "application_id": "tank"}
+            )
+            assert data.client.request.await_args_list == [mode_report, mode_report]
+            assert data.sync.await_count == 2
+
+            projection["shared_sources"][0]["options"] = {
+                "room": "Unknown",
+                "tank": "Unknown (room)",
+                "pool": "Unknown (room) 2",
+            }
+            assert mode.options == [
+                "Unknown",
+                "Unknown (room) 3",
+                "Unknown (room)",
+                "Unknown (room) 2",
+            ]
+            await mode.async_select_option("Unknown (room) 3")
+            data.client.request.assert_awaited_with(
+                "POST", "/v1/thermal/mode", {"meter": meter, "application_id": "room"}
+            )
+        finally:
+            await hass.async_stop()
+
+    asyncio.run(scenario())
 
 
 @pytest.mark.parametrize("temperature,unit", [(40, "°C"), (104, "°F")])

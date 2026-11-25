@@ -818,6 +818,20 @@ configuration, declared draw, AC intake, temperature, bounded unserved draw
 (`unmet_draw_kwh`) and comfort deficit. The existing
 namespace/name key serves point reads. No new table, column or index is needed.
 Backend transfer includes all of these documents and plan archives.
+The optional `applications` list in the same thermal configuration contains UUID,
+kind, display name, HA area ID, an optional climate entity, preheating margin in
+degrees Celsius and source links. Each link holds the Energy meter ID and
+scheduling permission. Older store-only documents remain valid. Forecast
+membership for all linked meters and configuration archives are written in
+the existing shared document transaction.
+`thermal-source-modes.json` uses the same namespace. It retains bounded,
+timestamped mode reports by Energy meter and application UUID for electricity
+attribution. Retention is at most 30 days and 4096 reports per meter. At capacity,
+attribution starts at the first full hour at or after the oldest retained timestamp
+when that shortens the window. Removing sources or restarting does not restore an
+old report as current. Current climate readings and thermostat targets are transient.
+Their integration capture time determines freshness. The original Home Assistant
+report timestamp remains available as provenance.
 Thermal work also retains `state_at`, the model initialization time, and
 `initially_heating`, its measured-running admission classification. Original HA
 report timestamps remain in `thermal_evidence`. Each thermal reading also retains

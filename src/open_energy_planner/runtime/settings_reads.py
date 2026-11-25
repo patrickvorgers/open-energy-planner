@@ -51,7 +51,7 @@ class ApplicationStateLock(asyncio.Lock):
             appliances.read_view(),
             demand.consumers.read_view(),
             tuple(point["energy_entity"] for point in ev.state["points"]),
-            tuple(store["energy_entity"] for store in thermal.state["stores"]),
+            tuple(sorted(thermal.meters)),
             bool(demand.forecast and demand.forecast.model == COMPOSITE_MODEL_ID),
         )
 

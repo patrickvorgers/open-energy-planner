@@ -46,6 +46,7 @@ def failure_route(kind, reject_operation, *, project_document=None):
         configure=reject_operation,
         document=project_document,
         state={"points": [], "stores": []},
+        meters=frozenset(),
         consumers=SimpleNamespace(selected=[]),
     )
     service.ev = service

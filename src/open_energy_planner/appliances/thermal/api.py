@@ -11,6 +11,17 @@ from open_energy_planner.appliances.sources import (
     SOURCE_OWNERSHIP_UNAVAILABLE,
     validate_new_assignments,
 )
+from open_energy_planner.appliances.thermal.applications import (
+    DUPLICATE_AREA,
+    INVALID_APPLICATION,
+    MISSING_UPSTREAM,
+    OVERLAPPING_METER,
+    THERMOSTAT_REQUIRED,
+    UNKNOWN_AREA,
+    UNKNOWN_CLIMATE,
+    UNKNOWN_METER,
+    UNKNOWN_MODE,
+)
 from open_energy_planner.runtime.diagnostics.logging import request_error_message
 from open_energy_planner.storage.writes import complete_write
 
@@ -18,6 +29,15 @@ from open_energy_planner.storage.writes import complete_write
 PUBLIC_VALIDATION_MESSAGES = (
     SOURCE_ALREADY_ASSIGNED,
     SOURCE_OWNERSHIP_UNAVAILABLE,
+    DUPLICATE_AREA,
+    INVALID_APPLICATION,
+    MISSING_UPSTREAM,
+    OVERLAPPING_METER,
+    THERMOSTAT_REQUIRED,
+    UNKNOWN_AREA,
+    UNKNOWN_CLIMATE,
+    UNKNOWN_METER,
+    UNKNOWN_MODE,
     "A thermal meter cannot also control an EV or appliance cycle",
     "A thermal operation must be an object",
     "Continuing heat requires a current state and immediate dispatch boundary",
@@ -67,11 +87,16 @@ def register(app, service, catalogue, repository, live, lock):
     async def state(_request):
         """Return bounded source selectors without requiring a browser to know entity IDs."""
         async with lock:
+            projection = document()
             return web.json_response(
                 {
-                    **document(),
+                    **projection,
                     "catalogue": catalogue.value,
                     "energy_consumers": list(service.consumers.options),
+                    "occupied_meters": sorted(service.occupied_meters),
+                    "mode_attribution": service.mode_attribution(
+                        projection["shared_sources"], datetime.now(UTC)
+                    ),
                 }
             )
 
@@ -89,8 +114,14 @@ def register(app, service, catalogue, repository, live, lock):
                 }:
                     if body["expected_version"] != service.configuration_version:
                         raise ValueError("Thermal settings changed. Refresh before saving")
+                    configuration = body["configuration"]
+                    if "applications" not in configuration and "applications" in service.state:
+                        configuration = {
+                            **configuration,
+                            "applications": service.state["applications"],
+                        }
                     validate_new_assignments(
-                        body["configuration"]["stores"],
+                        configuration["stores"],
                         service.state["stores"],
                         service.consumers.selected,
                         service.ev.state["points"],
@@ -98,7 +129,7 @@ def register(app, service, catalogue, repository, live, lock):
                     function, arguments = (
                         service.configure,
                         (
-                            body["configuration"],
+                            configuration,
                             catalogue.choices.catalogue(
                                 "thermal", catalogue.value, datetime.now(UTC)
                             ),
@@ -106,6 +137,16 @@ def register(app, service, catalogue, repository, live, lock):
                     )
                 elif operation == "observations":
                     function, arguments = service.receive, (body, datetime.now(UTC))
+                elif operation == "mode" and set(body) == {"meter", "application_id"}:
+                    cancellation = await complete_write(
+                        service.report_mode,
+                        body["meter"],
+                        body["application_id"],
+                        datetime.now(UTC),
+                    )
+                    if cancellation:
+                        raise cancellation
+                    return web.json_response(document())
                 elif operation == "intent" and set(body) == {"device_id", "field", "value"}:
                     configuration = deepcopy(service.state)
                     row = next(
