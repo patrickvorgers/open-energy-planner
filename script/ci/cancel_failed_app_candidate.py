@@ -18,7 +18,10 @@ ACTIVE = {"queued", "requested", "pending", "waiting", "in_progress"}
 
 def _matches_pr_workflow(run, repository_id, path):
     """Restrict a run to the named PR workflow and reject fork sources."""
-    if (run.get("event"), run.get("path")) != ("pull_request", path):
+    run_path = run.get("path")
+    if run.get("event") != "pull_request" or not isinstance(run_path, str):
+        return False
+    if run_path.partition("@")[0] != path:
         return False
     return all(
         (run.get(field) or {}).get("id") == repository_id

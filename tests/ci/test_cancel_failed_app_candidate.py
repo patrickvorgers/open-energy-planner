@@ -101,6 +101,19 @@ def test_failed_app_suite_stops_only_the_overlapping_checks_candidate():
     assert actions.cancelled == [(REPO, 70)]
 
 
+def test_workflow_path_suffix_keeps_exact_file_matching():
+    """Accept GitHub's ref-qualified paths while ignoring another workflow at the same ref."""
+    actions = Actions()
+    suffix = "@refs/pull/220/merge"
+    for record in (actions.measure, actions.event["workflow_run"], actions.candidate):
+        record["path"] += suffix
+    unrelated = run(88, "quick-checks")
+    unrelated["path"] += suffix
+    actions.inventory = [unrelated, deepcopy(actions.candidate)]
+    assert cancel_failed_app_candidates(actions.event, actions) == (70,)
+    assert actions.cancelled == [(REPO, 70)]
+
+
 @pytest.mark.parametrize(
     ("target", "field", "value"),
     [
@@ -146,6 +159,7 @@ def test_a_main_or_fork_measurement_event_never_lists_candidates():
     ("field", "value"),
     [
         ("path", ".github/workflows/checks.yaml"),
+        ("path", None),
         ("repository", {"id": 17}),
         ("head_repository", None),
         ("pull_requests", None),
