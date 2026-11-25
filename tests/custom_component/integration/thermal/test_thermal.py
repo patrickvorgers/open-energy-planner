@@ -756,6 +756,7 @@ def test_optional_thermal_projection_fault_keeps_real_mixed_plan_and_guards_only
                 "config_revision": snapshot["config_revision"],
                 "enabled": True,
                 "plan_id": snapshot["plan"]["plan_id"],
+                "acknowledged_plan": snapshot["plan"]["plan_id"],
                 "measurements_required": False,
             }
 

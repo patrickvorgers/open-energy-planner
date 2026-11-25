@@ -131,12 +131,17 @@ def test_pause_revokes_inflight_projection_and_status_before_response(tmp_path, 
                 async with asyncio.timeout(1):
                     async with client.get("/v1/ha/plan-status", headers=headers) as response:
                         status = await response.json()
-                        assert status["plan_id"] is None and status["enabled"] is False
+                        assert status["plan_id"] is None and status["enabled"] is True
+                        assert status["command_suspended"] is True
                     assert not pausing.done()
                     finish_save.set()
                     pause_response = await pausing
                     assert pause_response.status == 200
                     pause_response.release()
+                    async with client.get("/v1/ha/plan-status", headers=headers) as response:
+                        status = await response.json()
+                        assert status["enabled"] is False and status["plan_id"] is None
+                        assert "command_suspended" not in status
                     async with client.post(
                         "/v1/ack", json={"plan_id": plan_id}, headers=headers
                     ) as response:

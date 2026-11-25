@@ -1060,6 +1060,10 @@ def test_unchanged_plan_replacement_does_not_repeat_command_or_power_state_event
             coordinator = entry.runtime_data
             coordinator.poll_cancel()
             coordinator.poll_cancel = None
+            coordinator.service_cancel()
+            coordinator.service_cancel = None
+            async with coordinator.services_lock:
+                pass
             request = coordinator.client.request
             exchanges = []
 
@@ -1107,6 +1111,7 @@ def test_unchanged_plan_replacement_does_not_repeat_command_or_power_state_event
                 ("GET", "/v1/ha/plan-status"),
                 ("GET", "/v1/ha/plan"),
                 ("POST", "/v1/ack"),
+                ("GET", "/v1/ha/plan-status"),
             ]
             await hass.async_block_till_done()
             assert entry.runtime_data.schedule.plan.plan_id != old

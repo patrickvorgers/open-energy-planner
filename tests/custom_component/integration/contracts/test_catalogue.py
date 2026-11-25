@@ -172,6 +172,7 @@ def test_large_discovery_transfers_tail_vehicle_in_bounded_complete_snapshot(mon
 
 def test_build_change_during_optional_catalogue_exchange_is_not_suppressed(monkeypatch):
     """A build mismatch after a matching snapshot still reaches the HA action-required policy."""
+    from custom_components.open_energy_planner.client import ReleaseMismatchError
     from open_energy_planner import build_info
 
     async def scenario():
@@ -179,6 +180,23 @@ def test_build_change_during_optional_catalogue_exchange_is_not_suppressed(monke
         async with running_chain(live=True) as (_hass, entry, _url, _root):
             coordinator = entry.runtime_data
             snapshot = coordinator.client.service_requests
+            coordinator.poll_cancel()
+            coordinator.poll_cancel = None
+            coordinator.service_cancel()
+            coordinator.service_cancel = None
+            async with coordinator.services_lock:
+                pass
+            request = coordinator.client.request
+            catalogue_rejections = []
+
+            async def inspect_rejection(method, path, body=None):
+                """Record the actual build rejection from the catalogue endpoint."""
+                try:
+                    return await request(method, path, body)
+                except ReleaseMismatchError as error:
+                    if path == "/v1/ha/catalogue":
+                        catalogue_rejections.append(error.status)
+                    raise
 
             async def snapshot_then_change_build():
                 """Return a matching snapshot, then emulate a different app build before catalogue refresh."""
@@ -189,8 +207,10 @@ def test_build_change_during_optional_catalogue_exchange_is_not_suppressed(monke
                 return data
 
             monkeypatch.setattr(coordinator.client, "service_requests", snapshot_then_change_build)
+            monkeypatch.setattr(coordinator.client, "request", inspect_rejection)
             coordinator.catalogue_sent = None
-            await coordinator.sync()
+            await coordinator.sync_services()
+            assert catalogue_rejections == [409]
             assert coordinator.issue == "release_mismatch"
 
     asyncio.run(scenario())

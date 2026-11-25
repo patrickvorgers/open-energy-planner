@@ -187,6 +187,187 @@ def test_current_capture_does_not_hold_new_plan_reconciliation(monkeypatch):
     asyncio.run(scenario())
 
 
+def test_failed_app_pause_withdraws_then_restores_existing_commands(monkeypatch):
+    """A live app pause holds command authority without writing uncommitted intent to HA."""
+    from unittest.mock import AsyncMock
+
+    from aiohttp import ClientResponseError
+
+    from open_energy_planner.storage.adapters.lifecycle.sqlalchemy import SqlPlanRepository
+
+    async def scenario():
+        """Hold a real archive transaction, force rollback and then commit an independent pause."""
+        async with running_chain() as (hass, entry, _url, _root):
+            coordinator = entry.runtime_data
+            coordinator.poll_cancel()
+            coordinator.poll_cancel = None
+            old = coordinator.schedule.plan
+            generation = coordinator.schedule.invalidated_generation
+            save = AsyncMock(wraps=coordinator.save)
+            monkeypatch.setattr(coordinator, "save", save)
+            entered, release = asyncio.Event(), threading.Event()
+            loop = asyncio.get_running_loop()
+            write_plan = SqlPlanRepository._write_plan
+
+            def fail_pause(repository, connection, plan):
+                """Fail inside the real save so SQL and in-memory state both roll back."""
+                if repository.state["last_control_id"] == "failed-app-pause":
+                    loop.call_soon_threadsafe(entered.set)
+                    assert release.wait(5)
+                    raise OSError("Synthetic failed app pause")
+                return write_plan(repository, connection, plan)
+
+            monkeypatch.setattr(SqlPlanRepository, "_write_plan", fail_pause)
+            pause = asyncio.create_task(coordinator.client.enabled(False, "failed-app-pause"))
+            try:
+                await asyncio.wait_for(entered.wait(), 2)
+                assert await coordinator.sync_plan()
+                assert coordinator.schedule.enabled
+                assert coordinator.schedule.suspended
+                assert find(hass, "battery_power_target").state == "unavailable"
+                save.assert_not_awaited()
+            finally:
+                release.set()
+                with pytest.raises(ClientResponseError) as failure:
+                    await pause
+                assert failure.value.status == 500
+            assert await coordinator.sync_plan()
+            assert coordinator.schedule.enabled and not coordinator.schedule.suspended
+            assert coordinator.schedule.plan is old
+            assert coordinator.schedule.invalidated_generation == generation
+            assert coordinator.pending_enabled is None
+            assert find(hass, "battery_power_target").state == "-1000"
+            save.assert_not_awaited()
+
+            await coordinator.client.enabled(False, "committed-app-pause")
+            assert await coordinator.sync_plan()
+            assert not coordinator.schedule.enabled
+            assert coordinator.schedule.plan is None
+            assert coordinator.schedule.invalidated_generation == old.generated_at
+            assert find(hass, "battery_power_target").state == "unavailable"
+            save.assert_awaited_once()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("result", ["lost-reply", "pause"])
+def test_candidate_requires_current_authority_after_acknowledgement(monkeypatch, result):
+    """Recover a recorded acknowledgement or reject commands withdrawn while its reply was in flight."""
+    from unittest.mock import AsyncMock
+
+    async def scenario():
+        """Use the real app publication, ACK and pause with a gate after the ACK commits."""
+        async with running_chain() as (hass, entry, _url, _root):
+            coordinator = entry.runtime_data
+            coordinator.poll_cancel()
+            coordinator.poll_cancel = None
+            previous = coordinator.schedule.plan
+            await coordinator.client.enabled(True, "replace-plan-for-receipt")
+            async with asyncio.timeout(3):
+                while (await coordinator.client.plan_status())["plan_id"] in (
+                    None,
+                    previous.plan_id,
+                ):
+                    await asyncio.sleep(0.01)
+            candidate_id = (await coordinator.client.plan_status())["plan_id"]
+            acknowledge = coordinator.client.acknowledge
+            entered, release = asyncio.Event(), asyncio.Event()
+
+            async def gated_acknowledgement(plan_id):
+                """Preserve actual ACK persistence while delaying or losing delivery."""
+                receipt = await acknowledge(plan_id)
+                entered.set()
+                await release.wait()
+                if result == "lost-reply":
+                    raise TimeoutError
+                return receipt
+
+            gated = AsyncMock(side_effect=gated_acknowledgement)
+            monkeypatch.setattr(coordinator.client, "acknowledge", gated)
+            loading = asyncio.create_task(coordinator.sync_plan())
+            try:
+                await asyncio.wait_for(entered.wait(), 2)
+                status = await coordinator.client.plan_status()
+                assert status["acknowledged_plan"] == candidate_id
+                assert coordinator.schedule.plan is previous
+                if result == "pause":
+                    await coordinator.client.enabled(False, "pause-after-acknowledgement")
+            finally:
+                release.set()
+                assert not await loading
+            if result == "pause":
+                assert coordinator.schedule.plan is None
+                assert find(hass, "battery_power_target").state == "unavailable"
+            else:
+                assert coordinator.schedule.plan is previous
+                assert await coordinator.sync_plan()
+                assert coordinator.schedule.plan.plan_id == candidate_id
+                assert coordinator.projection.command is not None
+            gated.assert_awaited_once_with(candidate_id)
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("result", ["closed", "superseded", "mismatch"])
+def test_late_observation_result_respects_coordinator_and_identity_ownership(monkeypatch, result):
+    """Discard closed or obsolete transfers while revoking commands on a genuine current mismatch."""
+    from types import SimpleNamespace
+    from unittest.mock import Mock
+
+    from custom_components.open_energy_planner.client import (
+        InstallationMismatchError,
+        SupersededInstallationExchangeError,
+    )
+
+    async def scenario():
+        """Gate only the observation reply and inspect the real coordinator's command state."""
+        async with running_chain() as (_hass, entry, _url, _root):
+            coordinator = entry.runtime_data
+            coordinator.poll_cancel()
+            coordinator.poll_cancel = None
+            original = coordinator.schedule.plan
+            revision = coordinator.schedule.config_revision
+            coordinator.observation_bridge = SimpleNamespace(
+                revision=revision, capture=lambda *_args, **_kwargs: (True, {})
+            )
+            entered, release = asyncio.Event(), asyncio.Event()
+            notify = Mock()
+            monkeypatch.setattr(coordinator, "_update_snapshot_notification", notify)
+
+            async def delayed(_report):
+                """Simulate each late completion after the observation lane begins."""
+                entered.set()
+                await release.wait()
+                if result == "superseded":
+                    raise SupersededInstallationExchangeError("Obsolete connection epoch")
+                if result == "mismatch":
+                    raise InstallationMismatchError("Current connection identity changed")
+                return {"accepted": True, "config_revision": revision, "observations": {}}
+
+            monkeypatch.setattr(coordinator.client, "observations", delayed)
+            pending = asyncio.create_task(coordinator.sync_observations())
+            try:
+                await asyncio.wait_for(entered.wait(), 2)
+                if result == "closed":
+                    coordinator.closed = True
+            finally:
+                release.set()
+                try:
+                    assert not await pending
+                finally:
+                    coordinator.closed = False
+            notify.assert_not_called()
+            assert coordinator.observations is None
+            if result == "mismatch":
+                assert coordinator.schedule.plan is None
+                assert coordinator.issue == "installation_identity_changed"
+            else:
+                assert coordinator.schedule.plan is original
+                assert coordinator.issue is None
+
+    asyncio.run(scenario())
+
+
 def test_invalid_receipt_retains_pending_intent_until_a_valid_retry(monkeypatch):
     """A malformed real HTTP receipt cannot confirm local intent. The same intent succeeds on retry."""
 

@@ -22,6 +22,7 @@ def command_mode(repository, live):
     if (
         plan is not None
         and state["enabled"]
+        and not state["command_suspended"]
         and plan["config_revision"] == revision
         and datetime.fromisoformat(plan["valid_until"]) > datetime.now(UTC)
     ):
@@ -40,6 +41,7 @@ def register(app, repository, planner, live, lock, command_context):
                 "release": RELEASE,
                 "instance_id": state["instance_id"],
                 "enabled": state["enabled"],
+                **({"command_suspended": True} if state["command_suspended"] else {}),
                 "config_revision": revision,
                 "measurements_required": bool(live and live.configuration),
                 "plan_id": plan["plan_id"] if plan is not None else None,

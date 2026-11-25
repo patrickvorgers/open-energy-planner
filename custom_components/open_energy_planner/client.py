@@ -42,6 +42,10 @@ class InstallationMismatchError(ValueError):
     """The connected app is not the installation recorded by this HA config entry."""
 
 
+class SupersededInstallationExchangeError(ValueError):
+    """A response arrived after the confirmed installation epoch changed."""
+
+
 class LocalClient:
     """Exchange bounded JSON with the local app using the existing HA HTTP session."""
 
@@ -77,6 +81,8 @@ class LocalClient:
             InstallationMismatchError: If plan status identifies a different
                 installation than the config entry. Further exchanges are blocked
                 until fresh plan status identifies the original installation again.
+            SupersededInstallationExchangeError: If a newer exchange already
+                changed installation authority. Discard the obsolete response.
         """
         identity_status = (method, path) == ("GET", "/v1/ha/plan-status")
         if self.instance_mismatch and not identity_status:
@@ -89,9 +95,33 @@ class LocalClient:
             await self.plan_status()
         operation = (method, path.partition("?")[0])
         started_at = monotonic()
+        generation = self.instance_generation
         try:
-            result = await self._exchange(method, path, body, identity_status)
+            result = await self._exchange(method, path, body)
+            if generation != self.instance_generation:
+                raise SupersededInstallationExchangeError("Installation exchange was superseded")
+            if self.expected_instance_id is not None:
+                if (identity_status or "instance_id" in result) and result.get(
+                    "instance_id"
+                ) != self.expected_instance_id:
+                    self.instance_generation += 1
+                    self.instance_mismatch = True
+                    self.instance_confirmed = False
+                    raise InstallationMismatchError("App installation identity changed")
+                if identity_status:
+                    if self.instance_mismatch:
+                        self.instance_generation += 1
+                    self.instance_mismatch = False
+                    self.instance_confirmed = True
+        except SupersededInstallationExchangeError:
+            raise
         except (ClientError, TimeoutError, ValueError, TypeError, KeyError) as error:
+            if generation != self.instance_generation and not isinstance(
+                error, InstallationMismatchError
+            ):
+                raise SupersededInstallationExchangeError(
+                    "Installation exchange was superseded"
+                ) from None
             failure = type(error).__name__
             if (
                 isinstance(error, (ClientResponseError, _HTTPRejection))
@@ -118,9 +148,8 @@ class LocalClient:
             )
         return result
 
-    async def _exchange(self, method, path, body, identity_status):
-        """Perform one HTTP exchange and validate the response and installation identity."""
-        generation = self.instance_generation
+    async def _exchange(self, method, path, body):
+        """Perform one HTTP exchange and validate the bounded response and release."""
         async with self.session.request(
             method,
             self.url + path,
@@ -176,18 +205,6 @@ class LocalClient:
             result = json.loads(data)
             if not isinstance(result, dict):
                 raise ValueError("Invalid app response")  # noqa: TRY004 - Preserve the existing ValueError validation contract.
-            if self.expected_instance_id is not None:
-                if (identity_status or "instance_id" in result) and result.get(
-                    "instance_id"
-                ) != self.expected_instance_id:
-                    self.instance_generation += 1
-                    self.instance_mismatch = True
-                    self.instance_confirmed = False
-                if generation != self.instance_generation:
-                    raise InstallationMismatchError("App installation identity changed")
-                if identity_status:
-                    self.instance_mismatch = False
-                    self.instance_confirmed = True
             return result
 
     async def plan_status(self):

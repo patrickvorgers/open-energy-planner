@@ -465,12 +465,13 @@ class SqlPlanRepository:
         Readers must not mutate the borrowed plan.
         """
         committed = self._committed
+        current = self.state
+        plan_retained = not self.pending_invalidation and current["plan"] is not None
         return {
             "instance_id": committed["instance_id"],
-            "enabled": committed["enabled"] and self.state["enabled"],
-            "plan": committed["plan"]
-            if not self.pending_invalidation and self.state["plan"] is not None
-            else None,
+            "enabled": committed["enabled"],
+            "command_suspended": plan_retained and committed["enabled"] and not current["enabled"],
+            "plan": committed["plan"] if plan_retained else None,
             "acknowledged_plan": committed["acknowledged_plan"],
         }
 

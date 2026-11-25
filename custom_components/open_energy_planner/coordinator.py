@@ -20,7 +20,12 @@ from homeassistant.helpers.storage import Store
 from homeassistant.util import dt as dt_util
 
 from .catalogue_discovery import CatalogueDiscovery
-from .client import AuthenticationError, InstallationMismatchError, ReleaseMismatchError
+from .client import (
+    AuthenticationError,
+    InstallationMismatchError,
+    ReleaseMismatchError,
+    SupersededInstallationExchangeError,
+)
 from .const import DOMAIN, RELEASE, projection_id
 from .history import HistoryBridge
 from .market_prices import MarketPriceBridge
@@ -398,35 +403,11 @@ class PlanCoordinator:
                 status = await self.client.plan_status()
                 if not self._same_intent(generation):
                     return False
-                if status.get("release") != RELEASE:
-                    raise ReleaseMismatchError("Plan status release mismatch")
-                enabled = status.get("enabled")
-                if type(enabled) is not bool:
-                    raise ValueError("Invalid plan enable state")
-                revision = identifier(status.get("config_revision"))
-                measurements_required = status.get("measurements_required")
-                if type(measurements_required) is not bool:
-                    raise ValueError("Invalid measurement requirement")
-                if revision != self.schedule.config_revision:
-                    self.schedule.invalidate()
-                    self.schedule.config_revision = revision
-                    self.refresh()
-                self.planning_status = status.get("planning")
-                self._clear_plan_connection_issue()
-                if not enabled and self.schedule.enabled:
-                    self.schedule.pause(dt_util.utcnow())
-                    self.schedule.invalidate()
-                    self.refresh()
-                    await self.save()
+                enabled, revision, measurements_required, plan_id = await self._apply_plan_status(
+                    status
+                )
+                if status.get("command_suspended") is True:
                     return True
-                elif enabled and not self.schedule.enabled:
-                    self.pending_enabled = False
-                plan_id = status.get("plan_id")
-                if plan_id is None:
-                    self.schedule.invalidate()
-                    self.refresh()
-                else:
-                    identifier(plan_id)
                 try:
                     if measurements_required and (
                         self.observation_bridge is None
@@ -462,6 +443,7 @@ class PlanCoordinator:
                         if measurements_required and not self._capture_required_sources():
                             self.revoke_observation_authority()
                             return False
+                        self.schedule.suspended = False
                         return self.schedule.plan is not None
                     reply = await self.client.plan(plan_id)
                     if (
@@ -481,16 +463,27 @@ class PlanCoordinator:
                         and candidate.generated_at <= self.schedule.resume_after
                     ):
                         return False
-                    await self.client.acknowledge(plan_id)
+                    if status.get("acknowledged_plan") != plan_id:
+                        await self.client.acknowledge(plan_id)
+                    if not self._same_intent(generation):
+                        return False
+                    latest = await self.client.plan_status()
                     if (
                         not self._same_intent(generation)
                         or observation_generation != self.observation_generation
+                    ):
+                        return False
+                    authorization = await self._apply_plan_status(latest)
+                    if (
+                        authorization != (True, revision, measurements_required, plan_id)
+                        or latest.get("acknowledged_plan") != plan_id
                     ):
                         return False
                     if measurements_required and not self._capture_required_sources():
                         self.revoke_observation_authority()
                         return False
                     self.schedule.install_candidate(candidate, plan, dt_util.utcnow())
+                    self.schedule.suspended = False
                 except RevokedPlan:
                     return False
                 except ClientResponseError as error:
@@ -499,6 +492,8 @@ class PlanCoordinator:
                     self.schedule.invalidate()
                     return False
                 return True
+            except SupersededInstallationExchangeError:
+                return False
             except (
                 InstallationMismatchError,
                 ReleaseMismatchError,
@@ -517,6 +512,45 @@ class PlanCoordinator:
                 self.refresh()
             return False
 
+    async def _apply_plan_status(self, status):
+        """Apply durable enable intent and fail closed independently of publication acceptance."""
+        if status.get("release") != RELEASE:
+            raise ReleaseMismatchError("Plan status release mismatch")
+        enabled = status.get("enabled")
+        if type(enabled) is not bool:
+            raise ValueError("Invalid plan enable state")
+        revision = identifier(status.get("config_revision"))
+        measurements_required = status.get("measurements_required")
+        if type(measurements_required) is not bool:
+            raise ValueError("Invalid measurement requirement")
+        plan_id = status.get("plan_id")
+        if plan_id is not None:
+            identifier(plan_id)
+        suspended = status.get("command_suspended", False)
+        if type(suspended) is not bool or suspended and (not enabled or plan_id is not None):
+            raise ValueError("Invalid temporary command suspension")
+
+        if revision != self.schedule.config_revision:
+            self.schedule.invalidate()
+            self.schedule.config_revision = revision
+            self.refresh()
+        self.planning_status = status.get("planning")
+        self._clear_plan_connection_issue()
+        if not enabled and self.schedule.enabled:
+            self.schedule.pause(dt_util.utcnow())
+            self.schedule.invalidate()
+            self.refresh()
+            await self.save()
+        elif enabled and not self.schedule.enabled:
+            self.pending_enabled = False
+        if suspended:
+            self.schedule.suspended = True
+            self.refresh()
+        elif plan_id is None:
+            self.schedule.invalidate()
+            self.refresh()
+        return enabled, revision, measurements_required, plan_id
+
     def _same_intent(self, generation):
         """Reject observations from a request that outlived a newer local action."""
         return not self.closed and generation == (
@@ -526,6 +560,8 @@ class PlanCoordinator:
 
     def _connection_failure(self, error):
         """Apply existing identity, authentication and paired-build recovery behavior."""
+        if self.closed:
+            return
         if isinstance(error, InstallationMismatchError):
             self.revoke_observation_authority()
             self.pending_enabled = None
@@ -645,7 +681,7 @@ class PlanCoordinator:
                 self.revoke_observation_authority()
             try:
                 receipt = await self.client.observations(report)
-                if bridge is not self.observation_bridge:
+                if self.closed or bridge is not self.observation_bridge:
                     return False
                 if (
                     receipt.get("accepted") is not True
@@ -655,12 +691,17 @@ class PlanCoordinator:
                     return False
                 self.observations = receipt.get("observations")
                 self._update_snapshot_notification(self.service_diagnostics)
-            except InstallationMismatchError:
-                self.schedule.invalidate()
-                self.refresh()
+            except SupersededInstallationExchangeError:
+                return False
+            except InstallationMismatchError as error:
+                self._connection_failure(error)
                 return False
             except ClientResponseError as error:
-                if error.status == HTTPStatus.CONFLICT and bridge is self.observation_bridge:
+                if (
+                    not self.closed
+                    and error.status == HTTPStatus.CONFLICT
+                    and bridge is self.observation_bridge
+                ):
                     self.revoke_observation_authority()
                 return False
             except (ClientError, TimeoutError, ValueError, TypeError, KeyError):

@@ -512,6 +512,7 @@ class Schedule:
         self.max_age_seconds = max_age_seconds
         self.plan = None
         self.document = None
+        self.suspended = False
         self.invalidated_generation = None
         self.enabled = True
         self.resume_after = None
@@ -568,6 +569,7 @@ class Schedule:
         ):
             self.invalidated_generation = self.plan.generated_at
         self.plan = self.document = None
+        self.suspended = False
 
     def pause(self, now):
         """Disable projection immediately and record the boundary for a later explicit resume."""
@@ -585,7 +587,7 @@ class Schedule:
             return Projection("paused", None)
         if self.resume_after and (not self.plan or self.plan.generated_at <= self.resume_after):
             return Projection("waiting_for_new_plan", None)
-        if not self.plan:
+        if self.suspended or not self.plan:
             return Projection("not_ready", None)
         if now >= self.plan.valid_until:
             return Projection("expired", None)
@@ -598,7 +600,7 @@ class Schedule:
 
     def next_boundary(self, now):
         """Return the next step/freshness/validity boundary, or None without an enabled plan."""
-        if not self.plan or not self.enabled:
+        if not self.plan or not self.enabled or self.suspended:
             return None
         from datetime import timedelta
 

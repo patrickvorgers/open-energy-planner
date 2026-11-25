@@ -1345,9 +1345,9 @@ def test_optional_history_wait_cannot_override_newer_resume_intent(
             monkeypatch.setattr(getattr(coordinator, bridge_attribute), "capture", capture)
             task = asyncio.create_task(coordinator.sync())
             await asyncio.wait_for(started.wait(), 5)
-            accepted = Mock(wraps=coordinator.schedule.accept)
+            installed = Mock(wraps=coordinator.schedule.install_candidate)
             acknowledged = AsyncMock(wraps=coordinator.client.acknowledge)
-            monkeypatch.setattr(coordinator.schedule, "accept", accepted)
+            monkeypatch.setattr(coordinator.schedule, "install_candidate", installed)
             monkeypatch.setattr(coordinator.client, "acknowledge", acknowledged)
             requested = dt_util.utcnow()
             coordinator.schedule.resume(requested)
@@ -1356,7 +1356,7 @@ def test_optional_history_wait_cannot_override_newer_resume_intent(
             await task
             assert coordinator.schedule.resume_after == requested
             assert coordinator.pending_enabled is True
-            accepted.assert_not_called()
+            installed.assert_not_called()
             acknowledged.assert_not_awaited()
 
     asyncio.run(scenario())
