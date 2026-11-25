@@ -1362,6 +1362,80 @@ def test_optional_history_wait_cannot_override_newer_resume_intent(
     asyncio.run(scenario())
 
 
+@pytest.mark.parametrize(
+    "domain,endpoint",
+    [
+        ("forecast_quality_request", "/v1/forecast-quality/history"),
+        ("bonus_history", "/v1/history"),
+    ],
+)
+def test_unload_prevents_post_after_recorder_history_capture(monkeypatch, domain, endpoint):
+    """Unload drains the Recorder read without starting a history upload in either loop."""
+
+    async def scenario():
+        """Hold a real capture result until the entry has begun to unload."""
+        async with running_chain(recorder=True) as (hass, entry, _url, _root):
+            coordinator = entry.runtime_data
+            request = coordinator.client.request
+            bridge = (
+                coordinator.forecast_history_bridge
+                if domain == "forecast_quality_request"
+                else coordinator.history_bridge
+            )
+            capture = bridge.capture
+            captured, release = asyncio.Event(), asyncio.Event()
+            uploads = []
+            end = dt_util.utcnow().replace(minute=0, second=0, microsecond=0)
+            history = {
+                "version": "unload-recorder-history",
+                "entity_id": "sensor.unload_history_missing_statistics",
+                "start": (end - timedelta(hours=2)).isoformat(),
+                "end": end.isoformat(),
+            }
+
+            async def pending(method, path, body=None):
+                """Request a real Recorder read and record any attempted history upload."""
+                if path == endpoint:
+                    uploads.append(body)
+                response = await request(method, path, body)
+                if path == "/v1/ha/requests":
+                    response[domain] = (
+                        history if domain == "forecast_quality_request" else {"request": history}
+                    )
+                return response
+
+            async def gated_capture(body):
+                """Keep the upload caller waiting after Recorder returns a sendable report."""
+                report = await capture(body)
+                assert report == {
+                    "request_version": history["version"],
+                    "error": "unsupported_statistics",
+                }
+                captured.set()
+                await release.wait()
+                return report
+
+            monkeypatch.setattr(coordinator.client, "request", pending)
+            monkeypatch.setattr(bridge, "capture", gated_capture)
+            synchronizing = asyncio.create_task(coordinator.sync_services())
+            unloading = None
+            try:
+                await asyncio.wait_for(captured.wait(), timeout=10)
+                unloading = asyncio.create_task(hass.config_entries.async_unload(entry.entry_id))
+                async with asyncio.timeout(10):
+                    while not coordinator.closed:
+                        await asyncio.sleep(0)
+                assert not unloading.done()
+            finally:
+                release.set()
+                await synchronizing
+                if unloading is not None:
+                    assert await unloading
+            assert uploads == []
+
+    asyncio.run(scenario())
+
+
 def test_appliance_learning_reads_real_recorder_power_and_energy_units(monkeypatch):
     """Recorder statistics convert kW/Wh to W/kWh, keeping negative power and missing energy unknown."""
     from homeassistant.components.recorder import get_instance

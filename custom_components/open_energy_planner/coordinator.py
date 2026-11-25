@@ -289,6 +289,7 @@ class PlanCoordinator:
         if generation != self.catalogue_discovery.generation:
             self.catalogue_confirmed_at = None
             return
+        command_revision = self.schedule.config_revision
         for page in prepared.pages:
             if self.closed or self.catalogue_bindings_rejected:
                 return
@@ -297,6 +298,14 @@ class PlanCoordinator:
             raise ValueError("Catalogue snapshot was not accepted")
         if self.closed:
             return
+        # A changed watch affects freshness. Only replacement of the evaluated command
+        # authority makes a genuine rejection obsolete.
+        if (
+            membership.get("configuration_issue")
+            and self.schedule.config_revision != command_revision
+            and self.schedule.config_revision != membership["config_revision"]
+        ):
+            membership = {**membership, "configuration_issue": None}
         if generation != self.catalogue_discovery.generation:
             self.catalogue_confirmed_at = None
             return membership
@@ -333,11 +342,7 @@ class PlanCoordinator:
                 return
             if generation != self.catalogue_discovery.generation:
                 self.catalogue_confirmed_at = None
-                membership = await self._publish_catalogue(now)
-                if membership and membership.get("configuration_issue"):
-                    self.schedule.invalidate()
-                    self.refresh()
-                return membership
+                return await self._publish_catalogue(now)
             else:
                 self.catalogue_confirmed_at = now
         except (
@@ -976,6 +981,8 @@ class PlanCoordinator:
                     self.refresh()
                     try:
                         historical = await bridge.capture(pending_history)
+                        if self.closed:
+                            return
                         if historical is not None:
                             await self.client.request("POST", endpoint, historical)
                     except AuthenticationError:
@@ -1017,6 +1024,8 @@ class PlanCoordinator:
                     if pending:
                         try:
                             historical = await bridge.capture(pending)
+                            if self.closed:
+                                return
                             if historical is not None:
                                 receipt = await self.client.request("POST", endpoint, historical)
                                 diagnostics = receipt.get("diagnostics")

@@ -149,10 +149,19 @@ def test_healthy_panel_metadata_confirmation_survives_command_snapshot_timeout(
 
 
 @pytest.mark.parametrize(
-    "caller", ["normal", "recovery", "confirmation_empty", "confirmation_newer"]
+    "caller",
+    [
+        "normal",
+        "recovery",
+        "confirmation_empty",
+        "confirmation_newer",
+        "replacement_same_revision",
+        "replacement_new_revision",
+        "replacement_evaluated_revision",
+    ],
 )
 def test_changed_publication_preserves_real_configuration_rejection(monkeypatch, caller):
-    """An accepted app configuration rejection must revoke old plans despite a concurrent watch change."""
+    """A late rejection withdraws only commands for the measurement configuration it evaluated."""
     import json
     from copy import deepcopy
 
@@ -168,14 +177,20 @@ def test_changed_publication_preserves_real_configuration_rejection(monkeypatch,
         original_discovery = SetupDiscovery.discovery
         active = False
         responses = []
+        evaluate_replacement = caller == "replacement_evaluated_revision"
 
         async def discovery(owner, request):
             """Retain the actual accepted response and deliver a real HA event before returning it."""
+            if active and evaluate_replacement:
+                entered.set()
+                await release.wait()
             response = await original_discovery(owner, request)
             if active:
                 data = json.loads(response.body)
                 if "configuration_issue" in data:
                     responses.append(data)
+                if evaluate_replacement:
+                    return response
                 if not entered.is_set():
                     entered.set()
                     await release.wait()
@@ -250,6 +265,7 @@ def test_changed_publication_preserves_real_configuration_rejection(monkeypatch,
             old_devices = deepcopy(cached["installation"]["devices"])
             assert old_devices and old_devices[0]["energy_entity"] == "sensor.roof_energy"
             confirmation = caller.startswith("confirmation_")
+            replacement = caller.startswith("replacement_")
             install = coordinator.schedule.install_candidate
             fetched_plan_attempts = []
 
@@ -273,10 +289,12 @@ def test_changed_publication_preserves_real_configuration_rejection(monkeypatch,
 
             monkeypatch.setattr(coordinator.client, "request", request)
             coordinator.catalogue_confirmed_at = now - timedelta(minutes=2)
-            if caller == "normal":
+            if caller == "normal" or replacement:
                 coordinator.catalogue_discovery.repair()
             active = True
-            task = asyncio.create_task(coordinator.sync())
+            task = asyncio.create_task(
+                coordinator.sync_services() if replacement else coordinator.sync()
+            )
             try:
                 async with asyncio.timeout(HTTP_GATE_TIMEOUT_SECONDS):
                     await entered.wait()
@@ -290,12 +308,55 @@ def test_changed_publication_preserves_real_configuration_rejection(monkeypatch,
                         {**roof.attributes, "friendly_name": "Updated roof"},
                     )
                 await hass.async_block_till_done()
+                if replacement:
+                    command_revision = plan["config_revision"]
+                    if caller != "replacement_same_revision":
+                        hass.states.async_set(
+                            "sensor.replacement_grid", "0", {"unit_of_measurement": "W"}
+                        )
+                        await original_request(
+                            "PUT",
+                            "/v1/sources",
+                            {
+                                "bindings": [
+                                    {
+                                        "key": "grid.power",
+                                        "entity_id": "sensor.replacement_grid",
+                                        "quantity": "power",
+                                    }
+                                ],
+                                "expected_revision": command_revision,
+                            },
+                        )
+                        await hass.async_block_till_done()
+                        status_reply = await original_request("GET", "/v1/ha/plan-status")
+                        assert status_reply["config_revision"] != command_revision
+                        await coordinator._apply_plan_status(status_reply)
+                        command_revision = status_reply["config_revision"]
+                        configuration = await coordinator.client.measurement_config(
+                            command_revision
+                        )
+                        coordinator._configure_measurements(configuration["measurement_config"])
+                    current = dt_util.utcnow()
+                    installed = command_plan(current, powers=(0,))
+                    installed["config_revision"] = command_revision
+                    installed["steps"][0]["devices"] = {}
+                    assert coordinator.schedule.accept(installed, current)
+                    coordinator.planning_status = {"status": "ready", "reason": None}
+                    coordinator.refresh(current)
+                    assert coordinator.projection.command is not None
                 release.set()
                 await task
                 assert len(responses) == 1
                 membership = responses[0]
                 assert membership["accepted"] is True
                 assert membership["configuration_issue"] == "energy_configuration_changed"
+                expected_revision = (
+                    installed["config_revision"]
+                    if evaluate_replacement
+                    else plan["config_revision"]
+                )
+                assert membership["config_revision"] == expected_revision
                 assert (
                     membership["devices"]
                     and membership["devices"][0]["energy_entity"] == "sensor.roof_energy"
@@ -304,14 +365,20 @@ def test_changed_publication_preserves_real_configuration_rejection(monkeypatch,
                 assert coordinator.catalogue_confirmed_at is None
                 if confirmation:
                     assert fetched_plan_attempts == []
+                if caller == "replacement_new_revision":
+                    assert coordinator.schedule.plan is not None
+                    assert coordinator.schedule.plan.plan_id == installed["plan_id"]
+                    assert coordinator.projection.command is not None
+                    assert coordinator.planning_status == {"status": "ready", "reason": None}
+                    return
                 assert coordinator.schedule.plan is None
                 assert coordinator.schedule.invalidated_generation == (
                     dt_util.parse_datetime(installed["generated_at"]) if installed else None
                 )
                 if not confirmation:
                     with pytest.raises(RevokedPlan):
-                        coordinator.schedule.accept(plan, dt_util.utcnow())
-                if caller == "normal" or confirmation:
+                        coordinator.schedule.accept(installed, dt_util.utcnow())
+                if caller != "recovery":
                     assert coordinator.devices == membership["devices"]
                     assert coordinator.planning_status["reason"] == "energy_configuration_changed"
                     if confirmation:
