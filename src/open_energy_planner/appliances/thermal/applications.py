@@ -1,7 +1,7 @@
 """Validate thermal applications and derive one forecast membership per physical Energy meter."""
 
 from bisect import bisect_left, bisect_right
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 from itertools import pairwise
 from uuid import UUID
@@ -15,6 +15,7 @@ from open_energy_planner.home_assistant.names import source_name
 
 MAXIMUM_PREHEATING_C = 3
 MAXIMUM_SPACE_TEMPERATURE_C = 50
+ROOM_HEATER_POWER_BOUNDS_W = (100, 12000)
 MAX_APPLICATION_NAME_LENGTH = 160
 METERED_HOUR = timedelta(hours=1)
 UNKNOWN_MODE = "Select an application linked to this heat source"
@@ -64,7 +65,7 @@ def validate_shape(applications):
             raise ValueError(INVALID_APPLICATION)
         if not _valid_label(application["name"]):
             raise ValueError(INVALID_APPLICATION)
-        _validate_sources(application["sources"])
+        _validate_sources(application["sources"], application["kind"])
         _validate_application_binding(application, areas)
 
 
@@ -76,20 +77,26 @@ def _valid_label(value):
     )
 
 
-def _validate_sources(sources):
-    """Check the unique meter and scheduling flag of every application source."""
+def _validate_sources(sources, kind):
+    """Check unique meters, scheduling flags and optional full-load power."""
     if not isinstance(sources, list):
         raise TypeError(INVALID_APPLICATION)
     meters = set()
     for source in sources:
         if (
             not isinstance(source, dict)
-            or set(source) != {"energy_entity", "allow_scheduling"}
+            or source.keys() - {"full_load_power_w"} != {"energy_entity", "allow_scheduling"}
             or not valid_entity(source["energy_entity"], "sensor")
             or type(source["allow_scheduling"]) is not bool
             or source["energy_entity"] in meters
         ):
             raise ValueError(INVALID_APPLICATION)
+        if "full_load_power_w" in source:
+            if kind != ApplicationKind.SPACE_HEATING:
+                raise ValueError(INVALID_APPLICATION)
+            power = number(source["full_load_power_w"], *ROOM_HEATER_POWER_BOUNDS_W)
+            if not power.is_integer():
+                raise ValueError("Heater power requires whole watts")
         meters.add(source["energy_entity"])
 
 
@@ -227,12 +234,19 @@ def _ordered_mode_reports(samples):
     return reports
 
 
-def attribute_history(history, samples, linked_ids, start, validity):
+def attribute_history(history, samples, linked_ids, start, validity, *, limit_to_retained=False):
     """Allocate a complete metered hour only when fresh reports agree throughout it."""
     reports = _ordered_mode_reports(samples)
     times = [reported for reported, _application in reports]
     totals = {identity: 0.0 for identity in linked_ids}
     unknown = 0.0
+    retained_from = None
+    if limit_to_retained and times and times[0] > start:
+        oldest = times[0].astimezone(UTC)
+        start = oldest.replace(minute=0, second=0, microsecond=0)
+        if start < oldest:
+            start += METERED_HOUR
+        retained_from = start.isoformat()
     for before, after in pairwise(history.hours):
         if before.start + METERED_HOUR != after.start or after.start < start:
             continue
@@ -240,12 +254,15 @@ def attribute_history(history, samples, linked_ids, start, validity):
         usage = after.total_kwh - before.total_kwh
         if usage < 0:
             continue
-        assigned = _complete_hour_mode(reports, times, totals.keys(), after.start, validity)
+        assigned = _complete_hour_mode(reports, times, totals, after.start, validity)
         if assigned is None:
             unknown += usage
         else:
             totals[assigned] += usage
-    return {"applications_kwh": totals, "unknown_kwh": unknown}
+    result = {"applications_kwh": totals, "unknown_kwh": unknown}
+    if retained_from is not None:
+        result["retained_from"] = retained_from
+    return result
 
 
 def _complete_hour_mode(reports, times, linked_ids, beginning, validity):

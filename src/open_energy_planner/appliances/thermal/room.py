@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from datetime import timedelta
 from itertools import pairwise
 from math import exp, expm1, isfinite
-from statistics import mean, quantiles
+from statistics import mean
 
 from open_energy_planner.appliances.thermal.applications import MAXIMUM_SPACE_TEMPERATURE_C
 from open_energy_planner.appliances.thermal.model import (
@@ -26,13 +26,12 @@ MAXIMUM_HOLDOUT_ERROR_C = 0.75
 MINIMUM_IMPROVEMENT_C = 0.08
 LOSS_RATES_PER_HOUR = tuple(rate / 1000 for rate in range(5, 201, 5))
 EFFECTIVE_GAIN_BOUNDS_C_PER_KWH = (0.15, 4.0)
-MAXIMUM_ROOM_HEATER_W = 12000
-MINIMUM_ROOM_HEATER_W = 100
+HOURLY_METER_TOLERANCE_KWH = 0.01
 
 
 @dataclass(frozen=True)
 class RoomModel:
-    """Bounded first-order dynamics and empirical running power.
+    """Bounded first-order dynamics and independently specified running power.
 
     Gain describes temperature change per electrical kWh. It folds thermal mass and
     efficiency together because the electricity meter cannot identify COP separately.
@@ -52,12 +51,10 @@ def decay_response(loss, duration):
     return exp(-exponent), -expm1(-exponent) / exponent
 
 
-def fit_room(indoor, outdoor, energy_history, now):
-    """Train on older complete hours and reject unidentified or weak held-out response."""
+def aligned_room_samples(indoor, outdoor, energy_history, now, maximum_hourly_kwh):
+    """Join complete metered hours with indoor and outdoor readings and check the power bound."""
     weather = {row.start: row.celsius for row in outdoor}
     samples = []
-    if not energy_history:
-        return None
     for before, after in pairwise(energy_history.hours):
         start = after.start
         if (
@@ -70,16 +67,27 @@ def fit_room(indoor, outdoor, energy_history, now):
         ):
             continue
         energy = after.total_kwh - before.total_kwh
-        if 0 <= energy <= MAXIMUM_ROOM_HEATER_W / WATTS_PER_KW:
+        # Even an hour of continuous operation cannot exceed the configured input.
+        if energy > maximum_hourly_kwh:
+            return []
+        if 0 <= energy:
             samples.append((indoor[start], weather[start], energy, indoor[start + HOUR]))
+    return samples
+
+
+def fit_room(indoor, outdoor, energy_history, now, *, full_load_power_w):
+    """Learn the thermal response from hourly energy with separately known electrical input."""
+    if not energy_history or full_load_power_w is None:
+        return None
+    maximum_hourly_kwh = full_load_power_w / WATTS_PER_KW + HOURLY_METER_TOLERANCE_KWH
+    samples = aligned_room_samples(indoor, outdoor, energy_history, now, maximum_hourly_kwh)
     if len(samples) < MINIMUM_TRAINING_HOURS + HOLDOUT_HOURS:
         return None
     training, held_out = samples[:-HOLDOUT_HOURS], samples[-HOLDOUT_HOURS:]
     idle = [row for row in training if row[2] <= IDLE_KWH and row[0] - row[1] >= 3]
-    heated = [row[2] for row in training if row[2] >= SUSTAINED_HEATING_KWH]
     if (
         len(idle) < MINIMUM_IDLE_HOURS
-        or len(heated) < MINIMUM_HEATING_HOURS
+        or sum(row[2] >= SUSTAINED_HEATING_KWH for row in training) < MINIMUM_HEATING_HOURS
         or sum(row[2] >= SUSTAINED_HEATING_KWH for row in held_out) < 3
         or sum(row[2] <= IDLE_KWH for row in held_out) < 3
     ):
@@ -113,13 +121,10 @@ def fit_room(indoor, outdoor, energy_history, now):
         < MINIMUM_IMPROVEMENT_C
     ):
         return None
-    heater_w = round(quantiles(heated, n=5, method="inclusive")[-1] * WATTS_PER_KW)
-    if not MINIMUM_ROOM_HEATER_W <= heater_w <= MAXIMUM_ROOM_HEATER_W:
-        return None
     return RoomModel(
         loss,
         gain,
-        heater_w,
+        full_load_power_w,
         min(row[1] for row in training),
         max(row[1] for row in training),
         max(errors),
@@ -135,16 +140,12 @@ def room_work(application, reading, model, weather, intervals, now, ready):
     capacity = 1 / model.gain_c_per_kwh
     loss = model.loss_per_hour * capacity * WATTS_PER_KW
     final = intervals[-1]
-    if (
-        final.start + timedelta(hours=final.duration_h) <= ready
-        or maximum > MAXIMUM_SPACE_TEMPERATURE_C
-        or model_maximum <= target
-        or initial > model_maximum
-        or not THERMAL_HEAT_CAPACITY_BOUNDS_KWH_PER_C[0]
-        <= capacity
-        <= THERMAL_HEAT_CAPACITY_BOUNDS_KWH_PER_C[1]
-        or loss > 1000
-    ):
+    if final.start + timedelta(hours=final.duration_h) <= ready:
+        return None
+    if maximum > MAXIMUM_SPACE_TEMPERATURE_C or model_maximum <= target or initial > model_maximum:
+        return None
+    min_capacity, max_capacity = THERMAL_HEAT_CAPACITY_BOUNDS_KWH_PER_C
+    if not min_capacity <= capacity <= max_capacity or loss > 1000:
         return None
     ambient = tuple(
         weather.get(step.start.replace(minute=0, second=0, microsecond=0)) for step in intervals

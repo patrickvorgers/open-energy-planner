@@ -1,5 +1,7 @@
 """Native virtual thermal controls and evidence. No physical actions or helper entities."""
 
+from collections import Counter
+
 from aiohttp import ClientError
 from homeassistant.components.binary_sensor import BinarySensorEntity
 from homeassistant.components.number import NumberEntity
@@ -115,11 +117,19 @@ class ThermalOperatingMode(PlannerEntity, SelectEntity):
     def mode_options(self):
         """Use readable names and disambiguate repeated labels without losing their identities."""
         modes = self.row().get("options", {})
-        counts = {name: list(modes.values()).count(name) for name in modes.values()}
-        return {
-            name if counts[name] == 1 and name != MODE_UNKNOWN else f"{name} ({identity})": identity
-            for identity, name in modes.items()
-        }
+        counts = Counter(modes.values())
+        reserved = {MODE_UNKNOWN, *counts}
+        options = {}
+        for identity, name in modes.items():
+            label = name
+            if counts[name] > 1 or name == MODE_UNKNOWN:
+                base = label = f"{name} ({identity})"
+                suffix = 2
+                while label in reserved or label in options:
+                    label = f"{base} {suffix}"
+                    suffix += 1
+            options[label] = identity
+        return options
 
     @property
     def available(self):

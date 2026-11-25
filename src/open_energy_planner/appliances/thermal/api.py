@@ -93,6 +93,7 @@ def register(app, service, catalogue, repository, live, lock):
                     **projection,
                     "catalogue": catalogue.value,
                     "energy_consumers": list(service.consumers.options),
+                    "occupied_meters": sorted(service.occupied_meters),
                     "mode_attribution": service.mode_attribution(
                         projection["shared_sources"], datetime.now(UTC)
                     ),

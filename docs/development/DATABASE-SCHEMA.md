@@ -821,17 +821,22 @@ Backend transfer includes all of these documents and plan archives.
 The optional `applications` list in the same thermal configuration contains UUID,
 kind, display name, HA area ID, an optional climate entity, preheating margin in
 degrees Celsius and source links. Each link holds the Energy meter ID and
-scheduling permission. Older store-only documents remain valid. Forecast
+  scheduling permission. Space heating links can also hold the optional
+  `full_load_power_w` electrical input. Older configurations remain valid. Forecast
 membership for all linked meters and configuration archives are written in
 the existing shared document transaction.
 `thermal-source-modes.json` uses the same namespace. It retains bounded,
 timestamped mode reports by Energy meter and application UUID for electricity
-attribution. Removing sources or restarting does not restore an old report as
-current. Current climate readings and thermostat targets are transient.
+attribution. Retention is at most 30 days and 4096 reports per meter. At capacity,
+attribution starts at the first full hour at or after the oldest retained timestamp
+when that shortens the window. Removing sources or restarting does not restore an
+old report as current. Current climate readings and thermostat targets are transient.
+Their integration capture time determines freshness. The original Home Assistant
+report timestamp remains available as provenance.
 `space-heating-history.json` keeps up to 30 days of hourly indoor temperatures
 in degrees Celsius by a digest of the application, HA area, climate entity and
-source bindings. Samples are timestamps and recorded temperatures. Only a
-fresh thermal observation establishes the current room temperature and target.
+source bindings. Samples retain hourly timestamps and recorded temperatures.
+An unchanged reading from an older hour does not create a new historical sample.
 An active room plan archives the fitted response, observed reference target,
 dispatch boundary and outdoor temperature profile. Older boiler work without
 an ambient profile continues to use its fixed surroundings temperature.

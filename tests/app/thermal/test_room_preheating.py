@@ -15,7 +15,7 @@ METER = "sensor.room_airco"
 ROOM = "00000000-0000-4000-8000-000000000500"
 
 
-def evidence(corrupt_holdout=False):
+def evidence(corrupt_holdout=False, *, energy_scale=1):
     """Generate complete hourly measurements from independently chosen heat-loss and gain."""
     hour = timedelta(hours=1)
     first = START - 96 * hour
@@ -24,7 +24,7 @@ def evidence(corrupt_holdout=False):
     for index in range(96):
         stamp = first + index * hour
         outside = 6 + index % 4
-        energy = (0, 0.8, 0, 1.0)[index % 4]
+        energy = (0, 0.8, 0, 1.0)[index % 4] * energy_scale
         next_temperature = outside + (indoor[stamp] - outside) * exp(-0.04)
         next_temperature += 1.5 * energy * (1 - exp(-0.04)) / 0.04
         if corrupt_holdout and index >= 72:
@@ -44,23 +44,25 @@ def application():
         "area_id": "room",
         "climate_entity": "climate.room",
         "maximum_preheat_c": 0.6,
-        "sources": [{"energy_entity": METER, "allow_scheduling": True}],
+        "sources": [{"energy_entity": METER, "allow_scheduling": True, "full_load_power_w": 1000}],
     }
 
 
 def test_independent_week_can_identify_effective_heating_without_claiming_cop():
     """The retained exact response is checked against separate hours with heating and idle use."""
-    model = fit_room(*evidence(), START)
+    model = fit_room(*evidence(), START, full_load_power_w=1000)
     assert model.loss_per_hour == 0.04
     assert model.gain_c_per_kwh == pytest.approx(1.5)
     assert model.heater_w == 1000
     assert model.holdout_error_c < 1e-8
-    assert fit_room(*evidence(corrupt_holdout=True), START) is None
+    assert fit_room(*evidence(corrupt_holdout=True), START, full_load_power_w=1000) is None
+    assert fit_room(*evidence(), START, full_load_power_w=800) is None
+    assert fit_room(*evidence(), START, full_load_power_w=None) is None
 
 
 def test_calibrated_room_uses_cheaper_heat_under_the_live_temperature_limit():
-    """A cold outdoor hour needs one quarter of heat. The cheapest quarter can preheat."""
-    model = fit_room(*evidence(), START)
+    """Dispatch charges full quarter-hour input even when every training hour cycled."""
+    model = fit_room(*evidence(energy_scale=0.7), START, full_load_power_w=1000)
     intervals = tuple(
         Interval(START + timedelta(minutes=15 * index), 0.25, price, 0)
         for index, price in enumerate((0.05, 0.7, 0.8, 1.1))

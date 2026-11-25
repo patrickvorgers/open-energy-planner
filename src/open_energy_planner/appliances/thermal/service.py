@@ -5,6 +5,7 @@ from copy import deepcopy
 from dataclasses import asdict, replace
 from datetime import UTC, datetime, timedelta
 from itertools import pairwise
+from logging import getLogger
 from uuid import UUID
 from zoneinfo import ZoneInfo
 
@@ -44,6 +45,7 @@ from open_energy_planner.home_assistant.names import source_name
 from open_energy_planner.installation.model import InstallationProblem, slice_interval
 from open_energy_planner.planning_policy import FINE_INTERVAL_MINUTES
 
+LOGGER = getLogger(__name__)
 STATE_KEY = "thermal-state.json"
 SOURCE_MODES_KEY = "thermal-source-modes.json"
 SOURCE_MODE_HISTORY_DAYS = 30
@@ -65,50 +67,6 @@ CONFIGURATION_FIELDS = {
     "draw_profile_kwh",
     "enabled",
 }
-
-
-def _validate_store_shape(row):
-    """Validate one saved boiler and its configured measurement identities."""
-    if not isinstance(row, dict) or set(row) != CONFIGURATION_FIELDS:
-        raise ValueError("Invalid thermal settings")
-    if not isinstance(row["id"], str) or str(UUID(row["id"])) != row["id"]:
-        raise ValueError("Invalid thermal identity")
-    if type(row["enabled"]) is not bool:
-        raise ValueError("Thermal enabled must be boolean")
-    for field, (minimum, maximum) in THERMAL_CONFIGURATION_BOUNDS.items():
-        number(row[field], minimum, maximum)
-    if row["minimum_c"] > row["maximum_c"] or row["ambient_c"] > row["maximum_c"]:
-        raise ValueError("Thermal temperatures exceed the supported planning maximum")
-    if row["heater_w"] != round(row["heater_w"]):
-        raise ValueError("Heater power requires whole watts")
-    profile = row["draw_profile_kwh"]
-    if not isinstance(profile, list) or len(profile) != HOURS_PER_DAY:
-        raise ValueError("Specify 24 hourly thermal draw rates")
-    for rate in profile:
-        number(rate, 0, MAX_THERMAL_HOURLY_DRAW_KWH)
-    if row["enabled"] and sum(profile) <= 0:
-        raise ValueError("Declare expected hot-water heat demand before enabling")
-    for field, domains in (
-        ("energy_entity", ("sensor",)),
-        ("power_entity", ("sensor",)),
-        ("temperature_entity", ("sensor", "water_heater")),
-    ):
-        value = row[field]
-        _validate_store_entity(value, domains)
-
-
-def _validate_store_entity(value, domains):
-    """Require a bounded Home Assistant entity identity from an allowed domain."""
-    if not isinstance(value, str) or len(value) > MAX_THERMAL_ENTITY_ID_LENGTH or "." not in value:
-        raise ValueError("Select a Home Assistant entity")
-    domain, identifier = value.split(".", 1)
-    if (
-        domain not in domains
-        or not identifier
-        or not identifier.isascii()
-        or not identifier.replace("_", "").isalnum()
-    ):
-        raise ValueError("Invalid Home Assistant entity")
 
 
 def _admit_boiler_readings(rows, allowed, reported, captured_at):
@@ -233,6 +191,83 @@ def refine(problem, ready_at):
     )
 
 
+def validate_boiler_settings(row):
+    """Validate one saved boiler's bounds, permissions and expected draw."""
+    if not isinstance(row, dict) or set(row) != CONFIGURATION_FIELDS:
+        raise ValueError("Invalid thermal settings")
+    if not isinstance(row["id"], str) or str(UUID(row["id"])) != row["id"]:
+        raise ValueError("Invalid thermal identity")
+    if type(row["enabled"]) is not bool:
+        raise ValueError("Thermal enabled must be boolean")
+    for field, (minimum, maximum) in THERMAL_CONFIGURATION_BOUNDS.items():
+        number(row[field], minimum, maximum)
+    if row["minimum_c"] > row["maximum_c"] or row["ambient_c"] > row["maximum_c"]:
+        raise ValueError("Thermal temperatures exceed the supported planning maximum")
+    if row["heater_w"] != round(row["heater_w"]):
+        raise ValueError("Heater power requires whole watts")
+    profile = row["draw_profile_kwh"]
+    if not isinstance(profile, list) or len(profile) != HOURS_PER_DAY:
+        raise ValueError("Specify 24 hourly thermal draw rates")
+    for rate in profile:
+        number(rate, 0, MAX_THERMAL_HOURLY_DRAW_KWH)
+    if row["enabled"] and sum(profile) <= 0:
+        raise ValueError("Declare expected hot-water heat demand before enabling")
+
+
+def validate_boiler_bindings(row):
+    """Check saved boiler entity IDs independently of their current HA availability."""
+    for field, domains in (
+        ("energy_entity", ("sensor",)),
+        ("power_entity", ("sensor",)),
+        ("temperature_entity", ("sensor", "water_heater")),
+    ):
+        value = row[field]
+        if (
+            not isinstance(value, str)
+            or len(value) > MAX_THERMAL_ENTITY_ID_LENGTH
+            or "." not in value
+        ):
+            raise ValueError("Select a Home Assistant entity")
+        domain, identifier = value.split(".", 1)
+        if (
+            domain not in domains
+            or not identifier
+            or not identifier.isascii()
+            or not identifier.replace("_", "").isalnum()
+        ):
+            raise ValueError("Invalid Home Assistant entity")
+
+
+def boiler_work(row, reading, intervals, now, ready, zone):
+    """Build one boiler's inherited dispatch state and remaining hourly draw."""
+    draws = tuple(
+        row["draw_profile_kwh"][step.start.astimezone(zone).hour]
+        * max(
+            0,
+            (step.start + timedelta(hours=step.duration_h) - max(step.start, now)).total_seconds(),
+        )
+        / SECONDS_PER_HOUR
+        for step in intervals
+    )
+    running = reading["power_w"] >= row["heater_w"] * THERMAL_RUNNING_POWER_FRACTION
+    return ThermalWork(
+        row["id"],
+        now if running else ready,
+        reading["temperature_c"],
+        row["minimum_c"],
+        row["maximum_c"],
+        row["ambient_c"],
+        row["volume_litres"] * WATER_KWH_PER_LITRE_C,
+        row["loss_w_per_c"],
+        row["heater_w"],
+        1,
+        draws,
+        max(row["minimum_c"], reading["temperature_c"]),
+        state_at=now,
+        initially_heating=running,
+    )
+
+
 class ThermalService:
     """Own versioned heat-store configuration and unpersisted current observations."""
 
@@ -259,7 +294,7 @@ class ThermalService:
             if documents.exists(ROOM_HISTORY_KEY):
                 self.room_history = self.restore_room_history(documents.read(ROOM_HISTORY_KEY))
         except (OSError, TypeError, ValueError, OverflowError):
-            pass
+            LOGGER.warning("Space heating history unreadable. Rebuilding from new observations")
         try:
             if documents.exists(STATE_KEY):
                 candidate = documents.read(STATE_KEY)
@@ -309,17 +344,22 @@ class ThermalService:
 
     def mode_attribution(self, sources, now):
         """Summarize metered energy separately from forecasting and current mode reporting."""
-        return {
-            meter: attribute_history(
-                self.consumers.histories[meter],
-                self.source_mode_history.get(meter, ()),
+        result = {}
+        start = now - timedelta(days=SOURCE_MODE_HISTORY_DAYS)
+        validity = timedelta(seconds=TEMPERATURE_MAX_AGE_SECONDS)
+        for meter, source in sources.items():
+            if (history := self.consumers.histories.get(meter)) is None:
+                continue
+            samples = self.source_mode_history.get(meter, ())
+            result[meter] = attribute_history(
+                history,
+                samples,
                 {option["id"] for option in source["options"]},
-                now - timedelta(days=SOURCE_MODE_HISTORY_DAYS),
-                timedelta(seconds=TEMPERATURE_MAX_AGE_SECONDS),
+                start,
+                validity,
+                limit_to_retained=len(samples) >= MAX_SOURCE_MODE_SAMPLES,
             )
-            for meter, source in sources.items()
-            if meter in self.consumers.histories
-        }
+        return result
 
     @property
     def configuration_version(self):
@@ -349,6 +389,15 @@ class ThermalService:
             row["energy_entity"] for row in self.state["stores"]
         }
 
+    @property
+    def occupied_meters(self):
+        """Return Energy meters already assigned to EV charging or a shiftable cycle."""
+        return {row["energy_entity"] for row in self.ev.state["points"]} | {
+            entity
+            for entity, row in self.appliances.state["devices"].items()
+            if row.get("shiftable")
+        }
+
     @staticmethod
     def _shape(configuration):
         """Validate durable physical settings without needing an online HA catalogue."""
@@ -362,7 +411,8 @@ class ThermalService:
         if not isinstance(stores, list):
             raise TypeError("Expected thermal stores")
         for row in stores:
-            _validate_store_shape(row)
+            validate_boiler_settings(row)
+            validate_boiler_bindings(row)
         for field in ("id", "energy_entity", "temperature_entity", "power_entity"):
             if len({row[field] for row in stores}) != len(stores):
                 raise ValueError("Thermal devices and measurement bindings must be unique")
@@ -386,12 +436,7 @@ class ThermalService:
             for application in configuration["applications"]:
                 application["name"] = area_names.get(application["area_id"], application["name"])
         metadata = {row["entity_id"]: row for row in catalogue.get("entities", [])}
-        used = {row["energy_entity"] for row in self.ev.state["points"]}
-        used.update(
-            entity
-            for entity, row in self.appliances.state["devices"].items()
-            if row.get("shiftable")
-        )
+        used = self.occupied_meters
         for row in configuration["stores"]:
             temperature, power = (
                 metadata.get(row["temperature_entity"], {}),
@@ -414,6 +459,16 @@ class ThermalService:
     def commit(self, configuration, selected=None):
         """Archive settings and optional forecast membership before installing either in memory."""
         checked = deepcopy(configuration)
+        before = shared_sources(application_documents(self.state, {}))
+        after = shared_sources(application_documents(checked, {}))
+        current_modes = {
+            meter: mode
+            for meter, mode in self.source_modes.items()
+            if meter in before
+            and meter in after
+            and {option["id"] for option in before[meter]["options"]}
+            == {option["id"] for option in after[meter]["options"]}
+        }
         transaction = (
             self.documents.transaction()
             if selected is None
@@ -431,6 +486,7 @@ class ThermalService:
         self.active_rooms = ()
         self.echoed_targets = {}
         self.captured_at = None
+        self.source_modes = current_modes
 
     def receive(self, body, now, plan=None):
         """Admit a complete bounded HA report. Missing or stale values never become zero."""
@@ -454,14 +510,14 @@ class ThermalService:
         admitted = _admit_boiler_readings(
             body["readings"], {row["id"] for row in self.state["stores"]}, reported, body["at"]
         )
-        climate = self.receive_climate(body.get("climate", []), reported, now)
+        climate = self.receive_climate(body.get("climate", []), reported)
         self.record_room_history(climate, reported)
         self.discard_echoed_targets(climate, plan)
         self.readings, self.climate_readings = admitted, climate
         self.captured_at = reported
 
-    def receive_climate(self, rows, captured, now):
-        """Admit fresh current room temperatures and explicit HA thermostat targets."""
+    def receive_climate(self, rows, captured):
+        """Admit current thermostat values from an already validated integration capture."""
         if not isinstance(rows, list):
             raise TypeError("Invalid thermal readings")
         allowed = {
@@ -488,8 +544,7 @@ class ThermalService:
             observed = instant(row["observed_at"])
             if observed > captured + timedelta(seconds=MAX_THERMAL_CLOCK_SKEW_SECONDS):
                 raise ValueError("Thermal observation expired")
-            if (now - observed).total_seconds() < TEMPERATURE_MAX_AGE_SECONDS:
-                admitted[row["id"]] = dict(row)
+            admitted[row["id"]] = {**row, "captured_at": captured.isoformat()}
         return admitted
 
     def discard_echoed_targets(self, climate, plan):
@@ -577,8 +632,8 @@ class ThermalService:
         reading = self.climate_readings.get(identity)
         if (
             reading
-            and -MAX_THERMAL_CLOCK_SKEW_SECONDS
-            <= (now - instant(reading["observed_at"])).total_seconds()
+            and 0
+            <= (now - instant(reading["captured_at"])).total_seconds()
             < TEMPERATURE_MAX_AGE_SECONDS
         ):
             return reading
@@ -600,6 +655,8 @@ class ThermalService:
                 if not allows
                 else "Forecast only. Active planning requires one independent heat source."
                 if len(application["sources"]) != 1
+                else "Forecast only. Enter the heat source's electrical input at full load."
+                if "full_load_power_w" not in application["sources"][0]
                 else "Waiting for a current thermostat target"
                 if not reading
                 else "Included in planning"
@@ -611,17 +668,11 @@ class ThermalService:
     def readiness_issue(self, row, now):
         """Explain the same physical and ownership admission rule used by the planner and UI."""
         available = {row["entity_id"] for row in self.consumers.options}
-        owned = {row["energy_entity"] for row in self.ev.state["points"]}
-        owned.update(
-            entity
-            for entity, row in self.appliances.state["devices"].items()
-            if row.get("shiftable")
-        )
         if row["energy_entity"] not in available:
             return (
                 "Energy consumer missing. Configure this electricity meter in Home Assistant Energy"
             )
-        if row["energy_entity"] in owned:
+        if row["energy_entity"] in self.occupied_meters:
             return "This electricity meter is already controlled by an EV or appliance"
         reading = self.readings.get(row["id"])
         if (
@@ -656,13 +707,8 @@ class ThermalService:
         bindings = Counter(
             source["energy_entity"] for app in applications for source in app["sources"]
         )
-        reserved = {
-            row["energy_entity"] for row in (*self.state["stores"], *self.ev.state["points"])
-        } | {
-            identity
-            for identity, row in self.appliances.state["devices"].items()
-            if row.get("shiftable")
-        }
+        reserved = self.occupied_meters | {row["energy_entity"] for row in self.state["stores"]}
+        exclusive_meters = {meter for meter in options - reserved if bindings[meter] == 1}
         outdoor = {row.start: row.celsius for row in demand.live_temperatures}
         intervals = refine(problem, ready).intervals
         candidates = []
@@ -670,22 +716,18 @@ class ThermalService:
             if app["kind"] != ApplicationKind.SPACE_HEATING or len(app["sources"]) != 1:
                 continue
             source = app["sources"][0]
-            identity, meter = app["id"], source["energy_entity"]
-            reading = self.fresh_climate(identity, now)
-            if (
-                not source["allow_scheduling"]
-                or not reading
-                or not reading.get("heat_mode")
-                or meter in reserved
-                or meter not in options
-                or bindings[meter] != 1
-            ):
+            meter = source["energy_entity"]
+            if not source["allow_scheduling"] or meter not in exclusive_meters:
+                continue
+            reading = self.fresh_climate(app["id"], now)
+            if not reading or not reading.get("heat_mode"):
                 continue
             model = fit_room(
                 self.room_history.get(self.room_history_id(app), {}),
                 demand.temperatures,
                 self.consumers.histories.get(meter),
                 now,
+                full_load_power_w=source.get("full_load_power_w"),
             )
             if model and room_work(app, reading, model, outdoor, intervals, now, ready):
                 candidates.append((app, reading, model, meter))
@@ -727,39 +769,10 @@ class ThermalService:
         self.issue = None
         problem = refine(prepared.problem, ready)
         zone = ZoneInfo(timezone)
-        works = []
-        for row in rows:
-            reading = self.readings[row["id"]]
-            draws = tuple(
-                row["draw_profile_kwh"][step.start.astimezone(zone).hour]
-                * max(
-                    0,
-                    (
-                        step.start + timedelta(hours=step.duration_h) - max(step.start, now)
-                    ).total_seconds(),
-                )
-                / SECONDS_PER_HOUR
-                for step in problem.intervals
-            )
-            running = reading["power_w"] >= row["heater_w"] * THERMAL_RUNNING_POWER_FRACTION
-            works.append(
-                ThermalWork(
-                    row["id"],
-                    now if running else ready,
-                    reading["temperature_c"],
-                    row["minimum_c"],
-                    row["maximum_c"],
-                    row["ambient_c"],
-                    row["volume_litres"] * WATER_KWH_PER_LITRE_C,
-                    row["loss_w_per_c"],
-                    row["heater_w"],
-                    1,
-                    draws,
-                    max(row["minimum_c"], reading["temperature_c"]),
-                    state_at=now,
-                    initially_heating=running,
-                )
-            )
+        works = [
+            boiler_work(row, self.readings[row["id"]], problem.intervals, now, ready, zone)
+            for row in rows
+        ]
         evidence = [
             {
                 "configuration": deepcopy(row),

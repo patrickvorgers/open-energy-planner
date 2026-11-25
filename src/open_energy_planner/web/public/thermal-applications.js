@@ -1,21 +1,33 @@
 /** Configure area-based and named applications using the existing thermal settings draft. */
 import {settingsSummary} from "./appliance-settings-detail.js";
+import {when} from "./display.js";
 
 export const SPACE_HEATING = "space_heating";
 export const HOT_WATER = "hot_water";
+const MINIMUM_FULL_LOAD_POWER_W = 100, MAXIMUM_FULL_LOAD_POWER_W = 12000;
 
 /** Return the saved application type label. */
 export function applicationType(application) {
     return application.kind === SPACE_HEATING ? "Space heating" : "Domestic hot water";
 }
 
+/** Validate the preheating margin against the same limits as the saved settings. */
+function validMargin(margin) {
+    return Number.isFinite(margin) && margin >= 0 && margin <= 3;
+}
+
+/** Accept an omitted rating or a whole number of watts in the supported range. */
+function validFullLoadPower(power) {
+    return power === undefined || (Number.isInteger(power) && power >= MINIMUM_FULL_LOAD_POWER_W && power <= MAXIMUM_FULL_LOAD_POWER_W);
+}
+
 /** Reject incomplete edits before submitting the combined thermal draft. */
 export function validApplication(application) {
     if (application.kind === HOT_WATER) return Boolean(application.name.trim());
     if (!application.area_id) return false;
+    if (!application.sources.every(source => validFullLoadPower(source.full_load_power_w))) return false;
     if (!application.sources.some(source => source.allow_scheduling)) return true;
-    const margin = application.maximum_preheat_c;
-    return Boolean(application.climate_entity) && Number.isFinite(margin) && margin >= 0 && margin <= 3;
+    return Boolean(application.climate_entity) && validMargin(application.maximum_preheat_c);
 }
 
 /** Create one text-only form or display element. */
@@ -44,16 +56,21 @@ function action(label, onClick) {
 
 /** Group climate entities by selected HA area and retain the explicit existing choice. */
 function climateOptions(select, app, catalogue, metadata) {
-    const local = node("optgroup"), other = node("optgroup");
-    local.label = "In " + (catalogue.areas || []).find(area => area.id === app.area_id)?.name;
-    other.label = "Other Home Assistant areas";
+    const groups = new Map((catalogue.areas || []).map(area => {
+        const group = node("optgroup");
+        group.label = "In " + area.name;
+        return [area.id, group];
+    }));
+    const local = groups.get(app.area_id), unassigned = node("optgroup");
+    unassigned.label = "No Home Assistant area";
     for (const source of metadata.values()) {
         if (!source.entity_id.startsWith("climate.")) continue;
-        const group = app.area_id && source.area_id === app.area_id ? local : other;
+        const group = groups.get(source.area_id) || unassigned;
         group.append(new Option(source.name + " (" + source.entity_id + ")", source.entity_id));
     }
+    const ordered = [local, ...[...groups.values()].filter(group => group !== local), unassigned];
     select.replaceChildren(new Option("No thermostat linked", ""),
-        ...[local, other].filter(group => group.childElementCount));
+        ...ordered.filter(group => group?.childElementCount));
     if (app.climate_entity && !metadata.has(app.climate_entity)) {
         select.add(new Option(app.climate_entity + ": Source unavailable", app.climate_entity));
     }
@@ -102,15 +119,18 @@ function chooseSource(dialog, app, options, metadata, add) {
     dialog.showModal();
 }
 
-function renderHeatSource(source, option, {applicationId, kind, current, draft, editing}) {
+function renderHeatSource(source, option, {app, current, draft, editing}) {
     const meter = source.energy_entity;
     const power = option?.power_entity;
+    const space = app.kind === SPACE_HEATING;
     const section = node("section");
-    const space = kind === SPACE_HEATING;
     section.className = "thermal-heat-source settings-facts-group";
     section.append(node("h4", option?.name || meter), node("h5", "Energy source"), node("code", meter));
     if (power) section.append(node("h5", "Power source"), node("code", power));
     const facts = editing ? [] : [["Planning permission", source.allow_scheduling ? "Allowed" : "Forecast only"]];
+    if (!editing && space && source.allow_scheduling && source.full_load_power_w !== undefined) {
+        facts.push(["Electrical input at full load", `${source.full_load_power_w.toLocaleString()} W`]);
+    }
     if (!space) facts.push(["Scheduling model", draft.stores.some(store => store.energy_entity === meter) ? "Electric boiler" : "Forecast only"]);
     const mode = current.source_modes?.[meter]?.application_id;
     const uses = draft.applications.filter(application => application.sources.some(link => link.energy_entity === meter));
@@ -120,7 +140,9 @@ function renderHeatSource(source, option, {applicationId, kind, current, draft, 
         const attribution = current.mode_attribution?.[meter];
         if (attribution) {
             const energy = value => value.toLocaleString(undefined, {maximumFractionDigits: 2}) + " kWh";
-            facts.push(["Attributed electricity (last 30 days)", energy(attribution.applications_kwh[app.id] ?? 0)],
+            const period = attribution.retained_from ? `Since ${when(attribution.retained_from)}` : "Last 30 days";
+            facts.push(["Attribution period", period],
+                ["Attributed electricity", energy(attribution.applications_kwh[app.id] ?? 0)],
                 ["Unattributed electricity at source", energy(attribution.unknown_kwh)]);
         }
     }
@@ -200,8 +222,7 @@ export function renderApplication({app, current, draft, editor, summary, dialog,
     const projected = current.applications?.find(application => application.id === app.id);
     const space = app.kind === SPACE_HEATING;
     const sourceName = source => optionById.get(source.energy_entity)?.name || source.energy_entity;
-    const context = {applicationId: app.id, kind: app.kind, current, draft, editing};
-    const renderSource = source => renderHeatSource(source, optionById.get(source.energy_entity), context);
+    const renderSource = source => renderHeatSource(source, optionById.get(source.energy_entity), {app, current, draft, editing});
     const hasScheduling = space && app.sources.some(source => source.allow_scheduling);
     settingsSummary(summary, applicationFacts(app, projected, metadata, hasScheduling));
     const heatSources = node("div");
@@ -213,13 +234,23 @@ export function renderApplication({app, current, draft, editor, summary, dialog,
     const fields = applicationFields(app, catalogue, metadata, draft, hasScheduling, rerender, changed);
     editor.append(fields, node("h3", "Heat sources"));
     if (!app.sources.length) editor.append(node("p", "No heat sources linked."));
+    const updateSources = () => {
+        if (space && !app.sources.some(source => source.allow_scheduling) && !validMargin(app.maximum_preheat_c)) {
+            app.maximum_preheat_c = null;
+        }
+        rerender();
+    };
     for (const source of app.sources) {
         const section = renderSource(source);
         const permit = node("input"), label = node("label");
         permit.type = "checkbox";
         permit.dataset.field = "allow-scheduling:" + source.energy_entity;
         permit.checked = source.allow_scheduling;
-        permit.onchange = () => { source.allow_scheduling = permit.checked; rerender(); };
+        permit.onchange = () => {
+            source.allow_scheduling = permit.checked;
+            if (!permit.checked && !validFullLoadPower(source.full_load_power_w)) delete source.full_load_power_w;
+            updateSources();
+        };
         label.className = "settings-switch";
         const permission = node("span", "Allow scheduling");
         permit.setAttribute("aria-label", "Allow scheduling");
@@ -227,13 +258,33 @@ export function renderApplication({app, current, draft, editor, summary, dialog,
             ? "Uses a validated model and a current thermostat target to plan preheating."
             : "Saves your permission for future scheduling."));
         label.append(permit, permission);
-        section.append(label, action("Remove " + sourceName(source), () => {
+        section.append(label);
+        if (space && source.allow_scheduling) {
+            const power = node("input");
+            power.type = "number";
+            power.dataset.field = "full-load-power:" + source.energy_entity;
+            power.min = MINIMUM_FULL_LOAD_POWER_W;
+            power.max = MAXIMUM_FULL_LOAD_POWER_W;
+            power.step = "1";
+            power.value = source.full_load_power_w ?? "";
+            power.oninput = () => {
+                if (power.value === "" && !power.validity.badInput) delete source.full_load_power_w;
+                else source.full_load_power_w = power.valueAsNumber;
+                changed();
+            };
+            const powerLabel = field("Electrical input at full load (W)", power);
+            powerLabel.append(node("small", "Use the electrical power drawn at full load in heating mode. Leave blank for forecast only."));
+            section.append(powerLabel);
+        }
+        section.append(action("Remove " + sourceName(source), () => {
             app.sources = app.sources.filter(row => row !== source);
-            rerender();
+            updateSources();
         }));
         editor.append(section);
     }
-    const add = action("Add heat source", () => chooseSource(dialog, app, options, metadata, rerender));
+    const occupiedMeters = new Set(current.occupied_meters || []);
+    const add = action("Add heat source", () => chooseSource(dialog, app,
+        options.filter(option => !occupiedMeters.has(option.entity_id)), metadata, rerender));
     if (space && !app.area_id) add.dataset.requiresArea = "";
     editor.append(add);
 }
