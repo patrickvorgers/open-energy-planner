@@ -8,7 +8,7 @@ import pytest
 from playwright.sync_api import expect
 
 from tests.frontend.browser.documentation_fixture import START
-from tests.frontend.browser.helpers import TOKEN
+from tests.frontend.browser.helpers import TOKEN, wait_for_product_reads
 
 
 def scenario_snapshots(page, url):
@@ -159,17 +159,26 @@ def test_delayed_day_benefit_stays_with_its_own_date(app_page, available, hover_
     """A late first-day result leaves a second-day loss or missing comparison intact."""
     page, url = app_page
     page.clock.set_fixed_time(START)
-    page.goto(url + "/overview")
-    page.get_by_label("Installation API token", exact=True).fill(TOKEN)
-    page.get_by_role("button", name="Connect", exact=True).click()
-    expect(page.locator("#ems-costs")).to_contain_text("Expected benefit versus without battery")
+    tomorrow = START + timedelta(days=1)
+    first_day = (START, tomorrow)
+    second_day = (tomorrow, tomorrow + timedelta(days=1))
     queued = []
+
+    def comparison_window(request_url):
+        """Identify comparison requests by both bounds, ignoring full-plan and other reads."""
+        parsed = urlsplit(request_url)
+        query = parse_qs(parsed.query)
+        if not parsed.path.endswith("/comparison") or not {"start", "end"} <= query.keys():
+            return None
+        return tuple(datetime.fromisoformat(query[bound][0]) for bound in ("start", "end"))
 
     def comparison(route):
         """Hold the first date and supply a distinct outcome for the selected second day."""
-        start = datetime.fromisoformat(parse_qs(urlsplit(route.request.url).query)["start"][0])
-        if start == START:
+        bounds = comparison_window(route.request.url)
+        if bounds == first_day:
             queued.append(route)
+        elif bounds != second_day:
+            route.fallback()
         elif available:
             route.fulfill(json={"scenarios": {"optimizer": {"benefit_vs_without_battery": -1.25}}})
         else:
@@ -177,27 +186,40 @@ def test_delayed_day_benefit_stays_with_its_own_date(app_page, available, hover_
 
     page.route("**/comparison?start=**", comparison)
     page.mouse.move(0, 0)
+    page.goto(url + "/overview")
+    page.get_by_label("Installation API token", exact=True).fill(TOKEN)
+    page.get_by_role("button", name="Connect", exact=True).click()
+    expect(page.locator("#overview-status")).to_have_text("Connected")
+    expect(page.locator("#ems-costs")).to_contain_text("Expected benefit versus without battery")
     card = page.locator("#plan-chart").locator("..")
-    card.evaluate("element => element.scrollIntoView({block:'center'})")
-    first, second = [
-        card.get_by_role("button", name="Expected energy totals for").nth(i) for i in (0, 1)
-    ]
+    first = card.get_by_role(
+        "button", name="Expected energy totals for Today: Wednesday, November 4, 2026"
+    )
+    second = card.get_by_role(
+        "button", name="Expected energy totals for Tomorrow: Thursday, November 5, 2026"
+    )
     tooltip = page.locator("#plan-chart-tooltip")
+    title = tooltip.locator(".chart-tooltip-title")
     line = tooltip.locator(".chart-tooltip-day-benefit")
-    if hover_before_focus:
-        first.hover()
-        expect(line).to_contain_text("Loading")
+    with page.expect_request(lambda request: comparison_window(request.url) == first_day):
+        if hover_before_focus:
+            # Isolate request ordering from pointer hit-testing, covered by the real-hover test.
+            first.dispatch_event("mouseenter")
+        else:
+            first.focus()
+    expect(title).to_have_text("Expected energy totals: 11/4/2026")
+    expect(line).to_contain_text("Loading")
     first.focus()
     expect(line).to_contain_text("Loading")
     second.focus()
     amount = "-1.25 EUR" if available else "Unavailable"
+    expect(title).to_have_text("Expected energy totals: 11/5/2026")
     expect(line).to_have_text(f"Expected benefit versus without battery: {amount}")
     [delayed] = queued
     with page.expect_response(lambda response: response.url == delayed.request.url):
         delayed.fulfill(json={"scenarios": {"optimizer": {"benefit_vs_without_battery": 99}}})
-    expect(tooltip.locator(".chart-tooltip-title")).to_have_text(
-        "Expected energy totals: 11/5/2026"
-    )
+    wait_for_product_reads(page)
+    expect(title).to_have_text("Expected energy totals: 11/5/2026")
     expect(line).to_have_text(f"Expected benefit versus without battery: {amount}")
 
 
