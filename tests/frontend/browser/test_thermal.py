@@ -247,6 +247,51 @@ def test_shared_heat_source_shows_actual_attribution_window(thermal_page):
     )
 
 
+@pytest.mark.parametrize("remove_source", [False, True])
+def test_invalid_preheating_margin_clears_with_last_scheduling_source(thermal_page, remove_source):
+    """Persist a forecast-only draft after disabling or removing the last scheduling source."""
+    page, state = thermal_page
+    document = state["document"]
+    document["catalogue"]["areas"] = [{"id": "living", "name": "Living room"}]
+    document["catalogue"]["entities"].append(
+        {"entity_id": "climate.living", "name": "Thermostat", "area_id": "living"}
+    )
+    document["configuration"]["applications"] = [
+        {
+            "id": "room",
+            "kind": "space_heating",
+            "name": "Living room",
+            "area_id": "living",
+            "climate_entity": "climate.living",
+            "maximum_preheat_c": 0.5,
+            "sources": [{"energy_entity": "sensor.boiler_energy", "allow_scheduling": True}],
+        }
+    ]
+    page.reload()
+    page.locator("#thermal-store-select").select_option("room")
+    page.get_by_role("button", name="Edit settings", exact=True).click()
+    scheduling = page.get_by_label("Allow scheduling", exact=True)
+    margin = page.get_by_label("Maximum preheating (°C)", exact=True)
+    scheduling.uncheck()
+    expect(margin).to_have_count(0)
+    scheduling.check()
+    expect(margin).to_have_value("0.5")
+
+    margin.fill("-1")
+    save = page.get_by_role("button", name="Save settings", exact=True)
+    expect(save).to_be_disabled()
+    if remove_source:
+        page.get_by_role("button", name="Remove Utility boiler").click()
+    else:
+        scheduling.uncheck()
+    expect(margin).to_have_count(0)
+    save.click()
+    expect(page.get_by_text("All changes saved.", exact=True)).to_be_visible()
+    saved = state["posts"][-1]["configuration"]["applications"][0]
+    assert saved["maximum_preheat_c"] is None
+    assert not any(source["allow_scheduling"] for source in saved["sources"])
+
+
 def test_comfort_actions_align_with_field_on_desktop_tablet_and_mobile(thermal_monitor_page):
     """Comfort actions share a level row and wrap below the field on smaller screens."""
     page, _state = thermal_monitor_page
