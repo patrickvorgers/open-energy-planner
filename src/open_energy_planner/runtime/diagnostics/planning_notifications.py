@@ -43,7 +43,12 @@ def planning_notice(state: PlanningStatus, text: NoticeText) -> Notification:
     content = (
         NoticeText(
             "Calculating a new energy plan",
-            "A new energy plan is being calculated and checked. "
+            (
+                ""
+                if state.cause in {"worker_timeout", "reserve_recovery_time_limit"}
+                else "The inputs are usable again. "
+            )
+            + "A new energy plan is being calculated and checked. "
             "This can take a few minutes. Planning has not yet completed successfully.",
             "View planning status" if text.action_path else None,
             text.action_path,

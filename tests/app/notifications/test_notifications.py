@@ -320,6 +320,7 @@ def test_timeout_notice_explains_failure_and_retries_until_publication(reason, t
     assert recovering["state"] == "recovering"
     assert recovering["action_path"] == failed["action_path"]
     assert "A new energy plan is being calculated and checked" in recovering["message"]
+    assert "The inputs are usable again" not in recovering["message"]
     assert notification_document("ready", "validated", None)["notifications"] == []
 
 
