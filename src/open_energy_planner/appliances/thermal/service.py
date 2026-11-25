@@ -385,12 +385,12 @@ class ThermalService:
             if observed > reported + timedelta(seconds=MAX_THERMAL_CLOCK_SKEW_SECONDS):
                 raise ValueError("Thermal observation expired")
             admitted[row["id"]] = {**deepcopy(row), "captured_at": body["at"]}
-        climate = self.receive_climate(body.get("climate", []), reported, now)
+        climate = self.receive_climate(body.get("climate", []), reported)
         self.readings, self.climate_readings = admitted, climate
         self.captured_at = reported
 
-    def receive_climate(self, rows, captured, now):
-        """Admit fresh current room temperatures and explicit HA thermostat targets."""
+    def receive_climate(self, rows, captured):
+        """Admit current thermostat values from an already validated integration capture."""
         if not isinstance(rows, list):
             raise TypeError("Invalid thermal readings")
         allowed = {
@@ -415,8 +415,7 @@ class ThermalService:
             observed = instant(row["observed_at"])
             if observed > captured + timedelta(seconds=MAX_THERMAL_CLOCK_SKEW_SECONDS):
                 raise ValueError("Thermal observation expired")
-            if (now - observed).total_seconds() < TEMPERATURE_MAX_AGE_SECONDS:
-                admitted[row["id"]] = dict(row)
+            admitted[row["id"]] = {**row, "captured_at": captured.isoformat()}
         return admitted
 
     def space_heating_status(self, application, now):
@@ -426,8 +425,9 @@ class ThermalService:
         reading = self.climate_readings.get(application["id"])
         if (
             reading is not None
-            and (now - instant(reading["observed_at"])).total_seconds()
-            >= TEMPERATURE_MAX_AGE_SECONDS
+            and not 0
+            <= (now - instant(reading["captured_at"])).total_seconds()
+            < TEMPERATURE_MAX_AGE_SECONDS
         ):
             reading = None
         allows = any(source["allow_scheduling"] for source in application["sources"])

@@ -142,6 +142,50 @@ def test_mode_attribution_reports_a_shorter_window_only_at_retention_capacity(se
     }
 
 
+def test_thermostat_target_expires_when_current_integration_captures_stop(service):
+    """The original thermostat timestamp stays intact as current captures keep the target fresh."""
+    identity = str(uuid4())
+    thermostat = "climate.room"
+    discovery = catalogue()
+    discovery["areas"] = [{"id": "room", "name": "Room"}]
+    discovery["entities"].append({"entity_id": thermostat})
+    configuration = settings()
+    configuration["applications"] = [
+        {
+            "id": identity,
+            "kind": "space_heating",
+            "area_id": "room",
+            "name": "Room",
+            "climate_entity": thermostat,
+            "maximum_preheat_c": 0.5,
+            "sources": [{"energy_entity": ENERGY, "allow_scheduling": True}],
+        }
+    ]
+    service.configure(configuration, discovery)
+    observed_at = (NOW - timedelta(minutes=30)).isoformat()
+    row = {
+        "id": identity,
+        "entity_id": thermostat,
+        "temperature_c": 19,
+        "target_c": 20,
+        "observed_at": observed_at,
+    }
+    capture = {**report(service), "climate": [row]}
+    service.receive(capture, NOW)
+    saved = service.document(NOW, discovery)["applications"][0]
+    assert saved["actual"] == {**row, "captured_at": NOW.isoformat()}
+    assert saved["preheat_limit_c"] == 20.5
+
+    expired_at = NOW + timedelta(minutes=5)
+    expired = service.document(expired_at, discovery)["applications"][0]
+    assert expired["actual"] is None
+    assert expired["preheat_limit_c"] is None
+    service.receive({**capture, "at": expired_at.isoformat()}, expired_at)
+    refreshed = service.document(expired_at, discovery)["applications"][0]
+    assert refreshed["actual"] == {**row, "captured_at": expired_at.isoformat()}
+    assert refreshed["preheat_limit_c"] == 20.5
+
+
 def snapshot():
     """Total household demand is 1 kWh, of which the boiler baseline contributes 0.4 kWh."""
     inputs = InstallationProblem((Interval(NOW, 1, 0.3, 0, load_kwh=1),), (), (), (), 5000, 5000)

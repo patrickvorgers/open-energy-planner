@@ -211,11 +211,12 @@ def test_shared_heat_source_keeps_one_weather_forecast_and_configured_boiler(tmp
             async with client.post(url + "/v1/thermal/configuration", json=duplicate) as response:
                 assert response.status == 400
                 assert "only one space heating application" in (await response.text())
-            for target in (20, 21.5):
-                now = datetime.now(UTC).isoformat()
+            for target, reporting_age in ((20, timedelta(minutes=30)), (21.5, timedelta())):
+                now = datetime.now(UTC)
+                observed_at = (now - reporting_age).isoformat()
                 observation = {
                     "configuration_version": saved["configuration_version"],
-                    "at": now,
+                    "at": now.isoformat(),
                     "readings": [],
                     "climate": [
                         {
@@ -223,7 +224,7 @@ def test_shared_heat_source_keeps_one_weather_forecast_and_configured_boiler(tmp
                             "entity_id": thermostat,
                             "temperature_c": 19.5,
                             "target_c": target,
-                            "observed_at": now,
+                            "observed_at": observed_at,
                         }
                     ],
                 }
@@ -233,6 +234,8 @@ def test_shared_heat_source_keeps_one_weather_forecast_and_configured_boiler(tmp
                     assert response.status == 200, await response.text()
                     changed = await response.json()
                 assert changed["applications"][0]["preheat_limit_c"] == target + 0.5
+                assert changed["applications"][0]["actual"]["observed_at"] == observed_at
+                assert changed["applications"][0]["actual"]["captured_at"] == now.isoformat()
                 assert (
                     changed["applications"][0]["planning_status"]
                     == "Space heating scheduling is not available yet"
