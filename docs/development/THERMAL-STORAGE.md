@@ -225,6 +225,26 @@ heating needs an independently validated model of how the shared capacity is
 split. The planner must include the eligible source's planned electrical intake
 exactly once and preserve its ordinary baseline when active work is withheld.
 
+The room implementation learns a positive first-order heat-loss rate from idle
+hours and a response in degrees Celsius per electrical kWh from the older
+training hours. It admits the model only when a separate chronological holdout
+contains both idle and heated periods and predictive error is within the
+configured policy. Hour-boundary indoor observations accumulate through the
+existing Home Assistant capture. The app joins those samples to recorded
+outdoor temperature and the Energy meter's Recorder history. It does not
+estimate a separate COP. The passed calibration range limits the allowed
+weather forecast and the largest holdout error narrows the modeled ceiling.
+
+Active work currently accepts one unshared heat source per heating application.
+The existing joint solver replaces that source's AC forecast from the dispatch
+boundary. The ordinary forecast covers the earlier part of the horizon.
+Room commands use the current target, the selected margin and the existing
+thermal plan publication lifecycle. The integration withdraws a room command
+if the local thermostat changes, becomes stale, leaves heating mode or reaches
+the upper limit. It leaves comfort recovery to local controls if the room is
+below the thermostat target during a proposed off interval. A reflected
+virtual target is withheld as an ambiguous new reference target.
+
 Verify active planning with independent comfort and energy arithmetic, a change
 of live thermostat target during the horizon, withdrawn inputs, exclusive
 shared capacity, and a controller that ignores stale or replaced commands.

@@ -828,6 +828,13 @@ the existing shared document transaction.
 timestamped mode reports by Energy meter and application UUID for electricity
 attribution. Removing sources or restarting does not restore an old report as
 current. Current climate readings and thermostat targets are transient.
+`space-heating-history.json` keeps up to 30 days of hourly indoor temperatures
+in degrees Celsius by a digest of the application, HA area, climate entity and
+source bindings. Samples are timestamps and recorded temperatures. Only a
+fresh thermal observation establishes the current room temperature and target.
+An active room plan archives the fitted response, observed reference target,
+dispatch boundary and outdoor temperature profile. Older boiler work without
+an ambient profile continues to use its fixed surroundings temperature.
 Thermal work also retains `state_at`, the model initialization time, and
 `initially_heating`, its measured-running admission classification. Original HA
 report timestamps remain in `thermal_evidence`. Each thermal reading also retains

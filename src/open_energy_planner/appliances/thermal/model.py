@@ -61,6 +61,7 @@ class ThermalWork:
     terminal_c: float
     state_at: datetime | None = None
     initially_heating: bool = False
+    ambient_profile_c: tuple[float, ...] = ()
 
     def __post_init__(self):
         """Require bounded physical quantities and an immutable nonnegative demand forecast."""
@@ -99,6 +100,14 @@ class ThermalWork:
             raise TypeError("Thermal demand must be immutable")
         for demand in self.demand_kwh:
             number(demand, 0, MAX_THERMAL_INTERVAL_DRAW_KWH)
+        if not isinstance(self.ambient_profile_c, tuple):
+            raise TypeError("Thermal ambient profile must be immutable")
+        for temperature in self.ambient_profile_c:
+            number(temperature, -55, self.maximum_c)
+
+    def ambient_for(self, index):
+        """Return the varying room environment or the legacy fixed tank surroundings."""
+        return self.ambient_profile_c[index] if self.ambient_profile_c else self.ambient_c
 
 
 @dataclass(frozen=True)

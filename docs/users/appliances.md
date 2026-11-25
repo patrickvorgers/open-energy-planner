@@ -40,9 +40,21 @@ physical equipment.
 **Allow scheduling** records permission per source. For space heating with
 permission, enter **Maximum preheating** and select a thermostat. The settings
 show the current usable thermostat target, preheating limit and readiness.
-Space heating currently runs in forecast-only mode. The app saves your permission
-for future scheduling. Existing supported fixed-power electric boilers continue to
-use their own thermal plan, volume, limits, measured power and hourly heat draw.
+Active space heating requires one heat source with its own Energy meter and a
+reference thermostat in heating mode. Forecasting continues while indoor,
+outdoor or electricity history is incomplete. Multiple sources in one area
+and devices shared across applications use forecasting. Existing fixed-power
+boilers continue to use their own thermal plan, volume, limits, measured power
+and hourly heat draw.
+
+For active space heating, use the OEP virtual **Room heating requested** and
+**Requested preheating target** entities in your Home Assistant automation.
+The binary sensor distinguishes an authorized off interval from an unavailable
+plan. Fall back to normal thermostat control when it is unavailable. The
+temperature entity supplies the limit during a heating request. Keep the
+reference thermostat's own target independent of your automation. Use the
+virtual target as a cap for the physical heat source and keep the thermostat
+and equipment protections active.
 
 ## Schedule a complete appliance cycle
 

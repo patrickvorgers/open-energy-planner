@@ -12,7 +12,7 @@ from homeassistant.util import dt as dt_util
 
 from .entity import PlannerEntity
 from .protocol import timestamp
-from .thermal import command, reading
+from .thermal import command, reading, room_command
 
 HEATING_POWER_FRACTION = 0.5
 LABELS = {
@@ -27,6 +27,66 @@ LABELS = {
 }
 MODE_UNKNOWN = "Unknown"
 MODE_VALIDITY_SECONDS = 300
+
+
+class RoomPreheatTarget(PlannerEntity, SensorEntity):
+    """Expose a time-bounded room target for a user-owned automation."""
+
+    planning_group = "thermal"
+    _attr_device_class = SensorDeviceClass.TEMPERATURE
+    _attr_native_unit_of_measurement = UnitOfTemperature.CELSIUS
+    _attr_suggested_display_precision = 2
+
+    def __init__(self, coordinator, row, key):
+        """Preserve one virtual device identity per configured heating area."""
+        super().__init__(coordinator, "thermal_" + row["id"], key, "Requested preheating target")
+        self.identity = row["id"]
+        self._attr_device_info["name"] = row["name"]
+
+    @property
+    def native_value(self):
+        """Return the setpoint only within a current authorized heating interval."""
+        request = room_command(self.coordinator, self.identity)
+        return request[1] if request and request[0] else None
+
+    @property
+    def extra_state_attributes(self):
+        """Identify the source and independent reference for a consuming automation."""
+        row = next(
+            (
+                row
+                for row in self.coordinator.thermal.get("climate_bindings", [])
+                if row["id"] == self.identity
+            ),
+            {},
+        )
+        return {
+            "heat_source": row.get("energy_entity"),
+            "reference_thermostat": row.get("climate_entity"),
+        }
+
+
+class RoomHeatRequested(PlannerEntity, BinarySensorEntity):
+    """Separate an explicit valid no-heat interval from loss of planning authority."""
+
+    planning_group = "thermal"
+
+    def __init__(self, coordinator, row, key):
+        """Create the authorization indicator on the same virtual room device."""
+        super().__init__(coordinator, "thermal_" + row["id"], key, "Room heating requested")
+        self.identity = row["id"]
+        self._attr_device_info["name"] = row["name"]
+
+    @property
+    def available(self):
+        """Expose off only while Home Assistant can still verify a plan for this room."""
+        return room_command(self.coordinator, self.identity) is not None
+
+    @property
+    def is_on(self):
+        """Return explicit requested heat, off, or unknown."""
+        request = room_command(self.coordinator, self.identity)
+        return request[0] if request else None
 
 
 class ThermalOperatingMode(PlannerEntity, SelectEntity):

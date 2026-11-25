@@ -364,6 +364,10 @@ def validate_thermal_context(context, steps):
         {key: set() for key in ("energy_entity", "temperature_entity", "power_entity")},
     )
     for row in rows:
+        if isinstance(row, dict) and row.get("kind") == "space_heating":
+            identity = validate_space_heating_context(row, by_id, seen)
+            by_id[identity] = row
+            continue
         if not isinstance(row, dict) or set(row) != fields:
             raise ValueError("Invalid thermal execution fields")
         identity = identifier(row["id"])
@@ -416,6 +420,49 @@ def validate_thermal_context(context, steps):
                 by_id[command.device_id]["heater_w"],
             ):
                 raise ValueError("Thermal command differs from fixed heater power")
+            if command.kind == "thermal" and command.power_w:
+                row = by_id[command.device_id]
+                if row.get("kind") == "space_heating" and step.start < timestamp(row["ready_at"]):
+                    raise ValueError("Space heating command precedes its dispatch boundary")
+
+
+def validate_space_heating_context(row, by_id, seen):
+    """Bind learned heating power to one independent thermostat and a bounded setpoint."""
+    if set(row) != {
+        "id",
+        "kind",
+        "energy_entity",
+        "climate_entity",
+        "heater_w",
+        "target_c",
+        "maximum_preheat_c",
+        "ready_at",
+    }:
+        raise ValueError("Invalid space heating execution fields")
+    identity = identifier(row["id"])
+    meter = identifier(row["energy_entity"])
+    climate = identifier(row["climate_entity"])
+    if (
+        str(UUID(identity)) != identity
+        or identity in by_id
+        or not fullmatch(r"sensor\.[a-z0-9_]+", meter)
+        or meter in seen["energy_entity"]
+        or not fullmatch(r"climate\.[a-z0-9_]+", climate)
+    ):
+        raise ValueError("Invalid or duplicate space heating source")
+    for field, lower, upper in (
+        ("heater_w", 100, 12000),
+        ("target_c", 0, 50),
+        ("maximum_preheat_c", 0, 3),
+    ):
+        value = row[field]
+        if type(value) not in (int, float) or not isfinite(value) or not lower <= value <= upper:
+            raise ValueError("Invalid space heating execution quantity")
+    if not float(row["heater_w"]).is_integer() or row["target_c"] + row["maximum_preheat_c"] > 50:
+        raise ValueError("Invalid space heating execution bounds")
+    timestamp(row["ready_at"])
+    seen["energy_entity"].add(meter)
+    return identity
 
 
 @dataclass(frozen=True)

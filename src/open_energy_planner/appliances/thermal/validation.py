@@ -97,9 +97,14 @@ def validate(problem, plan, tolerance):
                     if decay_exponent < SMALL_DECAY_EXPONENT
                     else (1 - decay) / decay_exponent
                 )
+                ambient = (
+                    work.ambient_profile_c[interval_index]
+                    if work.ambient_profile_c
+                    else work.ambient_c
+                )
                 expected_temperature = (
-                    work.ambient_c
-                    + (previous[identity] - work.ambient_c) * decay
+                    ambient
+                    + (previous[identity] - ambient) * decay
                     + (
                         work.efficiency * row.ac_kwh
                         - work.demand_kwh[interval_index]

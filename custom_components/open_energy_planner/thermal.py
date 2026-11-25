@@ -29,6 +29,8 @@ MAX_THERMAL_TEXT_LENGTH = 160
 MIN_TEMPERATURE_C = 0
 MAX_TEMPERATURE_C = 120
 MAX_SPACE_TEMPERATURE_C = 50
+SPACE_OBSERVATION_VALIDITY_SECONDS = 300
+SPACE_TARGET_TOLERANCE_C = 0.01
 SENSOR_PATTERN = re.compile(r"sensor\.[a-z0-9_]+")
 TEMPERATURE_ENTITY_PATTERN = re.compile(r"(?:sensor|water_heater)\.[a-z0-9_]+")
 HASH_PATTERN = re.compile(r"[0-9a-f]{64}")
@@ -143,6 +145,7 @@ def read_climate(hass, application, now):
             "id": application["id"],
             "entity_id": entity_id,
             "observed_at": observed.isoformat(),
+            "heat_mode": state.state == "heat",
             **values,
         }
     except (AttributeError, KeyError, TypeError, ValueError, OverflowError):
@@ -356,7 +359,29 @@ def receive(document):
         climate = identifier(application["climate_entity"])
         if not re.fullmatch(r"climate\.[a-z0-9_]+", climate):
             raise ValueError("Invalid climate entity")
-        climate_bindings.append({"id": identity, "climate_entity": climate})
+        binding = {"id": identity, "climate_entity": climate}
+        sources = application.get("sources", [])
+        if not isinstance(sources, list):
+            raise TypeError("Invalid room heat sources")
+        if len(sources) == 1 and sources[0].get("allow_scheduling") is True:
+            meter = identifier(sources[0].get("energy_entity"))
+            name = application.get("name")
+            if (
+                not SENSOR_PATTERN.fullmatch(meter)
+                or not isinstance(name, str)
+                or not name.strip()
+                or len(name) > MAX_THERMAL_TEXT_LENGTH
+            ):
+                raise ValueError("Invalid room energy meter")
+            margin = number(application["maximum_preheat_c"], 0, 3)
+            binding.update(
+                {
+                    "name": name,
+                    "energy_entity": meter,
+                    "maximum_preheat_c": margin,
+                }
+            )
+        climate_bindings.append(binding)
     return {
         "configuration_version": document["configuration_version"],
         "revision": document["revision"],
@@ -369,6 +394,9 @@ def receive(document):
 def command(coordinator, device_id):
     """Return current heating permission only while plan, ownership and local evidence agree."""
     try:
+        if any(row["id"] == device_id for row in coordinator.thermal.get("climate_bindings", [])):
+            room = room_command(coordinator, device_id)
+            return room[0] if room else None
         now = dt_util.utcnow()
         document = coordinator.thermal
         device = next(row for row in document["devices"] if row["id"] == device_id)
@@ -419,9 +447,65 @@ def command(coordinator, device_id):
         return None
 
 
+def room_command(coordinator, identity):
+    """Resolve a confirmed room request only while the original HA thermostat target is current."""
+    try:
+        document = coordinator.thermal
+        binding = next(row for row in document.get("climate_bindings", []) if row["id"] == identity)
+        plan = coordinator.schedule.document
+        context = plan.get("thermal_context", {}) if plan else {}
+        if coordinator.closed or context.get("revision") != document["revision"]:
+            return None
+        frozen = next(row for row in context["devices"] if row["id"] == identity)
+        if frozen.get("kind") != "space_heating" or any(
+            frozen.get(field) != binding.get(field)
+            for field in ("energy_entity", "climate_entity", "maximum_preheat_c")
+        ):
+            return None
+        meter = binding["energy_entity"]
+        if meter not in {
+            row["entity_id"] for row in coordinator.consumer_forecasts.get("options", [])
+        } or any(source["meter"] == meter for source in document.get("shared_sources", [])):
+            return None
+        now = dt_util.utcnow()
+        if now < timestamp(frozen["ready_at"]):
+            return None
+        reading = read_climate(coordinator.hass, binding, now)
+        limit = frozen["target_c"] + frozen["maximum_preheat_c"]
+        if (
+            not reading
+            or not reading["heat_mode"]
+            or (now - timestamp(reading["observed_at"])).total_seconds()
+            >= SPACE_OBSERVATION_VALIDITY_SECONDS
+            or abs(reading["target_c"] - frozen["target_c"]) >= SPACE_TARGET_TOLERANCE_C
+            or reading["temperature_c"] >= limit
+        ):
+            return None
+        request = coordinator.schedule.project(now).command
+        if request is None:
+            return None
+        target = next(
+            target
+            for target in request.devices
+            if target.kind == "thermal" and target.device_id == identity
+        )
+        if type(target.power_w) not in (int, float) or target.power_w not in (
+            0,
+            frozen["heater_w"],
+        ):
+            return None
+        if target.power_w == 0 and reading["temperature_c"] < reading["target_c"]:
+            return None
+        return target.power_w > 0, limit
+    except (AttributeError, KeyError, TypeError, ValueError, StopIteration, OverflowError):
+        return None
+
+
 def register_entities(coordinator, async_add_entities, platform):
     """Reconcile virtual thermal entities without changing user-assigned names or source devices."""
     from .thermal_controls import (
+        RoomHeatRequested,
+        RoomPreheatTarget,
         ThermalEnabled,
         ThermalHeating,
         ThermalMinimum,
@@ -479,6 +563,22 @@ def register_entities(coordinator, async_add_entities, platform):
                 {
                     (row["id"], "operating_mode"): (row, ThermalOperatingMode)
                     for row in getattr(coordinator, "thermal", {}).get("shared_sources", [])
+                }
+            )
+        if platform == "sensor":
+            desired.update(
+                {
+                    (row["id"], "preheat_target"): (row, RoomPreheatTarget)
+                    for row in getattr(coordinator, "thermal", {}).get("climate_bindings", [])
+                    if "energy_entity" in row
+                }
+            )
+        if platform == "binary_sensor":
+            desired.update(
+                {
+                    (row["id"], "room_heat_requested"): (row, RoomHeatRequested)
+                    for row in getattr(coordinator, "thermal", {}).get("climate_bindings", [])
+                    if "energy_entity" in row
                 }
             )
         additions = []

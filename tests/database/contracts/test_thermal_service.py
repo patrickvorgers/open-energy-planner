@@ -25,6 +25,7 @@ from open_energy_planner.storage.adapters import documents as document_adapter
 from open_energy_planner.storage.adapters.documents import SqlDocuments
 from open_energy_planner.storage.adapters.lifecycle.schema import SCHEMA
 from tests.app.ev.support.devices import planned_requests
+from tests.app.thermal.test_room_preheating import METER, ROOM, application, evidence
 from tests.database.support.backends import BACKENDS
 from tests.database.support.thermal import DEVICE, ENERGY, catalogue, settings
 
@@ -129,6 +130,109 @@ def forecasts(service):
 def prepare(service, now=NOW):
     """Use production preparation and real consumer evidence, without fabricating a residual result."""
     return service.prepare(snapshot(), SimpleNamespace(), now, "Europe/Amsterdam")
+
+
+def test_room_planning_uses_one_meter_and_withdraws_on_target_changes_or_sharing(service):
+    """Admit a calibrated source, retain baseline until dispatch and never authorize shared heat."""
+    metadata = catalogue()
+    metadata["areas"] = [{"id": "room", "name": "Room"}]
+    metadata["entities"].extend(
+        [
+            {"entity_id": METER, "device_class": "energy", "unit": "kWh"},
+            {"entity_id": "climate.room"},
+        ]
+    )
+    metadata["suggestions"]["consumers"].append({"entity_id": METER, "upstream": None})
+    service.consumers.sync(metadata)
+    config = settings()
+    config["stores"][0]["enabled"] = False
+    room = application()
+    config["applications"] = [room]
+    service.configure(config, metadata)
+    indoor, outdoor, history = evidence()
+    service.room_history[service.room_history_id(room)] = indoor
+    service.consumers.histories[METER] = history
+    component = {
+        "issued_at": NOW.isoformat(),
+        "steps": [{"start": NOW.isoformat(), "duration_h": 1, "kwh": 0.2}],
+    }
+    service.consumers.result = {
+        "residual_baseline": {
+            "issued_at": NOW.isoformat(),
+            "steps": [{"start": NOW.isoformat(), "duration_h": 1, "kwh": 0.6}],
+        },
+        "devices": [
+            {
+                "entity_id": entity,
+                "forecast": component,
+                "baseline_forecast": component,
+            }
+            for entity in (ENERGY, METER)
+        ],
+    }
+    live = SimpleNamespace(
+        temperatures=outdoor,
+        live_temperatures=(SimpleNamespace(start=NOW, celsius=8),),
+        live_weather_until=NOW + timedelta(hours=2),
+    )
+
+    def observe(target, now, plan=None):
+        """Send a fresh room measurement through the authority boundary."""
+        service.receive(
+            {
+                "configuration_version": service.configuration_version,
+                "at": now.isoformat(),
+                "readings": [],
+                "climate": [
+                    {
+                        "id": ROOM,
+                        "entity_id": "climate.room",
+                        "temperature_c": 20.28,
+                        "target_c": target,
+                        "heat_mode": True,
+                        "observed_at": now.isoformat(),
+                    }
+                ],
+            },
+            now,
+            plan,
+        )
+
+    observe(20, NOW)
+    prepared = service.prepare(snapshot(), live, NOW, "Europe/Amsterdam")
+    (work,) = prepared.problem.thermal_work
+    assert work.device_id == ROOM
+    assert work.minimum_c == 20
+    assert work.terminal_c == 20
+    assert prepared.thermal_evidence[0]["configuration"]["energy_entity"] == METER
+    assert sum(step.load_kwh for step in prepared.problem.intervals) == pytest.approx(
+        0.8 + 0.2 * (work.ready_at - NOW).total_seconds() / 3600
+    )
+    observe(20.2, NOW + timedelta(seconds=10))
+    assert service.revision != prepared.thermal_revision
+    observe(
+        20.6,
+        NOW + timedelta(seconds=20),
+        {"thermal_context": {"devices": [prepared.thermal_evidence[0]["configuration"]]}},
+    )
+    assert service.fresh_climate(ROOM, NOW + timedelta(seconds=20)) is None
+
+    saved = deepcopy(config)
+    tank = {
+        "id": str(uuid4()),
+        "kind": "hot_water",
+        "name": "Water",
+        "area_id": None,
+        "climate_entity": None,
+        "maximum_preheat_c": None,
+        "sources": [{"energy_entity": METER, "allow_scheduling": False}],
+    }
+    saved["applications"].append(tank)
+    service.configure(saved, metadata)
+    observe(20, NOW + timedelta(seconds=30))
+    shared = service.prepare(snapshot(), live, NOW + timedelta(seconds=30), "Europe/Amsterdam")
+    assert shared.problem.thermal_work == ()
+    assert sum(step.load_kwh for step in shared.problem.intervals) == pytest.approx(1)
 
 
 def test_real_mixed_preparation_preserves_cycle_ev_thermal_ownership_through_publication(service):

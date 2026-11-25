@@ -210,7 +210,9 @@ export function renderApplication({app, current, draft, editor, summary, dialog,
         label.className = "settings-switch";
         const permission = node("span", "Allow scheduling");
         permit.setAttribute("aria-label", "Allow scheduling");
-        permission.append(node("small", "Saves your permission for future scheduling."));
+        permission.append(node("small", space
+            ? "Uses a validated model and a current thermostat target to plan preheating."
+            : "Saves your permission for future scheduling."));
         label.append(permit, permission);
         section.append(label, action("Remove " + sourceName(source), () => {
             app.sources = app.sources.filter(row => row !== source);
