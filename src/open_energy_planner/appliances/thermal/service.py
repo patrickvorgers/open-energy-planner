@@ -67,6 +67,114 @@ CONFIGURATION_FIELDS = {
 }
 
 
+def _validate_store_shape(row):
+    """Validate one saved boiler and its configured measurement identities."""
+    if not isinstance(row, dict) or set(row) != CONFIGURATION_FIELDS:
+        raise ValueError("Invalid thermal settings")
+    if not isinstance(row["id"], str) or str(UUID(row["id"])) != row["id"]:
+        raise ValueError("Invalid thermal identity")
+    if type(row["enabled"]) is not bool:
+        raise ValueError("Thermal enabled must be boolean")
+    for field, (minimum, maximum) in THERMAL_CONFIGURATION_BOUNDS.items():
+        number(row[field], minimum, maximum)
+    if row["minimum_c"] > row["maximum_c"] or row["ambient_c"] > row["maximum_c"]:
+        raise ValueError("Thermal temperatures exceed the supported planning maximum")
+    if row["heater_w"] != round(row["heater_w"]):
+        raise ValueError("Heater power requires whole watts")
+    profile = row["draw_profile_kwh"]
+    if not isinstance(profile, list) or len(profile) != HOURS_PER_DAY:
+        raise ValueError("Specify 24 hourly thermal draw rates")
+    for rate in profile:
+        number(rate, 0, MAX_THERMAL_HOURLY_DRAW_KWH)
+    if row["enabled"] and sum(profile) <= 0:
+        raise ValueError("Declare expected hot-water heat demand before enabling")
+    for field, domains in (
+        ("energy_entity", ("sensor",)),
+        ("power_entity", ("sensor",)),
+        ("temperature_entity", ("sensor", "water_heater")),
+    ):
+        value = row[field]
+        _validate_store_entity(value, domains)
+
+
+def _validate_store_entity(value, domains):
+    """Require a bounded Home Assistant entity identity from an allowed domain."""
+    if not isinstance(value, str) or len(value) > MAX_THERMAL_ENTITY_ID_LENGTH or "." not in value:
+        raise ValueError("Select a Home Assistant entity")
+    domain, identifier = value.split(".", 1)
+    if (
+        domain not in domains
+        or not identifier
+        or not identifier.isascii()
+        or not identifier.replace("_", "").isalnum()
+    ):
+        raise ValueError("Invalid Home Assistant entity")
+
+
+def _admit_boiler_readings(rows, allowed, reported, captured_at):
+    """Validate one complete capture of configured boiler readings."""
+    if not isinstance(rows, list):
+        raise TypeError("Invalid thermal readings")
+    admitted = {}
+    for row in rows:
+        if (
+            not isinstance(row, dict)
+            or set(row) != {"id", "temperature_c", "power_w", "observed_at"}
+            or row["id"] not in allowed
+            or row["id"] in admitted
+        ):
+            raise ValueError("Invalid thermal reading identity")
+        number(row["temperature_c"], *THERMAL_CONFIGURATION_BOUNDS["minimum_c"])
+        number(row["power_w"], 0, THERMAL_CONFIGURATION_BOUNDS["heater_w"][1])
+        observed = instant(row["observed_at"])
+        if observed > reported + timedelta(seconds=MAX_THERMAL_CLOCK_SKEW_SECONDS):
+            raise ValueError("Thermal observation expired")
+        admitted[row["id"]] = {**deepcopy(row), "captured_at": captured_at}
+    return admitted
+
+
+def _stored_boiler_plan(plan, revision, identity):
+    """Project planned boiler intervals from the plan with the matching Thermal revision."""
+    planned = []
+    unmet_draw = None
+    work = None
+    if plan and plan.get("thermal_context", {}).get("revision") == revision:
+        unmet_draws = [
+            result.get("unmet_draw_kwh", 0)
+            for flow in plan.get("expected_flows", [])
+            for result in flow.get("thermal", [])
+            if result["device_id"] == identity
+        ]
+        unmet_draw = sum(unmet_draws) if unmet_draws else None
+        work = next(
+            (
+                work
+                for work in plan.get("input_snapshot", {})
+                .get("problem", {})
+                .get("thermal_work", [])
+                if work["device_id"] == identity
+            ),
+            None,
+        )
+        for step, flow in zip(
+            plan.get("input_snapshot", {}).get("problem", {}).get("intervals", []),
+            plan.get("expected_flows", []),
+            strict=True,
+        ):
+            for result in flow.get("thermal", []):
+                if result["device_id"] == identity:
+                    planned.append(
+                        {
+                            "start": step["start"],
+                            "end": (
+                                instant(step["start"]) + timedelta(hours=step["duration_h"])
+                            ).isoformat(),
+                            **{key: result[key] for key in ("power_w", "end_c", "shortfall_kwh")},
+                        }
+                    )
+    return planned, unmet_draw, work
+
+
 def instant(value):
     """Parse only aware ISO timestamps and normalize comparison to UTC."""
     parsed = datetime.fromisoformat(value)
@@ -254,45 +362,7 @@ class ThermalService:
         if not isinstance(stores, list):
             raise TypeError("Expected thermal stores")
         for row in stores:
-            if not isinstance(row, dict) or set(row) != CONFIGURATION_FIELDS:
-                raise ValueError("Invalid thermal settings")
-            if not isinstance(row["id"], str) or str(UUID(row["id"])) != row["id"]:
-                raise ValueError("Invalid thermal identity")
-            if type(row["enabled"]) is not bool:
-                raise ValueError("Thermal enabled must be boolean")
-            for field, (minimum, maximum) in THERMAL_CONFIGURATION_BOUNDS.items():
-                number(row[field], minimum, maximum)
-            if row["minimum_c"] > row["maximum_c"] or row["ambient_c"] > row["maximum_c"]:
-                raise ValueError("Thermal temperatures exceed the supported planning maximum")
-            if row["heater_w"] != round(row["heater_w"]):
-                raise ValueError("Heater power requires whole watts")
-            profile = row["draw_profile_kwh"]
-            if not isinstance(profile, list) or len(profile) != HOURS_PER_DAY:
-                raise ValueError("Specify 24 hourly thermal draw rates")
-            for rate in profile:
-                number(rate, 0, MAX_THERMAL_HOURLY_DRAW_KWH)
-            if row["enabled"] and sum(profile) <= 0:
-                raise ValueError("Declare expected hot-water heat demand before enabling")
-            for field, domains in (
-                ("energy_entity", ("sensor",)),
-                ("power_entity", ("sensor",)),
-                ("temperature_entity", ("sensor", "water_heater")),
-            ):
-                value = row[field]
-                if (
-                    not isinstance(value, str)
-                    or len(value) > MAX_THERMAL_ENTITY_ID_LENGTH
-                    or "." not in value
-                ):
-                    raise ValueError("Select a Home Assistant entity")
-                domain, identifier = value.split(".", 1)
-                if (
-                    domain not in domains
-                    or not identifier
-                    or not identifier.isascii()
-                    or not identifier.replace("_", "").isalnum()
-                ):
-                    raise ValueError("Invalid Home Assistant entity")
+            _validate_store_shape(row)
         for field in ("id", "energy_entity", "temperature_entity", "power_entity"):
             if len({row[field] for row in stores}) != len(stores):
                 raise ValueError("Thermal devices and measurement bindings must be unique")
@@ -381,25 +451,9 @@ class ThermalService:
             raise ValueError("Thermal report expired")
         if self.captured_at is not None and reported < self.captured_at:
             raise ValueError("Thermal capture went backwards")
-        rows = body["readings"]
-        if not isinstance(rows, list):
-            raise TypeError("Invalid thermal readings")
-        allowed = {row["id"] for row in self.state["stores"]}
-        admitted = {}
-        for row in rows:
-            if (
-                not isinstance(row, dict)
-                or set(row) != {"id", "temperature_c", "power_w", "observed_at"}
-                or row["id"] not in allowed
-                or row["id"] in admitted
-            ):
-                raise ValueError("Invalid thermal reading identity")
-            number(row["temperature_c"], *THERMAL_CONFIGURATION_BOUNDS["minimum_c"])
-            number(row["power_w"], 0, THERMAL_CONFIGURATION_BOUNDS["heater_w"][1])
-            observed = instant(row["observed_at"])
-            if observed > reported + timedelta(seconds=MAX_THERMAL_CLOCK_SKEW_SECONDS):
-                raise ValueError("Thermal observation expired")
-            admitted[row["id"]] = {**deepcopy(row), "captured_at": body["at"]}
+        admitted = _admit_boiler_readings(
+            body["readings"], {row["id"] for row in self.state["stores"]}, reported, body["at"]
+        )
         climate = self.receive_climate(body.get("climate", []), reported, now)
         self.record_room_history(climate, reported)
         self.discard_echoed_targets(climate, plan)
@@ -759,46 +813,7 @@ class ThermalService:
                 <= (now - instant(reading["captured_at"])).total_seconds()
                 < TEMPERATURE_MAX_AGE_SECONDS
             )
-            planned = []
-            unmet_draw = None
-            work = None
-            if plan and plan.get("thermal_context", {}).get("revision") == self.revision:
-                unmet_draws = [
-                    result.get("unmet_draw_kwh", 0)
-                    for flow in plan.get("expected_flows", [])
-                    for result in flow.get("thermal", [])
-                    if result["device_id"] == row["id"]
-                ]
-                unmet_draw = sum(unmet_draws) if unmet_draws else None
-                work = next(
-                    (
-                        work
-                        for work in plan.get("input_snapshot", {})
-                        .get("problem", {})
-                        .get("thermal_work", [])
-                        if work["device_id"] == row["id"]
-                    ),
-                    None,
-                )
-                for step, flow in zip(
-                    plan.get("input_snapshot", {}).get("problem", {}).get("intervals", []),
-                    plan.get("expected_flows", []),
-                    strict=True,
-                ):
-                    for result in flow.get("thermal", []):
-                        if result["device_id"] == row["id"]:
-                            planned.append(
-                                {
-                                    "start": step["start"],
-                                    "end": (
-                                        instant(step["start"]) + timedelta(hours=step["duration_h"])
-                                    ).isoformat(),
-                                    **{
-                                        key: result[key]
-                                        for key in ("power_w", "end_c", "shortfall_kwh")
-                                    },
-                                }
-                            )
+            planned, unmet_draw, work = _stored_boiler_plan(plan, self.revision, row["id"])
             source = metadata.get(row["energy_entity"], {})
             devices.append(
                 {

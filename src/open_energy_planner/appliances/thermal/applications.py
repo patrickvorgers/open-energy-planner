@@ -64,43 +64,47 @@ def validate_shape(applications):
         name = application["name"]
         if not isinstance(name, str) or not name.strip() or len(name) > MAX_APPLICATION_NAME_LENGTH:
             raise ValueError(INVALID_APPLICATION)
-        sources = application["sources"]
-        if not isinstance(sources, list):
-            raise TypeError(INVALID_APPLICATION)
-        meters = set()
-        for source in sources:
-            if (
-                not isinstance(source, dict)
-                or set(source) != {"energy_entity", "allow_scheduling"}
-                or not valid_entity(source["energy_entity"], "sensor")
-                or type(source["allow_scheduling"]) is not bool
-                or source["energy_entity"] in meters
-            ):
-                raise ValueError(INVALID_APPLICATION)
-            meters.add(source["energy_entity"])
-        area, climate, preheat = (
-            application[field] for field in ("area_id", "climate_entity", "maximum_preheat_c")
-        )
-        if application["kind"] == ApplicationKind.SPACE_HEATING:
-            if (
-                not isinstance(area, str)
-                or not area.strip()
-                or len(area) > MAX_APPLICATION_NAME_LENGTH
-            ):
-                raise ValueError(UNKNOWN_AREA)
-            if area in areas:
-                raise ValueError(DUPLICATE_AREA)
-            areas.add(area)
-            if climate is not None and not valid_entity(climate, "climate"):
-                raise ValueError(UNKNOWN_CLIMATE)
-            if any(source["allow_scheduling"] for source in sources):
-                if not climate:
-                    raise ValueError(THERMOSTAT_REQUIRED)
-                number(preheat, 0, MAXIMUM_PREHEATING_C)
-            elif preheat is not None:
-                number(preheat, 0, MAXIMUM_PREHEATING_C)
-        elif any(value is not None for value in (area, climate, preheat)):
+        _validate_sources(application["sources"])
+        _validate_application_binding(application, areas)
+
+
+def _validate_sources(sources):
+    """Check the unique meter and scheduling flag of every application source."""
+    if not isinstance(sources, list):
+        raise TypeError(INVALID_APPLICATION)
+    meters = set()
+    for source in sources:
+        if (
+            not isinstance(source, dict)
+            or set(source) != {"energy_entity", "allow_scheduling"}
+            or not valid_entity(source["energy_entity"], "sensor")
+            or type(source["allow_scheduling"]) is not bool
+            or source["energy_entity"] in meters
+        ):
             raise ValueError(INVALID_APPLICATION)
+        meters.add(source["energy_entity"])
+
+
+def _validate_application_binding(application, areas):
+    """Validate area and thermostat bindings for the application's kind."""
+    area, climate, preheat = (
+        application[field] for field in ("area_id", "climate_entity", "maximum_preheat_c")
+    )
+    if application["kind"] == ApplicationKind.SPACE_HEATING:
+        if not isinstance(area, str) or not area.strip() or len(area) > MAX_APPLICATION_NAME_LENGTH:
+            raise ValueError(UNKNOWN_AREA)
+        if area in areas:
+            raise ValueError(DUPLICATE_AREA)
+        areas.add(area)
+        if climate is not None and not valid_entity(climate, "climate"):
+            raise ValueError(UNKNOWN_CLIMATE)
+        scheduled = any(source["allow_scheduling"] for source in application["sources"])
+        if scheduled and not climate:
+            raise ValueError(THERMOSTAT_REQUIRED)
+        if scheduled or preheat is not None:
+            number(preheat, 0, MAXIMUM_PREHEATING_C)
+    elif any(value is not None for value in (area, climate, preheat)):
+        raise ValueError(INVALID_APPLICATION)
 
 
 def valid_entity(identity, domain):
@@ -225,23 +229,26 @@ def attribute_history(history, samples, linked_ids, start, validity):
         if usage < 0:
             continue
         beginning, ending = after.start, after.start + hour
-        index = bisect_right(times, beginning) - 1
-        assigned = None
-        if index >= 0:
-            observation, mode = reports[index]
-            if mode in totals and observation + validity >= beginning:
-                assigned = mode
-                for reported, observed_mode in reports[index + 1 : bisect_right(times, ending)]:
-                    if reported == ending:
-                        break
-                    if reported > observation + validity or observed_mode != mode:
-                        assigned = None
-                        break
-                    observation = reported
-                if observation + validity < ending:
-                    assigned = None
+        assigned = _complete_hour_mode(reports, times, totals.keys(), beginning, ending, validity)
         if assigned is None:
             unknown += usage
         else:
             totals[assigned] += usage
     return {"applications_kwh": totals, "unknown_kwh": unknown}
+
+
+def _complete_hour_mode(reports, times, linked_ids, beginning, ending, validity):
+    """Find the one linked mode that continuously covers a metered hour."""
+    index = bisect_right(times, beginning) - 1
+    if index < 0:
+        return None
+    observation, mode = reports[index]
+    if mode not in linked_ids or observation + validity < beginning:
+        return None
+    for reported, observed_mode in reports[index + 1 : bisect_right(times, ending)]:
+        if reported == ending:
+            break
+        if reported > observation + validity or observed_mode != mode:
+            return None
+        observation = reported
+    return mode if observation + validity >= ending else None
