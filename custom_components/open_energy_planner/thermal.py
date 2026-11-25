@@ -152,9 +152,7 @@ def read_climate(hass, application, now):
         return None
 
 
-def receive(document):
-    """Validate bounded app metadata and plans before creating entities or exposing control."""
-    validate_projection_size(document, MAX_API_RESPONSE_BYTES)
+def _validate_projection_header(document):
     required = {"configuration_version", "revision", "devices"}
     if (
         not isinstance(document, dict)
@@ -172,11 +170,21 @@ def receive(document):
         }
     ):
         raise ValueError("Invalid thermal projection")
-    for field in ("configuration_version", "revision"):
-        if document[field] is None and field == "configuration_version":
-            continue
-        if not isinstance(document[field], str) or not HASH_PATTERN.fullmatch(document[field]):
-            raise ValueError("Invalid thermal revision")
+    version = document["configuration_version"]
+    if version is not None:
+        _validate_revision(version)
+    _validate_revision(document["revision"])
+
+
+def _validate_revision(value):
+    if not isinstance(value, str) or not HASH_PATTERN.fullmatch(value):
+        raise ValueError("Invalid thermal revision")
+
+
+def receive(document):
+    """Validate bounded app metadata and plans before creating entities or exposing control."""
+    validate_projection_size(document, MAX_API_RESPONSE_BYTES)
+    _validate_projection_header(document)
     devices = document["devices"]
     if not isinstance(devices, list):
         raise TypeError("Invalid thermal device list")
@@ -348,13 +356,7 @@ def _receive_shared_source(meter, source, modes):
     if not isinstance(rows, list) or len(rows) < 2:
         raise ValueError("Invalid shared thermal source")
     options = _receive_mode_options(rows)
-    mode = modes.get(meter)
-    if mode is not None:
-        if not isinstance(mode, dict) or set(mode) != {"application_id", "observed_at"}:
-            raise ValueError("Invalid reported thermal mode")
-        timestamp(mode["observed_at"])
-        if mode["application_id"] not in options:
-            raise ValueError("Unknown reported thermal mode")
+    mode = _receive_reported_mode(modes.get(meter), options)
     return {
         "id": "source_" + sha256(meter.encode()).hexdigest(),
         "meter": meter,
@@ -362,6 +364,16 @@ def _receive_shared_source(meter, source, modes):
         "options": options,
         "mode": deepcopy(mode),
     }
+
+
+def _receive_reported_mode(mode, options):
+    if mode is not None:
+        if not isinstance(mode, dict) or set(mode) != {"application_id", "observed_at"}:
+            raise ValueError("Invalid reported thermal mode")
+        timestamp(mode["observed_at"])
+        if mode["application_id"] not in options:
+            raise ValueError("Unknown reported thermal mode")
+    return mode
 
 
 def _receive_mode_options(rows):
@@ -397,29 +409,32 @@ def _receive_climate_bindings(applications):
         if not re.fullmatch(r"climate\.[a-z0-9_]+", climate):
             raise ValueError("Invalid climate entity")
         binding = {"id": identity, "climate_entity": climate}
-        sources = application.get("sources", [])
-        if not isinstance(sources, list) or any(not isinstance(source, dict) for source in sources):
-            raise TypeError("Invalid room heat sources")
-        if len(sources) == 1 and sources[0].get("allow_scheduling") is True:
-            meter = identifier(sources[0].get("energy_entity"))
-            name = application.get("name")
-            if (
-                not SENSOR_PATTERN.fullmatch(meter)
-                or not isinstance(name, str)
-                or not name.strip()
-                or len(name) > MAX_THERMAL_TEXT_LENGTH
-            ):
-                raise ValueError("Invalid room energy meter")
-            margin = number(application["maximum_preheat_c"], 0, 3)
-            binding.update(
-                {
-                    "name": name,
-                    "energy_entity": meter,
-                    "maximum_preheat_c": margin,
-                }
-            )
+        binding.update(_receive_room_scheduling(application))
         climate_bindings.append(binding)
     return climate_bindings
+
+
+def _receive_room_scheduling(application):
+    """Validate the additional fields required for active room scheduling."""
+    sources = application.get("sources", [])
+    if not isinstance(sources, list) or any(not isinstance(source, dict) for source in sources):
+        raise TypeError("Invalid room heat sources")
+    if len(sources) != 1 or sources[0].get("allow_scheduling") is not True:
+        return {}
+    meter = identifier(sources[0].get("energy_entity"))
+    name = application.get("name")
+    if (
+        not SENSOR_PATTERN.fullmatch(meter)
+        or not isinstance(name, str)
+        or not name.strip()
+        or len(name) > MAX_THERMAL_TEXT_LENGTH
+    ):
+        raise ValueError("Invalid room energy meter")
+    return {
+        "name": name,
+        "energy_entity": meter,
+        "maximum_preheat_c": number(application["maximum_preheat_c"], 0, 3),
+    }
 
 
 def command(coordinator, device_id):
