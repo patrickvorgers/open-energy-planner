@@ -16,13 +16,19 @@ APP_TEST_STEP = "Run app unit tests and export coverage"
 ACTIVE = {"queued", "requested", "pending", "waiting", "in_progress"}
 
 
-def linked_revision(run, repository_id, path):
-    """Bind a same-repository Actions run to exactly one main PR revision."""
+def _matches_pr_workflow(run, repository_id, path):
+    """Restrict a run to the named PR workflow and reject fork sources."""
     if (run.get("event"), run.get("path")) != ("pull_request", path):
-        return None
-    if (run.get("repository") or {}).get("id") != repository_id or (
-        run.get("head_repository") or {}
-    ).get("id") != repository_id:
+        return False
+    return all(
+        (run.get(field) or {}).get("id") == repository_id
+        for field in ("repository", "head_repository")
+    )
+
+
+def linked_revision(run, repository_id, path):
+    """Bind an eligible Actions run to exactly one main PR revision."""
+    if not _matches_pr_workflow(run, repository_id, path):
         return None
     links = run.get("pull_requests")
     if not isinstance(links, list) or len(links) != 1:
