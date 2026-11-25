@@ -1,0 +1,35 @@
+name: Bug report
+description: Report a problem you can reproduce in Open Energy Planner.
+body:
+  - type: markdown
+    attributes:
+      value: |
+        This issue is public. Use synthetic data and remove credentials, private addresses,
+        real Home Assistant configuration and personal measurements from attachments.
+        Report vulnerabilities privately as described in the [security policy](https://github.com/patrickvorgers/open-energy-planner/security/policy).
+  - type: input
+    id: version
+    attributes:
+      label: OEP version or build
+      description: Copy the version and build from About. Include both app and integration builds if they differ.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to reproduce
+      description: Include the affected page or feature and the relevant installation type.
+    validations:
+      required: true
+  - type: textarea
+    id: behaviour
+    attributes:
+      label: Expected and actual behaviour
+      description: Describe what you expected, what happened and any exact error message.
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Sanitized screenshots or logs
+      description: Add relevant evidence if available.
