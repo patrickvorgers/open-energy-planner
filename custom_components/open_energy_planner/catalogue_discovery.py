@@ -9,6 +9,7 @@ from homeassistant.config_entries import SIGNAL_CONFIG_ENTRY_CHANGED
 from homeassistant.const import STATE_UNKNOWN
 from homeassistant.core import State, callback
 from homeassistant.core_config import EVENT_CORE_CONFIG_UPDATE
+from homeassistant.helpers import area_registry as ar
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.dispatcher import async_dispatcher_connect, async_dispatcher_send
@@ -23,7 +24,7 @@ from . import catalogue
 from .const import DOMAIN
 from .setup_history import setup_history
 
-SOURCE_DOMAINS = ("sensor", "binary_sensor", "water_heater", "device_tracker")
+SOURCE_DOMAINS = ("sensor", "binary_sensor", "water_heater", "device_tracker", "climate")
 ENERGY_MANAGER_KEY = f"{DOMAIN}.catalogue_energy_manager"
 ENERGY_CHANGED = f"{DOMAIN}.catalogue_energy_changed"
 METADATA_ATTRIBUTES = ("friendly_name", "unit_of_measurement", "device_class", "state_class")
@@ -81,6 +82,7 @@ class CatalogueDiscovery:
         self._unsubscribers = [
             self.hass.bus.async_listen(er.EVENT_ENTITY_REGISTRY_UPDATED, self._registry_changed),
             self.hass.bus.async_listen(dr.EVENT_DEVICE_REGISTRY_UPDATED, self._device_changed),
+            self.hass.bus.async_listen(ar.EVENT_AREA_REGISTRY_UPDATED, self._area_changed),
             self.hass.bus.async_listen(EVENT_CORE_CONFIG_UPDATE, self._core_changed),
             self.hass.bus.async_listen(
                 EVENT_RECORDER_HOURLY_STATISTICS_GENERATED, self._history_changed
@@ -154,6 +156,12 @@ class CatalogueDiscovery:
     def _changed(self):
         """Retain a generation marker so events arriving during an awaited read cannot be lost."""
         self.generation += 1
+
+    @callback
+    def _area_changed(self, _event):
+        """Reproject area names and assignments together after registry changes."""
+        if not self._closed:
+            self.repair()
 
     def _relevant(self, identity):
         """Exclude unsupported domains and our own virtual entities before scheduling metadata work."""
@@ -361,6 +369,7 @@ class CatalogueDiscovery:
                     else previous["history"],
                     "timezone": self.hass.config.time_zone,
                     "country": self.hass.config.country,
+                    **({"areas": previous["areas"]} if "areas" in previous else {}),
                 }
             if self._closed:
                 return None

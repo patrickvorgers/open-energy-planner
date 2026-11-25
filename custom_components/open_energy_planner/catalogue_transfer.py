@@ -61,6 +61,7 @@ def prepare_catalogue(body):
     collections = []
     for path in (
         ("entities",),
+        ("areas",),
         ("history",),
         *(
             ("suggestions", field)

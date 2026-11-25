@@ -808,7 +808,7 @@ def test_appliance_settings_categories_share_navigation_and_operational_links(ap
     assert reference["lineHeight"] == "21px"
     page.goto(url + "/appliance-settings")
     for label, suffix, monitor in (
-        ("Electric boilers", "/thermal", "/thermal"),
+        ("Thermal", "/thermal", "/thermal"),
         ("EV charging", "/ev", "/ev"),
         ("Consumption and cycles", "", "/appliances"),
     ):

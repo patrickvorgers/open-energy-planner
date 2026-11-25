@@ -5,6 +5,7 @@ from math import isfinite
 
 from homeassistant.const import STATE_UNKNOWN
 from homeassistant.core import State
+from homeassistant.helpers import area_registry as ar
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
 from homeassistant.loader import IntegrationNotLoaded, async_get_loaded_integration
@@ -322,6 +323,14 @@ def integration_metadata(hass, entry, integration):
     }
 
 
+def catalogue_areas(hass):
+    """Expose stable HA area identities and their current display names."""
+    return [
+        {"id": area.id, "name": area.name[:MAX_CATALOGUE_TEXT_LENGTH]}
+        for area in sorted(ar.async_get(hass).async_list_areas(), key=lambda area: area.id)
+    ]
+
+
 def catalogue_entity(hass, state, energy_names):
     """Read one sanitized metadata projection on HA's event loop, excluding owned virtual devices."""
     if len(state.entity_id) > MAX_ENTITY_ID_LENGTH:
@@ -335,6 +344,7 @@ def catalogue_entity(hass, state, energy_names):
         if entry and entry.config_entry_id
         else None
     )
+    area_id = (entry.area_id if entry else None) or (physical.area_id if physical else None)
     return {
         "entity_id": state.entity_id,
         "name": str(state.name)[:MAX_CATALOGUE_TEXT_LENGTH],
@@ -358,6 +368,7 @@ def catalogue_entity(hass, state, energy_names):
         )[:MAX_CATALOGUE_TEXT_LENGTH],
         "state_class": str(state.attributes.get("state_class", ""))[:MAX_CATALOGUE_TEXT_LENGTH],
         "device_id": entry.device_id if entry and entry.device_id else "",
+        **({"area_id": area_id} if area_id else {}),
         **(
             {"device_entry_type": physical.entry_type.value}
             if physical and physical.entry_type is not None
@@ -392,6 +403,7 @@ async def setup_catalogue(hass, selected=None, *, include_history=True):
             *hass.states.async_all("binary_sensor"),
             *hass.states.async_all("water_heater"),
             *hass.states.async_all("device_tracker"),
+            *hass.states.async_all("climate"),
         ]
         if selected is None
         else [state for identity in selected if (state := hass.states.get(identity)) is not None]
@@ -402,7 +414,9 @@ async def setup_catalogue(hass, selected=None, *, include_history=True):
         State(entity_id, STATE_UNKNOWN)
         for entity_id in (preferred_entities(suggestions) if selected is None else selected)
         - present
-        if entity_id.startswith(("sensor.", "binary_sensor.", "water_heater.", "device_tracker."))
+        if entity_id.startswith(
+            ("sensor.", "binary_sensor.", "water_heater.", "device_tracker.", "climate.")
+        )
     )
     entities = [
         metadata
@@ -416,6 +430,7 @@ async def setup_catalogue(hass, selected=None, *, include_history=True):
         "suggestions": suggestions,
         "timezone": hass.config.time_zone,
         "country": hass.config.country,
+        "areas": catalogue_areas(hass),
         "history": await setup_history(hass, suggestions["terms"])
         if include_history and hass.is_running
         else [],
@@ -430,7 +445,7 @@ async def source_choices(hass, scope):
     domains = (
         ("sensor", "binary_sensor", "device_tracker")
         if scope == "ev"
-        else ("sensor", "water_heater")
+        else ("sensor", "water_heater", "climate")
     )
     identities = set()
     for domain in domains:

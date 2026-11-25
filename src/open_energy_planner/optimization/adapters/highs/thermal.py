@@ -41,6 +41,7 @@ def declare(context, problem):
         passive_temperature = work.initial_c
         for interval_index, step in enumerate(problem.intervals):
             hours = active_hours(work, step)
+            ambient = work.ambient_for(interval_index)
             unmet_draw = 0
             if hours:
                 end = step.start + timedelta(hours=step.duration_h)
@@ -64,8 +65,8 @@ def declare(context, problem):
                 heating_factor = -expm1(-exponent) / exponent if exponent else 1.0
                 passive_temperature = max(
                     0,
-                    work.ambient_c
-                    + (passive_temperature - work.ambient_c) * decay
+                    ambient
+                    + (passive_temperature - ambient) * decay
                     - work.demand_kwh[interval_index] * heating_factor / work.capacity_kwh_per_c,
                 )
                 if (
@@ -80,8 +81,8 @@ def declare(context, problem):
                         temperatures[interval_index] <= work.maximum_c * (1 - exhausted)
                     )
                 expected_temperature = (
-                    work.ambient_c
-                    + (previous - work.ambient_c) * decay
+                    ambient
+                    + (previous - ambient) * decay
                     + (work.efficiency * ac - work.demand_kwh[interval_index] + unmet_draw)
                     * heating_factor
                     / work.capacity_kwh_per_c

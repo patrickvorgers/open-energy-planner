@@ -1,8 +1,11 @@
 """Native virtual thermal controls and evidence. No physical actions or helper entities."""
 
+from collections import Counter
+
 from aiohttp import ClientError
 from homeassistant.components.binary_sensor import BinarySensorEntity
 from homeassistant.components.number import NumberEntity
+from homeassistant.components.select import SelectEntity
 from homeassistant.components.sensor import SensorDeviceClass, SensorEntity
 from homeassistant.components.switch import SwitchEntity
 from homeassistant.const import UnitOfEnergy, UnitOfPower, UnitOfTemperature
@@ -11,7 +14,7 @@ from homeassistant.util import dt as dt_util
 
 from .entity import PlannerEntity
 from .protocol import timestamp
-from .thermal import command, reading
+from .thermal import command, reading, room_command
 
 HEATING_POWER_FRACTION = 0.5
 LABELS = {
@@ -24,6 +27,152 @@ LABELS = {
     "minimum_c": "Minimum water temperature",
     "enabled": "Thermal planning enabled",
 }
+MODE_UNKNOWN = "Unknown"
+MODE_VALIDITY_SECONDS = 300
+
+
+class RoomPreheatTarget(PlannerEntity, SensorEntity):
+    """Expose a time-bounded room target for a user-owned automation."""
+
+    planning_group = "thermal"
+    _attr_device_class = SensorDeviceClass.TEMPERATURE
+    _attr_native_unit_of_measurement = UnitOfTemperature.CELSIUS
+    _attr_suggested_display_precision = 2
+
+    def __init__(self, coordinator, row, key):
+        """Preserve one virtual device identity per configured heating area."""
+        super().__init__(coordinator, "thermal_" + row["id"], key, "Requested preheating target")
+        self.identity = row["id"]
+        self._attr_device_info["name"] = row["name"]
+
+    @property
+    def native_value(self):
+        """Return the setpoint only within a current authorized heating interval."""
+        request = room_command(self.coordinator, self.identity)
+        return request[1] if request and request[0] else None
+
+    @property
+    def extra_state_attributes(self):
+        """Identify the source and independent reference for a consuming automation."""
+        row = next(
+            (
+                row
+                for row in self.coordinator.thermal.get("climate_bindings", [])
+                if row["id"] == self.identity
+            ),
+            {},
+        )
+        return {
+            "heat_source": row.get("energy_entity"),
+            "reference_thermostat": row.get("climate_entity"),
+        }
+
+
+class RoomHeatRequested(PlannerEntity, BinarySensorEntity):
+    """Separate an explicit valid no-heat interval from loss of planning authority."""
+
+    planning_group = "thermal"
+
+    def __init__(self, coordinator, row, key):
+        """Create the authorization indicator on the same virtual room device."""
+        super().__init__(coordinator, "thermal_" + row["id"], key, "Room heating requested")
+        self.identity = row["id"]
+        self._attr_device_info["name"] = row["name"]
+
+    @property
+    def available(self):
+        """Expose off only while Home Assistant can still verify a plan for this room."""
+        return room_command(self.coordinator, self.identity) is not None
+
+    @property
+    def is_on(self):
+        """Return explicit requested heat, off, or unknown."""
+        request = room_command(self.coordinator, self.identity)
+        return request[0] if request else None
+
+
+class ThermalOperatingMode(PlannerEntity, SelectEntity):
+    """Accept HA's observed operating mode for one shared physical heat source."""
+
+    planning_group = "thermal"
+
+    def __init__(self, coordinator, row, key):
+        """Use a stable app-owned identity without changing or commanding the physical device."""
+        super().__init__(coordinator, "thermal_" + row["id"], key, "Reported operating mode")
+        self.identity = row["id"]
+        self._attr_device_info["name"] = row["name"]
+        self._attr_icon = "mdi:heat-pump"
+
+    def row(self):
+        """Find the current source projection, including current permitted applications."""
+        return next(
+            (
+                row
+                for row in self.coordinator.thermal.get("shared_sources", [])
+                if row["id"] == self.identity
+            ),
+            {},
+        )
+
+    def mode_options(self):
+        """Use readable names and disambiguate repeated labels without losing their identities."""
+        modes = self.row().get("options", {})
+        counts = Counter(modes.values())
+        reserved = {MODE_UNKNOWN, *counts}
+        options = {}
+        for identity, name in modes.items():
+            label = name
+            if counts[name] > 1 or name == MODE_UNKNOWN:
+                base = label = f"{name} ({identity})"
+                suffix = 2
+                while label in reserved or label in options:
+                    label = f"{base} {suffix}"
+                    suffix += 1
+            options[label] = identity
+        return options
+
+    @property
+    def available(self):
+        """Reject contributions for a withdrawn virtual source."""
+        return bool(self.row()) and not self.coordinator.closed
+
+    @property
+    def options(self):
+        """Expose only the linked thermal applications and explicit unknown mode."""
+        return [MODE_UNKNOWN, *self.mode_options()]
+
+    @property
+    def current_option(self):
+        """Expose a fresh confirmed report without inventing a default application."""
+        mode = self.row().get("mode")
+        if not mode:
+            return MODE_UNKNOWN
+        age = (dt_util.utcnow() - timestamp(mode["observed_at"])).total_seconds()
+        if not 0 <= age < MODE_VALIDITY_SECONDS:
+            return MODE_UNKNOWN
+        return next(
+            (
+                label
+                for label, identity in self.mode_options().items()
+                if identity == mode["application_id"]
+            ),
+            MODE_UNKNOWN,
+        )
+
+    async def async_select_option(self, option):
+        """Report observed context through the same authenticated HA peer as boiler readings."""
+        modes = self.mode_options()
+        if not self.available or option not in (MODE_UNKNOWN, *modes):
+            raise HomeAssistantError("Select an application linked to this heat source")
+        try:
+            await self.coordinator.client.request(
+                "POST",
+                "/v1/thermal/mode",
+                {"meter": self.row()["meter"], "application_id": modes.get(option)},
+            )
+            await self.coordinator.sync()
+        except (ClientError, TimeoutError, ValueError, KeyError) as error:
+            raise HomeAssistantError("The app could not accept this thermal mode") from error
 
 
 class ThermalEntity(PlannerEntity):

@@ -72,7 +72,7 @@ def test_ev_draft_navigation_uses_custom_confirmation_and_preserves_cancelled_ed
         )
         if destination_kind == "menu"
         else content.get_by_role("navigation", name="Appliance settings", exact=True).get_by_role(
-            "link", name="Electric boilers", exact=True
+            "link", name="Thermal", exact=True
         )
     )
     destination.click()
@@ -164,7 +164,7 @@ def test_real_browser_reload_retains_native_unsaved_draft_protection(app_page, w
     expect(content.locator("#settings")).to_be_visible()
     capacity = add_vehicle_draft(content)
     content.get_by_role("navigation", name="Appliance settings", exact=True).get_by_role(
-        "link", name="Electric boilers", exact=True
+        "link", name="Thermal", exact=True
     ).click()
     content.get_by_role("alertdialog").press("Escape")
     with page.expect_event("dialog") as native:
@@ -184,7 +184,7 @@ def test_navigation_rechecks_draft_after_consent_and_restores_unload_guard(app_p
     expect(page.locator("#settings")).to_be_visible()
     capacity = add_vehicle_draft(page)
     page.get_by_role("navigation", name="Appliance settings", exact=True).get_by_role(
-        "link", name="Electric boilers", exact=True
+        "link", name="Thermal", exact=True
     ).click()
     capacity.evaluate(
         "input => { input.value = '75'; input.dispatchEvent(new Event('input', {bubbles: true})); }"
@@ -262,11 +262,11 @@ def test_same_page_reload_is_guarded_but_fragments_and_new_tabs_keep_the_draft(a
     expect(page.get_by_role("alertdialog")).to_have_count(0)
     expect(capacity).to_have_value("74")
     page.get_by_role("navigation", name="Appliance settings", exact=True).get_by_role(
-        "link", name="Electric boilers", exact=True
+        "link", name="Thermal", exact=True
     ).evaluate("link => link.target = '_blank'")
     with page.expect_popup() as opened:
         page.get_by_role("navigation", name="Appliance settings", exact=True).get_by_role(
-            "link", name="Electric boilers", exact=True
+            "link", name="Thermal", exact=True
         ).click()
     opened.value.close()
     expect(page.get_by_role("alertdialog")).to_have_count(0)
@@ -282,7 +282,7 @@ def test_a_withdrawn_link_does_not_spend_consent_on_a_later_browser_unload(app_p
     expect(page.locator("#settings")).to_be_visible()
     capacity = add_vehicle_draft(page)
     destination = page.get_by_role("navigation", name="Appliance settings", exact=True).get_by_role(
-        "link", name="Electric boilers", exact=True
+        "link", name="Thermal", exact=True
     )
     destination.click()
     destination.evaluate("link => link.remove()")

@@ -84,14 +84,13 @@ def capture_sources(plan, demand, solar, catalogue, ev, thermal=None):
     )
 
     if thermal:
-        active_stores = {row["device_id"] for row in problem.get("thermal_work", [])}
+        active_stores = {
+            row["id"]: row["energy_entity"]
+            for row in plan.get("thermal_context", {}).get("devices", [])
+        }
+        plan["display_sources"].update(active_stores)
         plan["forecast_quality_controlled"] = sorted(
-            set(plan["forecast_quality_controlled"])
-            | {
-                row["energy_entity"]
-                for row in thermal.state["stores"]
-                if row["id"] in active_stores
-            }
+            set(plan["forecast_quality_controlled"]) | set(active_stores.values())
         )
 
 

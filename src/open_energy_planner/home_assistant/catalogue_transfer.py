@@ -12,6 +12,7 @@ CATALOGUE_CLOCK_SKEW_SECONDS = 30
 CATALOGUE_REQUEST_BYTES = 1024 * 1024
 COLLECTION_PATHS = {
     ("entities",),
+    ("areas",),
     ("history",),
     *(
         ("suggestions", field)

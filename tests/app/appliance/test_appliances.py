@@ -151,7 +151,7 @@ def test_claim_checks_expiry_after_lock_and_worker_waits(tasks, monkeypatch, wai
             None,
             ObservedLock() if waiting_at == "lock" else asyncio.Lock(),
             SimpleNamespace(state={"points": []}),
-            SimpleNamespace(state={"stores": []}),
+            SimpleNamespace(meters=frozenset()),
             mark_command_free=mark_command_free,
         )
         async with TestClient(TestServer(app)) as client:
@@ -229,7 +229,7 @@ def test_published_appliance_read_rechecks_changes_to_start_authority(tasks, mon
         )
         demand = SimpleNamespace(consumers=tasks.consumers, forecast=None)
         ev = SimpleNamespace(state={"points": []})
-        thermal = SimpleNamespace(state={"stores": []})
+        thermal = SimpleNamespace(meters=frozenset())
         lock = ApplicationStateLock()
         lock.bind_settings(tasks, demand, ev, thermal)
         app = web.Application()

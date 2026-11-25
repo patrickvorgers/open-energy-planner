@@ -4,9 +4,41 @@ import asyncio
 from datetime import timedelta
 from types import MappingProxyType
 
+from homeassistant.helpers import area_registry as ar
+from homeassistant.helpers import entity_registry as er
+
 from custom_components.open_energy_planner import catalogue
 from custom_components.open_energy_planner.catalogue_discovery import CatalogueDiscovery
 from tests.custom_component.support.chain import configure_energy, running_chain
+
+
+def test_thermal_chooser_projects_registry_areas_and_climate_metadata():
+    """Expose area choices and explicit climate assignments without sharing current state."""
+
+    async def scenario():
+        """Use real Home Assistant registries and keep state attributes out of discovery."""
+        async with running_chain(live=True) as (hass, *_):
+            areas = ar.async_get(hass)
+            living = areas.async_create("Living area")
+            hall = areas.async_create("Hall")
+            registry = er.async_get(hass)
+            thermostat = registry.async_get_or_create("climate", "demo", "thermal-test")
+            registry.async_update_entity(thermostat.entity_id, area_id=hall.id)
+            hass.states.async_set(
+                thermostat.entity_id, "heat", {"current_temperature": 19, "temperature": 21}
+            )
+            choices = await catalogue.source_choices(hass, "thermal")
+            assert {area["id"]: area["name"] for area in choices["areas"]} == {
+                living.id: "Living area",
+                hall.id: "Hall",
+            }
+            row = next(
+                item for item in choices["entities"] if item["entity_id"] == thermostat.entity_id
+            )
+            assert row["area_id"] == hall.id
+            assert {"state", "current_temperature", "temperature"}.isdisjoint(row)
+
+    asyncio.run(scenario())
 
 
 def test_vehicle_tracker_chooser_and_events_exclude_private_location():

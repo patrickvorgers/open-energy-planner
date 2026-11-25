@@ -301,7 +301,7 @@ class SetupDiscovery:
                         not isinstance(identity, str)
                         or len(identity) > MAX_ENTITY_ID_LENGTH
                         or identity.partition(".")[0]
-                        not in ("sensor", "binary_sensor", "water_heater")
+                        not in ("sensor", "binary_sensor", "water_heater", "climate")
                         or identity not in available
                         for identity in identities
                     ):

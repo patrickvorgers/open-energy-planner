@@ -204,6 +204,16 @@ Keep the existing appliance category navigation and configuration routes. Every 
 
 The default is forecast-only. Users explicitly permit shifting per device. Forecast-only devices contribute expected consumption without command entities. Weather-sensitive devices, such as heat pumps and air conditioners, may use weather and calendar features. Forecasting their normal consumption does not authorize thermal control or establish comfort constraints.
 
+The Thermal appliance category supports one space heating application per HA
+area and independently named domestic hot-water applications. Linked thermal
+sources share their Energy identity and normal forecasts across applications.
+For a shared source, report the observed application through an OEP virtual
+entity and retain unknown attribution when evidence is incomplete. A link may
+record scheduling permission. Space heating only admits a thermal command when
+a fresh thermostat observation and a validated model establish the expected
+electrical and comfort effects. Preserve fixed-power boiler configuration and
+controls through this increment.
+
 For cycle-based appliances, learn one average cycle profile per device: energy, duration and power over elapsed cycle time. Programme recognition and separate programme profiles are not required. Use measured completed cycles. Preserve measurement resolution, missing-data status and sample/quality evidence. Never present estimated subhour shape from coarse totals as measured cycle detail. Without usable evidence, report that the profile is not ready rather than silently inventing a learned profile. Model improvement remains subject to chronological comparable evaluation under FORE-04–06.
 
 Reuse the Energy dashboard's device energy and optional power sensor for automatic cycle detection. Do not require manual start/end times or user detection thresholds. Missing power links point to Home Assistant Energy. Insufficient history remains explicit. A user may enter only duration and total kWh as a manual fallback. Label that estimate separately from learned measurements, retain it after learning becomes ready, and preserve the profile frozen into accepted tasks. Bootstrap test data must exercise the same detector with labelled simulated histories, not bypass it with learned profiles. See [automatic learning](../docs/development/APPLIANCE-LEARNING.md).

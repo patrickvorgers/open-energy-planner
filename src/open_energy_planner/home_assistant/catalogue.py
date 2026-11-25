@@ -74,13 +74,30 @@ class HACatalogue:
 
     def receive(self, body, now):
         """Validate typed sensor metadata, Energy readiness and compact sum endpoints, excluding arbitrary HA attributes."""
-        if not isinstance(body, dict) or set(body) - {"country"} != {
+        if not isinstance(body, dict) or set(body) - {"country", "areas"} != {
             "entities",
             "suggestions",
             "timezone",
             "history",
         }:
             raise ValueError("Invalid HA catalogue")
+        areas = body.get("areas", [])
+        if (
+            not isinstance(areas, list)
+            or any(
+                not isinstance(area, dict)
+                or set(area) != {"id", "name"}
+                or any(
+                    not isinstance(value, str)
+                    or not value.strip()
+                    or len(value) > MAX_CATALOGUE_FIELD_LENGTH
+                    for value in area.values()
+                )
+                for area in areas
+            )
+            or len({area["id"] for area in areas}) != len(areas)
+        ):
+            raise ValueError("Invalid Home Assistant areas")
         country = body.get("country")
         if country is not None and (
             not isinstance(country, str)
@@ -100,6 +117,7 @@ class HACatalogue:
                 "integration_domain",
                 "integration_display_name",
                 "device_entry_type",
+                "area_id",
             } != {
                 "entity_id",
                 "name",
@@ -129,10 +147,10 @@ class HACatalogue:
             ):
                 raise ValueError("Invalid setup entity metadata")
             if not entity["entity_id"].startswith(
-                ("sensor.", "binary_sensor.", "water_heater.", "device_tracker.")
+                ("sensor.", "binary_sensor.", "water_heater.", "device_tracker.", "climate.")
             ):
                 raise ValueError(
-                    "Only sensor, binary sensor, device tracker and water heater metadata is supported"
+                    "Only sensor, binary sensor, device tracker, water heater and climate metadata is supported"
                 )
         hints = body["suggestions"]
         if not isinstance(hints, dict) or set(hints) - {

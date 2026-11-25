@@ -43,6 +43,7 @@ def _heater(document):
             if document.get("state_at")
             else None,
             "demand_kwh": tuple(document["demand_kwh"]),
+            "ambient_profile_c": tuple(document.get("ambient_profile_c", ())),
         }
     )
 
@@ -62,9 +63,10 @@ def _heat(work, step, interval_index, temperature, available_w):
         exponent = work.loss_w_per_c / WATTS_PER_KW * hours / work.capacity_kwh_per_c
         decay = exp(-exponent)
         factor = -expm1(-exponent) / exponent if exponent else 1.0
+        ambient = work.ambient_for(interval_index)
         passive = (
-            work.ambient_c
-            + (temperature - work.ambient_c) * decay
+            ambient
+            + (temperature - ambient) * decay
             - work.demand_kwh[interval_index] * factor / work.capacity_kwh_per_c
         )
         start = max(step.start, work.state_at or step.start)
