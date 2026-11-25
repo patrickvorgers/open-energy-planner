@@ -298,7 +298,7 @@ def explain_planning_problem(reason: str, _detail: str | None = None) -> NoticeT
         return NoticeText(
             "Planning calculation timed out",
             "The calculation did not return a result within its time budget. "
-            "OEP retries automatically. If this keeps happening, review the failed rounds "
+            "Planning retries automatically. If this keeps happening, review the failed rounds "
             "in Planning performance.",
             "View calculation history",
             "/planning-performance",
@@ -307,7 +307,7 @@ def explain_planning_problem(reason: str, _detail: str | None = None) -> NoticeT
         return NoticeText(
             "Battery reserve calculation timed out",
             "The calculation reached its time budget while checking how to restore the battery reserve. "
-            "OEP retries automatically. If this keeps happening, review the failed rounds "
+            "Planning retries automatically. If this keeps happening, review the failed rounds "
             "in Planning performance.",
             "View calculation history",
             "/planning-performance",

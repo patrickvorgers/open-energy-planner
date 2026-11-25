@@ -83,6 +83,7 @@ def test_publication_notice_explains_retry_and_only_clears_after_publication(
         if reason in ("battery_dispatch_unavailable", "thermal_dispatch_window_elapsed"):
             expect(popup).to_contain_text("usually temporary")
     if reason in ("worker_timeout", "reserve_recovery_time_limit"):
+        expect(popup).to_contain_text("Planning retries automatically.")
         expect(popup.get_by_role("link", name=title, exact=True)).to_have_attribute(
             "href",
             re.compile(

@@ -309,7 +309,7 @@ def test_timeout_notice_explains_failure_and_retries_until_publication(reason, t
     assert failed["title"] == title
     assert explanation in failed["message"]
     assert "time budget" in failed["message"]
-    assert "retries automatically" in failed["message"]
+    assert "Planning retries automatically." in failed["message"]
     assert failed["action_path"] == "/planning-performance"
     assert failed["state"] == "active"
 
