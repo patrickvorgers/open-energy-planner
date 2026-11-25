@@ -821,7 +821,8 @@ Backend transfer includes all of these documents and plan archives.
 The optional `applications` list in the same thermal configuration contains UUID,
 kind, display name, HA area ID, an optional climate entity, preheating margin in
 degrees Celsius and source links. Each link holds the Energy meter ID and
-scheduling permission. Older store-only documents remain valid. Forecast
+  scheduling permission. Space heating links can also hold the optional
+  `full_load_power_w` electrical input. Older configurations remain valid. Forecast
 membership for all linked meters and configuration archives are written in
 the existing shared document transaction.
 `thermal-source-modes.json` uses the same namespace. It retains bounded,

@@ -306,6 +306,17 @@ def test_room_planning_uses_one_meter_and_withdraws_on_target_changes_or_sharing
     )
     assert service.fresh_climate(ROOM, NOW + timedelta(seconds=20)) is None
 
+    unrated = deepcopy(config)
+    unrated["applications"][0]["sources"][0].pop("full_load_power_w")
+    service.configure(unrated, metadata)
+    unrated_at = NOW + timedelta(seconds=25)
+    observe(20, unrated_at)
+    forecast_only = service.prepare(snapshot(), live, unrated_at, "Europe/Amsterdam")
+    assert forecast_only.problem.thermal_work == ()
+    assert sum(step.load_kwh for step in forecast_only.problem.intervals) == pytest.approx(1)
+    status = service.document(unrated_at, metadata)["applications"][0]["planning_status"]
+    assert "electrical input at full load" in status
+
     saved = deepcopy(config)
     tank = {
         "id": str(uuid4()),

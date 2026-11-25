@@ -176,7 +176,22 @@ def receive(document):
             continue
         if not isinstance(document[field], str) or not HASH_PATTERN.fullmatch(document[field]):
             raise ValueError("Invalid thermal revision")
-    devices = document["devices"]
+    normalized = receive_boiler_devices(document["devices"])
+    shared_sources = receive_shared_sources(
+        document.get("shared_sources", {}), document.get("source_modes", {})
+    )
+    climate_bindings = receive_climate_bindings(document.get("applications", []))
+    return {
+        "configuration_version": document["configuration_version"],
+        "revision": document["revision"],
+        "devices": normalized,
+        **({"shared_sources": shared_sources} if shared_sources else {}),
+        **({"climate_bindings": climate_bindings} if climate_bindings else {}),
+    }
+
+
+def receive_boiler_devices(devices):
+    """Validate each projected boiler before exposing its measurements or plan."""
     if not isinstance(devices, list):
         raise TypeError("Invalid thermal device list")
     seen_ids, seen_meters = set(), set()
@@ -209,29 +224,7 @@ def receive(document):
             or device.keys() - required_fields - physical_fields - display_fields
         ):
             raise ValueError("Invalid thermal device")
-        if physical_fields & device.keys():
-            if not physical_fields <= device.keys():
-                raise ValueError("Incomplete thermal physical configuration")
-            for field, (minimum, maximum) in THERMAL_CONFIGURATION_BOUNDS.items():
-                number(device[field], minimum, maximum)
-            if device["ambient_c"] > device["maximum_c"]:
-                raise ValueError("Tank surroundings exceed the supported planning maximum")
-            if not float(device["heater_w"]).is_integer():
-                raise ValueError("Thermal heater power must use whole watts")
-            profile = device["draw_profile_kwh"]
-            if not isinstance(profile, list) or len(profile) != THERMAL_PROFILE_HOURS:
-                raise ValueError("Invalid thermal demand profile")
-            for quantity in profile:
-                number(quantity, 0, MAX_THERMAL_HOURLY_DRAW_KWH)
-            if sum(profile) <= 0:
-                raise ValueError("Thermal demand profile must include heat demand")
-        for field in display_fields & device.keys():
-            if device[field] is not None:
-                number(
-                    device[field],
-                    0,
-                    MAX_TEMPERATURE_C if field == "ending_target_c" else MAX_THERMAL_ENERGY_KWH,
-                )
+        validate_boiler_details(device, physical_fields, display_fields)
         identity = identifier(device["id"])
         if identity in seen_ids or device["energy_entity"] in seen_meters:
             raise ValueError("Duplicate thermal identity or meter")
@@ -255,52 +248,93 @@ def receive(document):
                 continue
             if not isinstance(value, str) or len(value) > MAX_THERMAL_TEXT_LENGTH:
                 raise ValueError("Invalid thermal text")
-        actual = device["actual"]
-        if actual is not None:
-            actual_fields = {
-                "temperature_c",
-                "power_w",
-                "observed_at",
-            }
-            if (
-                not isinstance(actual, dict)
-                or not actual_fields <= actual.keys()
-                or actual.keys() - actual_fields - {"id"}
-            ):
-                raise ValueError("Invalid thermal actuals")
-            if "id" in actual and actual["id"] != identity:
-                raise ValueError("Thermal actual identity differs from configured device")
-            number(actual["temperature_c"], MIN_TEMPERATURE_C, MAX_TEMPERATURE_C)
-            number(actual["power_w"], 0, MAX_THERMAL_POWER_W)
-            timestamp(actual["observed_at"])
-        planned = device["planned"]
-        if not isinstance(planned, list) or len(planned) > MAX_THERMAL_STEPS:
-            raise ValueError("Invalid thermal schedule")
-        previous_end = None
-        for step in planned:
-            if not isinstance(step, dict) or set(step) != {
-                "start",
-                "end",
-                "power_w",
-                "end_c",
-                "shortfall_kwh",
-            }:
-                raise ValueError("Invalid thermal step")
-            start, end = timestamp(step["start"]), timestamp(step["end"])
-            if start >= end or previous_end is not None and start != previous_end:
-                raise ValueError("Invalid thermal interval order")
-            previous_end = end
-            number(step["power_w"], 0, device["heater_w"])
-            if step["power_w"] not in (0, device["heater_w"]):
-                raise ValueError("Thermal heating must use fixed power")
-            number(step["end_c"], MIN_TEMPERATURE_C, device["maximum_c"])
-            number(step["shortfall_kwh"], 0, MAX_THERMAL_ENERGY_KWH)
+        actual = receive_boiler_actual(device["actual"], identity)
+        validate_boiler_schedule(device)
         accepted = {field: deepcopy(device[field]) for field in required_fields}
         if actual is not None:
-            accepted["actual"] = {field: deepcopy(actual[field]) for field in actual_fields}
+            accepted["actual"] = actual
         normalized.append(accepted)
-    shared = document.get("shared_sources", {})
-    modes = document.get("source_modes", {})
+    return normalized
+
+
+def validate_boiler_details(device, physical_fields, display_fields):
+    """Check optional boiler physics and display summaries."""
+    if physical_fields & device.keys():
+        if not physical_fields <= device.keys():
+            raise ValueError("Incomplete thermal physical configuration")
+        for field, (minimum, maximum) in THERMAL_CONFIGURATION_BOUNDS.items():
+            number(device[field], minimum, maximum)
+        if device["ambient_c"] > device["maximum_c"]:
+            raise ValueError("Tank surroundings exceed the supported planning maximum")
+        if not float(device["heater_w"]).is_integer():
+            raise ValueError("Thermal heater power must use whole watts")
+        profile = device["draw_profile_kwh"]
+        if not isinstance(profile, list) or len(profile) != THERMAL_PROFILE_HOURS:
+            raise ValueError("Invalid thermal demand profile")
+        for quantity in profile:
+            number(quantity, 0, MAX_THERMAL_HOURLY_DRAW_KWH)
+        if sum(profile) <= 0:
+            raise ValueError("Thermal demand profile must include heat demand")
+    for field in display_fields & device.keys():
+        if device[field] is not None:
+            number(
+                device[field],
+                0,
+                MAX_TEMPERATURE_C if field == "ending_target_c" else MAX_THERMAL_ENERGY_KWH,
+            )
+
+
+def receive_boiler_actual(actual, identity):
+    """Keep only validated measurement fields from a boiler observation."""
+    if actual is not None:
+        actual_fields = {
+            "temperature_c",
+            "power_w",
+            "observed_at",
+        }
+        if (
+            not isinstance(actual, dict)
+            or not actual_fields <= actual.keys()
+            or actual.keys() - actual_fields - {"id"}
+        ):
+            raise ValueError("Invalid thermal actuals")
+        if "id" in actual and actual["id"] != identity:
+            raise ValueError("Thermal actual identity differs from configured device")
+        number(actual["temperature_c"], MIN_TEMPERATURE_C, MAX_TEMPERATURE_C)
+        number(actual["power_w"], 0, MAX_THERMAL_POWER_W)
+        timestamp(actual["observed_at"])
+        return {field: deepcopy(actual[field]) for field in actual_fields}
+    return None
+
+
+def validate_boiler_schedule(device):
+    """Check chronological order, fixed power and temperatures of scheduled intervals."""
+    planned = device["planned"]
+    if not isinstance(planned, list) or len(planned) > MAX_THERMAL_STEPS:
+        raise ValueError("Invalid thermal schedule")
+    previous_end = None
+    for step in planned:
+        if not isinstance(step, dict) or set(step) != {
+            "start",
+            "end",
+            "power_w",
+            "end_c",
+            "shortfall_kwh",
+        }:
+            raise ValueError("Invalid thermal step")
+        start, end = timestamp(step["start"]), timestamp(step["end"])
+        if start >= end or previous_end is not None and start != previous_end:
+            raise ValueError("Invalid thermal interval order")
+        previous_end = end
+        number(step["power_w"], 0, device["heater_w"])
+        if step["power_w"] not in (0, device["heater_w"]):
+            raise ValueError("Thermal heating must use fixed power")
+        number(step["end_c"], MIN_TEMPERATURE_C, device["maximum_c"])
+        number(step["shortfall_kwh"], 0, MAX_THERMAL_ENERGY_KWH)
+
+
+def receive_shared_sources(shared, modes):
+    """Validate shared Energy meters and their possible and reported modes."""
     if not isinstance(shared, dict) or not isinstance(modes, dict):
         raise TypeError("Invalid thermal source modes")
     shared_sources = []
@@ -316,19 +350,7 @@ def receive(document):
             or len(source["options"]) < 2
         ):
             raise ValueError("Invalid shared thermal source")
-        options = {}
-        for option in source["options"]:
-            if (
-                not isinstance(option, dict)
-                or set(option) != {"id", "name"}
-                or not isinstance(option["name"], str)
-                or len(option["name"]) > MAX_THERMAL_TEXT_LENGTH
-            ):
-                raise ValueError("Invalid thermal mode option")
-            option_id = identifier(option["id"])
-            if option_id in options:
-                raise ValueError("Duplicate thermal mode option")
-            options[option_id] = option["name"]
+        options = receive_mode_options(source["options"])
         mode = modes.get(meter)
         if mode is not None:
             if not isinstance(mode, dict) or set(mode) != {"application_id", "observed_at"}:
@@ -345,7 +367,29 @@ def receive(document):
                 "mode": deepcopy(mode),
             }
         )
-    applications = document.get("applications", [])
+    return shared_sources
+
+
+def receive_mode_options(rows):
+    """Keep the stable identities and bounded display names of a shared source's modes."""
+    options = {}
+    for row in rows:
+        if (
+            not isinstance(row, dict)
+            or set(row) != {"id", "name"}
+            or not isinstance(row["name"], str)
+            or len(row["name"]) > MAX_THERMAL_TEXT_LENGTH
+        ):
+            raise ValueError("Invalid thermal mode option")
+        option_id = identifier(row["id"])
+        if option_id in options:
+            raise ValueError("Duplicate thermal mode option")
+        options[option_id] = row["name"]
+    return options
+
+
+def receive_climate_bindings(applications):
+    """Validate room sensors and the source identity used by virtual commands."""
     if not isinstance(applications, list):
         raise TypeError("Invalid thermal applications")
     climate_bindings = []
@@ -360,7 +404,7 @@ def receive(document):
             raise ValueError("Invalid climate entity")
         binding = {"id": identity, "climate_entity": climate}
         sources = application.get("sources", [])
-        if not isinstance(sources, list):
+        if not isinstance(sources, list) or any(not isinstance(source, dict) for source in sources):
             raise TypeError("Invalid room heat sources")
         if len(sources) == 1 and sources[0].get("allow_scheduling") is True:
             meter = identifier(sources[0].get("energy_entity"))
@@ -381,13 +425,7 @@ def receive(document):
                 }
             )
         climate_bindings.append(binding)
-    return {
-        "configuration_version": document["configuration_version"],
-        "revision": document["revision"],
-        "devices": normalized,
-        **({"shared_sources": shared_sources} if shared_sources else {}),
-        **({"climate_bindings": climate_bindings} if climate_bindings else {}),
-    }
+    return climate_bindings
 
 
 def command(coordinator, device_id):

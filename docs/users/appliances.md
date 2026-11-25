@@ -63,8 +63,11 @@ actions:
 ```
 
 **Allow scheduling** records permission per source. For space heating with
-permission, enter **Maximum preheating** and select a thermostat. The settings
-show the current usable thermostat target, preheating limit and readiness.
+permission, enter **Maximum preheating** and select a thermostat. Enter each
+scheduled source's **Electrical input at full load (W)** from its heating-mode
+specification or a full-load measurement. Leave the power blank if you only
+have hourly electricity use. The settings show the current usable thermostat
+target, preheating limit and readiness.
 Active space heating requires one heat source with its own Energy meter and a
 reference thermostat in heating mode. Forecasting continues while indoor,
 outdoor or electricity history is incomplete. Multiple sources in one area

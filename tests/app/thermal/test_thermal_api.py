@@ -211,6 +211,16 @@ def test_shared_heat_source_keeps_one_weather_forecast_and_configured_boiler(tmp
             async with client.post(url + "/v1/thermal/configuration", json=duplicate) as response:
                 assert response.status == 400
                 assert "only one space heating application" in (await response.text())
+            invalid_power = deepcopy(body)
+            invalid_power["expected_version"] = saved["configuration_version"]
+            invalid_power["configuration"]["applications"][0]["sources"][0]["full_load_power_w"] = (
+                1200.5
+            )
+            async with client.post(
+                url + "/v1/thermal/configuration", json=invalid_power
+            ) as response:
+                assert response.status == 400
+                assert "Heater power requires whole watts" in (await response.text())
             for target, reporting_age in ((20, timedelta(minutes=30)), (21.5, timedelta())):
                 now = datetime.now(UTC)
                 observed_at = (now - reporting_age).isoformat()

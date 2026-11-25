@@ -457,6 +457,21 @@ def test_projection_rejects_invalid_physical_configuration(field, value):
         receive(document)
 
 
+def test_room_projection_rejects_malformed_source():
+    """A malformed source cannot escape projection validation or publish a room command."""
+    document = coordinator(None, device(dt_util.utcnow())).thermal
+    document["applications"] = [
+        {
+            "id": "room",
+            "kind": "space_heating",
+            "climate_entity": "climate.hall",
+            "sources": [None],
+        }
+    ]
+    with pytest.raises(TypeError, match="Invalid room heat sources"):
+        receive(document)
+
+
 def test_real_service_projection_normalizes_full_settings_and_actual_identity():
     """The actual SQL-backed app document crosses the HA boundary without weakening field validation."""
     from sqlalchemy import create_engine

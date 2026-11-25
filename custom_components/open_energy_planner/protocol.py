@@ -345,20 +345,6 @@ def validate_thermal_context(context, steps):
         or not fullmatch(r"[0-9a-f]{64}", context["revision"])
     ):
         raise ValueError("Invalid thermal execution revision")
-    fields = {
-        "id",
-        "energy_entity",
-        "temperature_entity",
-        "power_entity",
-        "volume_litres",
-        "minimum_c",
-        "maximum_c",
-        "ambient_c",
-        "loss_w_per_c",
-        "heater_w",
-        "draw_profile_kwh",
-        "enabled",
-    }
     by_id, seen = (
         {},
         {key: set() for key in ("energy_entity", "temperature_entity", "power_entity")},
@@ -366,51 +352,9 @@ def validate_thermal_context(context, steps):
     for row in rows:
         if isinstance(row, dict) and row.get("kind") == "space_heating":
             identity = validate_space_heating_context(row, by_id, seen)
-            by_id[identity] = row
-            continue
-        if not isinstance(row, dict) or set(row) != fields:
-            raise ValueError("Invalid thermal execution fields")
-        identity = identifier(row["id"])
-        if str(UUID(identity)) != identity or identity in by_id or row["enabled"] is not True:
-            raise ValueError("Invalid thermal execution identity or permission")
+        else:
+            identity = validate_boiler_context(row, by_id, seen)
         by_id[identity] = row
-        for field, entities in seen.items():
-            value = identifier(row[field])
-            pattern = (
-                r"(?:sensor|water_heater)\.[a-z0-9_]+"
-                if field == "temperature_entity"
-                else r"sensor\.[a-z0-9_]+"
-            )
-            if not fullmatch(pattern, value) or value in entities:
-                raise ValueError("Invalid or duplicate thermal source")
-            entities.add(value)
-        for field, (minimum, maximum) in THERMAL_CONFIGURATION_BOUNDS.items():
-            value = row[field]
-            if (
-                type(value) not in (int, float)
-                or not isfinite(value)
-                or not minimum <= value <= maximum
-            ):
-                raise ValueError("Invalid thermal execution quantity")
-        if (
-            row["minimum_c"] > row["maximum_c"]
-            or row["ambient_c"] > row["maximum_c"]
-            or not float(row["heater_w"]).is_integer()
-        ):
-            raise ValueError("Invalid thermal execution bounds")
-        profile = row["draw_profile_kwh"]
-        if (
-            not isinstance(profile, list)
-            or len(profile) != THERMAL_PROFILE_HOURS
-            or any(
-                type(value) not in (int, float)
-                or not isfinite(value)
-                or not 0 <= value <= MAX_THERMAL_HOURLY_DRAW_KWH
-                for value in profile
-            )
-            or sum(profile) <= 0
-        ):
-            raise ValueError("Invalid thermal demand profile")
     if set(by_id) != devices:
         raise ValueError("Thermal commands and execution context disagree")
     for step in steps:
@@ -426,8 +370,74 @@ def validate_thermal_context(context, steps):
                     raise ValueError("Space heating command precedes its dispatch boundary")
 
 
+def validate_boiler_context(row, by_id, seen):
+    """Validate one boiler and reserve its physical entity bindings."""
+    fields = {
+        "id",
+        "energy_entity",
+        "temperature_entity",
+        "power_entity",
+        "volume_litres",
+        "minimum_c",
+        "maximum_c",
+        "ambient_c",
+        "loss_w_per_c",
+        "heater_w",
+        "draw_profile_kwh",
+        "enabled",
+    }
+    if not isinstance(row, dict) or set(row) != fields:
+        raise ValueError("Invalid thermal execution fields")
+    identity = identifier(row["id"])
+    if str(UUID(identity)) != identity or identity in by_id or row["enabled"] is not True:
+        raise ValueError("Invalid thermal execution identity or permission")
+    for field, entities in seen.items():
+        value = identifier(row[field])
+        pattern = (
+            r"(?:sensor|water_heater)\.[a-z0-9_]+"
+            if field == "temperature_entity"
+            else r"sensor\.[a-z0-9_]+"
+        )
+        if not fullmatch(pattern, value) or value in entities:
+            raise ValueError("Invalid or duplicate thermal source")
+        entities.add(value)
+    validate_boiler_quantities(row)
+    return identity
+
+
+def validate_boiler_quantities(row):
+    """Validate bounded boiler measurements and expected thermal demand."""
+    for field, (minimum, maximum) in THERMAL_CONFIGURATION_BOUNDS.items():
+        value = row[field]
+        if (
+            type(value) not in (int, float)
+            or not isfinite(value)
+            or not minimum <= value <= maximum
+        ):
+            raise ValueError("Invalid thermal execution quantity")
+    if (
+        row["minimum_c"] > row["maximum_c"]
+        or row["ambient_c"] > row["maximum_c"]
+        or not float(row["heater_w"]).is_integer()
+    ):
+        raise ValueError("Invalid thermal execution bounds")
+    profile = row["draw_profile_kwh"]
+    if (
+        not isinstance(profile, list)
+        or len(profile) != THERMAL_PROFILE_HOURS
+        or any(
+            type(value) not in (int, float)
+            or not isfinite(value)
+            or not 0 <= value <= MAX_THERMAL_HOURLY_DRAW_KWH
+            for value in profile
+        )
+        or sum(profile) <= 0
+    ):
+        raise ValueError("Invalid thermal demand profile")
+
+
 def validate_space_heating_context(row, by_id, seen):
-    """Bind learned heating power to one independent thermostat and a bounded setpoint."""
+    """Bind configured heating power to one independent thermostat and a bounded setpoint."""
     if set(row) != {
         "id",
         "kind",

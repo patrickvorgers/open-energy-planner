@@ -236,6 +236,10 @@ estimate a separate COP. The passed calibration range limits the allowed
 weather forecast and the largest holdout error narrows the modeled ceiling.
 
 Active work currently accepts one unshared heat source per heating application.
+Its electrical input at full load must be supplied independently. A cumulative
+hourly energy measurement cannot distinguish continuous low power from cycling
+at higher power. Missing power or an aligned hour above the configured power
+plus meter tolerance leaves the source in forecasting.
 The existing joint solver replaces that source's AC forecast from the dispatch
 boundary. The ordinary forecast covers the earlier part of the horizon.
 Room commands use the current target, the selected margin and the existing
