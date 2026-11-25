@@ -428,6 +428,23 @@ def test_projection_rejects_invalid_physical_configuration(field, value):
         receive(document)
 
 
+@pytest.mark.parametrize("source", [None, "sensor.room_heat", 42])
+def test_projection_rejects_non_object_room_heat_source(source):
+    """A malformed room source is rejected by the optional Thermal projection guard."""
+    now = dt_util.utcnow()
+    document = coordinator(None, device(now)).thermal
+    document["applications"] = [
+        {
+            "id": "room",
+            "kind": "space_heating",
+            "climate_entity": "climate.living_room",
+            "sources": [source],
+        }
+    ]
+    with pytest.raises(TypeError, match="Invalid room heat sources"):
+        receive(document)
+
+
 def test_real_service_projection_normalizes_full_settings_and_actual_identity():
     """The actual SQL-backed app document crosses the HA boundary without weakening field validation."""
     from sqlalchemy import create_engine
