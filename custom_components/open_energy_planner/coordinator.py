@@ -919,7 +919,7 @@ class PlanCoordinator:
                 try:
                     self.thermal = receive_thermal(data.get("thermal"))
                     self.refresh()
-                    if self.thermal["devices"]:
+                    if self.thermal["devices"] or self.thermal.get("climate_bindings"):
                         try:
                             thermal_reply = await self.client.request(
                                 "POST",

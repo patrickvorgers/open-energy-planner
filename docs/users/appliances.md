@@ -8,9 +8,41 @@ Use **Settings > Appliances** to configure what a device is and what OEP may pla
 |---|---|---|
 | Consumption and cycles | Energy consumer, weather sensitivity, cycle-shifting permission and any manual fallback | **Energy > Appliance planning** for readiness, deadline and task status |
 | EV charging | Vehicles, charge points, permitted assignments, power limits and charging assumptions | **Energy > EV charging** for sessions, target and departure |
-| Electric boilers | Source, temperature/power measurements, tank model and planning permission | **Energy > Thermal storage** for comfort and pause/resume |
+| Thermal | Space heating by area, named hot-water applications, and electric-boiler tank settings | **Energy > Thermal storage** for supported electric-boiler comfort and pause/resume |
 
 Home Assistant Energy owns consumer meters and their relationships. Do not select a total and one of its child meters as independent loads, or reuse the same consumption source for multiple controlled categories. OEP needs a disjoint household boundary to avoid double counting.
+
+## Configure thermal applications
+
+Choose **Thermal > Add application**. Use one Home Assistant area per space heating
+application, or enter a name for domestic hot water. A space heating application
+can forecast from the Energy consumption meter alone. If you link a climate
+entity under **Temperature and target**, the picker lists entities from the
+selected area first. A central thermostat can be in another area.
+
+Use **Edit settings** to add or remove heat sources. The space heating picker
+starts with devices from the selected area. **Show devices from all areas**
+includes a centrally located source, such as an outdoor heat pump. **Save settings**
+commits the application and source edits together. Cancel restores saved settings.
+Space heating consumption uses outdoor temperature and available recorder history.
+Removing a source from an application leaves its ordinary consumption forecast
+available under **Consumption and cycles** once it has no remaining thermal binding.
+
+An Energy meter can be linked to several thermal applications and contributes
+one electricity forecast. For a shared source, a Home Assistant automation can
+use `select.select_option` on its **Reported operating mode** entity. Report
+the observed application on changes and at least every five minutes while it
+is known. Use **Unknown** when the source cannot be attributed to one application.
+The editor shows unknown consumption when an entire metered hour cannot be
+attributed from consistent reports. Updating the reported mode never controls
+physical equipment.
+
+**Allow scheduling** records permission per source. For space heating with
+permission, enter **Maximum preheating** and select a thermostat. The settings
+show the current usable thermostat target, preheating limit and readiness.
+Space heating currently stays in forecasting while a validated heat-response
+model is required. Existing supported fixed-power electric boilers continue to
+use their own thermal plan, volume, limits, measured power and hourly heat draw.
 
 ## Schedule a complete appliance cycle
 

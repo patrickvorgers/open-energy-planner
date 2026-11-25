@@ -57,7 +57,7 @@ function settings(consumers, specializedMeters, devices) {
             permission.disabled = enabled.disabled || !enabled.checked;
             if (!enabled.checked && permission.checked) { permission.checked = false; permission.onchange(); }
         };
-        card.append(node("h3", "Energy source"), node("p", "Provided by Home Assistant Energy."), node("code", device.entity_id));
+        card.append(node("h3", "Energy source"), node("code", device.entity_id));
         card.append(node("h3", "Power source"), device.power_entity ? node("code", device.power_entity) : node("p", "Automatic cycle learning requires a power sensor. Configure device power consumption in Home Assistant Energy."));
         card.append(node("h3", "Manual cycle profile"), node("p", "Optional fallback until the first complete cycle is detected. Energy is spread evenly over the duration. The estimate stays saved when a learned profile becomes available."));
         const duration = node("input"), energy = node("input");

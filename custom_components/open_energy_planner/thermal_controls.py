@@ -3,6 +3,7 @@
 from aiohttp import ClientError
 from homeassistant.components.binary_sensor import BinarySensorEntity
 from homeassistant.components.number import NumberEntity
+from homeassistant.components.select import SelectEntity
 from homeassistant.components.sensor import SensorDeviceClass, SensorEntity
 from homeassistant.components.switch import SwitchEntity
 from homeassistant.const import UnitOfEnergy, UnitOfPower, UnitOfTemperature
@@ -24,6 +25,84 @@ LABELS = {
     "minimum_c": "Minimum water temperature",
     "enabled": "Thermal planning enabled",
 }
+MODE_UNKNOWN = "Unknown"
+MODE_VALIDITY_SECONDS = 300
+
+
+class ThermalOperatingMode(PlannerEntity, SelectEntity):
+    """Accept HA's observed operating mode for one shared physical heat source."""
+
+    planning_group = "thermal"
+
+    def __init__(self, coordinator, row, key):
+        """Use a stable app-owned identity without changing or commanding the physical device."""
+        super().__init__(coordinator, "thermal_" + row["id"], key, "Reported operating mode")
+        self.identity = row["id"]
+        self._attr_device_info["name"] = row["name"]
+        self._attr_icon = "mdi:heat-pump"
+
+    def row(self):
+        """Find the current source projection, including current permitted applications."""
+        return next(
+            (
+                row
+                for row in self.coordinator.thermal.get("shared_sources", [])
+                if row["id"] == self.identity
+            ),
+            {},
+        )
+
+    def mode_options(self):
+        """Use readable names and disambiguate repeated labels without losing their identities."""
+        modes = self.row().get("options", {})
+        counts = {name: list(modes.values()).count(name) for name in modes.values()}
+        return {
+            name if counts[name] == 1 and name != MODE_UNKNOWN else f"{name} ({identity})": identity
+            for identity, name in modes.items()
+        }
+
+    @property
+    def available(self):
+        """Reject contributions for a withdrawn virtual source."""
+        return bool(self.row()) and not self.coordinator.closed
+
+    @property
+    def options(self):
+        """Expose only the linked thermal applications and explicit unknown mode."""
+        return [MODE_UNKNOWN, *self.mode_options()]
+
+    @property
+    def current_option(self):
+        """Expose a fresh confirmed report without inventing a default application."""
+        mode = self.row().get("mode")
+        if not mode:
+            return MODE_UNKNOWN
+        age = (dt_util.utcnow() - timestamp(mode["observed_at"])).total_seconds()
+        if not 0 <= age < MODE_VALIDITY_SECONDS:
+            return MODE_UNKNOWN
+        return next(
+            (
+                label
+                for label, identity in self.mode_options().items()
+                if identity == mode["application_id"]
+            ),
+            MODE_UNKNOWN,
+        )
+
+    async def async_select_option(self, option):
+        """Report observed context through the same authenticated HA peer as boiler readings."""
+        modes = self.mode_options()
+        if not self.available or option not in (MODE_UNKNOWN, *modes):
+            raise HomeAssistantError("Select an application linked to this heat source")
+        try:
+            await self.coordinator.client.request(
+                "POST",
+                "/v1/thermal/mode",
+                {"meter": self.row()["meter"], "application_id": modes.get(option)},
+            )
+            await self.coordinator.sync()
+        except (ClientError, TimeoutError, ValueError, KeyError) as error:
+            raise HomeAssistantError("The app could not accept this thermal mode") from error
 
 
 class ThermalEntity(PlannerEntity):

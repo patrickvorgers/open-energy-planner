@@ -164,10 +164,9 @@ def register(app, service, repository, live, lock, ev, thermal, *, mark_command_
                     {"entity_id", "shiftable"},
                     {"entity_id", "shiftable", "expected_version"},
                 ):
-                    if body["shiftable"] and body["entity_id"] in {
-                        row["energy_entity"]
-                        for row in (*ev.state["points"], *thermal.state["stores"])
-                    }:
+                    if body["shiftable"] and body["entity_id"] in (
+                        {row["energy_entity"] for row in ev.state["points"]} | thermal.meters
+                    ):
                         raise ValueError(SOURCE_ALREADY_ASSIGNED)
                     function, arguments, keywords = (
                         service.configure,

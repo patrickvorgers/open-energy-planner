@@ -57,6 +57,8 @@ def thermal_page(browser, request):
             )
         elif path == "/v1/thermal":
             route.fulfill(json=state["document"])
+        elif path == "/v1/ha/source-choices/thermal":
+            route.fulfill(json={"pending": False, "catalogue": state["document"]["catalogue"]})
         elif path == "/v1/thermal/configuration":
             body = route.request.post_data_json
             state["posts"].append(body)
@@ -135,6 +137,73 @@ def thermal_monitor_page(thermal_page):
     page.goto("http://thermal.test/thermal")
     expect(page.locator("#thermal-title")).to_have_text("Utility boiler")
     return page, state
+
+
+def test_space_heating_area_controls_source_filter_and_preserves_boiler(thermal_page):
+    """Use real Settings controls to filter sources, cancel drafts and save alongside the boiler."""
+    page, state = thermal_page
+    document = state["document"]
+    document["catalogue"]["areas"] = [
+        {"id": "living", "name": "Living room"},
+        {"id": "attic", "name": "Attic"},
+        {"id": "hall", "name": "Hall"},
+    ]
+    for identity, label, area in (
+        ("sensor.living_airco", "Living room air conditioner", "living"),
+        ("sensor.attic_airco", "Attic air conditioner", "attic"),
+        ("sensor.quatt", "Quatt", "hall"),
+        ("climate.central", "Central thermostat", "hall"),
+        ("climate.living", "Local thermostat", "living"),
+    ):
+        document["catalogue"]["entities"].append(
+            {"entity_id": identity, "name": label, "area_id": area}
+        )
+        if identity.startswith("sensor."):
+            document["energy_consumers"].append({"entity_id": identity, "name": label})
+    page.reload()
+    saved_boiler = deepcopy(document["configuration"]["stores"])
+    page.get_by_role("button", name="Add application", exact=True).click()
+    page.get_by_role("button", name="Continue", exact=True).click()
+    expect(page.locator("#thermal-editor")).to_be_visible(timeout=4000)
+    page.get_by_label("Heating area", exact=True).select_option("living")
+    climate = page.get_by_label("Temperature and target", exact=True)
+    assert climate.locator("optgroup").evaluate_all(
+        "groups => groups.map(group => group.label)"
+    ) == ["In Living room", "Other Home Assistant areas"]
+    climate.select_option("climate.central")
+    page.get_by_role("button", name="Add heat source", exact=True).click()
+    picker = page.get_by_role("dialog", name="Add heat source", exact=True)
+    devices = picker.get_by_label("Home Assistant Energy device", exact=True)
+    assert devices.locator("option").all_text_contents() == [
+        "Choose an Energy device",
+        "Living room air conditioner",
+    ]
+    picker.get_by_label("Show devices from all areas").check()
+    devices.select_option("sensor.quatt")
+    picker.get_by_role("button", name="Add source", exact=True).click()
+    page.get_by_label("Allow scheduling", exact=True).check()
+    expect(page.get_by_label("Maximum preheating (°C)", exact=True)).to_be_visible()
+    page.get_by_label("Maximum preheating (°C)", exact=True).fill("0.5")
+    page.get_by_label("Maximum preheating (°C)", exact=True).blur()
+    page.evaluate("window.scrollTo(0, 0)")
+    evidence = Path("results/ci")
+    evidence.mkdir(parents=True, exist_ok=True)
+    page.screenshot(
+        path=str(evidence / f"thermal-space-edit-{page.viewport_size['width']}.png"), full_page=True
+    )
+    page.get_by_role("button", name="Save settings", exact=True).click()
+    expect(page.get_by_role("heading", name="Living room", exact=True)).to_be_visible()
+    expect(page.get_by_role("heading", name="Quatt", exact=True)).to_be_visible()
+    assert document["configuration"]["stores"] == saved_boiler
+    assert document["configuration"]["applications"][0]["climate_entity"] == "climate.central"
+    page.get_by_role("button", name="Add application", exact=True).click()
+    page.get_by_role("button", name="Continue", exact=True).click()
+    assert (
+        "Living room" not in page.get_by_label("Heating area").locator("option").all_text_contents()
+    )
+    page.locator("#cancel-thermal").click()
+    expect(page.get_by_role("heading", name="Living room", exact=True)).to_be_visible()
+    assert len(state["posts"]) == 1
 
 
 def test_comfort_actions_align_with_field_on_desktop_tablet_and_mobile(thermal_monitor_page):

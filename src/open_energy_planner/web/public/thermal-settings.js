@@ -8,6 +8,7 @@ import {identity} from "./identity.js";
 import {sourceRefresh, retainInputs} from "./source-refresh.js";
 import {assignedEnergySources, pickEnergySource} from "./energy-source-picker.js";
 import {applianceSettingsApi} from "./appliance-settings-api.js";
+import {applicationType, HOT_WATER, renderApplication, SPACE_HEATING, validApplication} from "./thermal-applications.js";
 
 const base = document.querySelector('meta[name="oep-api-base"]').content;
 const find = id => document.getElementById(id);
@@ -23,12 +24,16 @@ function node(tag, text) { const item = document.createElement(tag); if (text !=
 /** Preserve unavailable evidence and format temperature with one decimal by default. */
 function decimal(value, digits = 1) { return Number.isFinite(value) ? value.toLocaleString(undefined, {minimumFractionDigits: digits, maximumFractionDigits: digits}) : "Unavailable"; }
 /** Locate the selected editor in the full retained configuration draft. */
-function selected() { return draft.stores.find(store => store.id === selectedId); }
+function selected() { return [...draft.stores, ...(draft.applications || [])].find(store => store.id === selectedId); }
 /** Derive names from Home Assistant instead of introducing another editable identity. */
-function displayName(store) { return current?.devices?.find(device => device.id === store.id)?.name || current?.energy_consumers?.find(source => source.entity_id === store.energy_entity)?.name || "New electric boiler"; }
+function displayName(store) {
+    if (store.kind) return current?.catalogue?.areas?.find(area => area.id === store.area_id)?.name || store.name || "New thermal application";
+    return current?.devices?.find(device => device.id === store.id)?.name || current?.energy_consumers?.find(source => source.entity_id === store.energy_entity)?.name || "New electric boiler";
+}
 
 /** Check every retained store, including drafts outside the selected editor. The server validates authoritatively. */
 function validDraft() {
+    if (!(draft.applications || []).every(validApplication)) return false;
     return draft.stores.every(store => {
         const fields = ["volume_litres", "minimum_c", "maximum_c", "ambient_c", "loss_w_per_c", "heater_w"];
         return store.energy_entity && store.temperature_entity && store.power_entity && fields.every(key => Number.isFinite(store[key])) && store.volume_litres > 0 && store.minimum_c >= 0 && store.maximum_c > store.minimum_c && store.maximum_c <= 120 && store.loss_w_per_c >= 0 && store.heater_w > 0 && Number.isInteger(store.heater_w) && Array.isArray(store.draw_profile_kwh) && store.draw_profile_kwh.length === 24 && store.draw_profile_kwh.every(value => Number.isFinite(value) && value >= 0) && (!store.enabled || store.draw_profile_kwh.some(value => value > 0));
@@ -37,16 +42,18 @@ function validDraft() {
 /** Keep edit mode and the shared save state synchronized after rendering or an asynchronous operation. */
 function syncEditor() {
     find("thermal-editor").classList.toggle("settings-readonly", !editing);
-    for (const control of find("thermal-editor").querySelectorAll("input, select, button")) control.disabled = !editing || saveState.busy;
-    find("thermal-store-select").disabled = saveState.busy || editing || !draft.stores.length;
+    for (const control of find("thermal-editor").querySelectorAll("input, select, button")) control.disabled = !editing || saveState.busy || "requiresArea" in control.dataset;
+    find("thermal-store-select").disabled = saveState.busy || editing || !selected();
     find("edit-thermal").disabled = saveState.busy || editing || !selected();
     find("add-thermal").disabled = saveState.busy;
+    find("add-thermal-application").disabled = saveState.busy;
     find("refresh-thermal").disabled = saveState.busy;
     find("refresh-thermal-evidence").disabled = saveState.busy;
     find("thermal-editor").hidden = !editing; find("thermal-summary").hidden = editing;
     find("thermal-description").textContent = editing ? "Edit this appliance's configuration. Changes are applied only after Save." : "Saved configuration. Choose Edit settings to make changes.";
+    find("thermal-description").hidden = Boolean(selected()?.kind);
     for (const id of ["save-thermal", "cancel-thermal"]) find(id).hidden = !editing;
-    for (const id of ["edit-thermal", "add-thermal", "thermal-more"]) find(id).hidden = editing;
+    for (const id of ["edit-thermal", "add-thermal", "add-thermal-application", "thermal-more"]) find(id).hidden = editing;
     saveState.update();
     if (editing && !saveState.busy) find("cancel-thermal").disabled = false;
 }
@@ -80,13 +87,26 @@ function metadata(predicate) { return (current?.catalogue?.entities || []).filte
 function renderEditor() {
     const profileOpen = find("thermal-demand-profile")?.open ?? false;
     const selector = find("thermal-store-select"); selector.replaceChildren();
-    for (const store of draft.stores) { const option = node("option", displayName(store)); option.value = store.id; selector.append(option); }
-    if (!draft.stores.some(store => store.id === selectedId)) selectedId = draft.stores[0]?.id || null;
+    const entries = [...draft.stores, ...(draft.applications || [])];
+    for (const store of entries) {
+        selector.add(new Option(store.kind ? displayName(store) + ": " + applicationType(store) : displayName(store), store.id));
+    }
+    if (!selected()) selectedId = entries[0]?.id || null;
     selector.value = selectedId || "";
     const store = selected(), editor = find("thermal-editor"); editor.replaceChildren();
     find("thermal-empty").hidden = Boolean(store); find("thermal-detail").hidden = !store;
     if (!store) { syncEditor(); return; }
     find("thermal-title").textContent = displayName(store);
+    find("thermal-type").textContent = store.kind ? applicationType(store) : "Electric boiler";
+    find("thermal-boiler-context").hidden = Boolean(store.kind);
+    find("thermal-detail").classList.toggle("thermal-application-layout", Boolean(store.kind));
+    if (store.kind) {
+        renderApplication({app: store, current, draft, editor, summary: find("thermal-summary"),
+            dialog: find("thermal-heat-source-dialog"), editing,
+            rerender: () => retainInputs(renderEditor), changed: () => saveState.update()});
+        syncEditor();
+        return;
+    }
     const sources = node("div"); sources.className = "settings-fields"; sources.append(node("h3", "Home Assistant sources"));
     const assignedSources = assignedEnergySources(energySources);
     const savedMeter = current.configuration.stores.find(saved => saved.id === store.id)?.energy_entity;
@@ -151,7 +171,8 @@ async function refreshEvidence() {
         if (generation !== requestGeneration || saveState.busy) return;
         current = data; useHomeAssistantTimezone(data.timezone || data.catalogue?.timezone);
         conflict = data.configuration_version !== savedVersion;
-        if (selected()) renderSummary(selected());
+        if (selected()?.kind && !editing) renderEditor();
+        else if (selected() && !selected().kind) renderSummary(selected());
         find("status").textContent = data.issue || ""; 
         saveState.update(conflict ? "Thermal settings changed elsewhere. Cancel and reload before editing or saving." : undefined);
     } catch (error) { find("status").textContent = error.message; }
@@ -169,7 +190,25 @@ const refreshSources = sourceRefresh(api, "thermal", find("refresh-thermal-sourc
     syncEditor();
 });
 find("refresh-thermal-sources").onclick = () => { if (!saveState.busy) return refreshSources(); };
-find("edit-thermal").onclick = () => { editOriginId = selectedId; editing = true; syncEditor(); refreshSources(); };
+find("edit-thermal").onclick = () => { editOriginId = selectedId; editing = true; renderEditor(); refreshSources(); };
+const applicationDialog = find("thermal-application-dialog");
+find("add-thermal-application").onclick = () => { if (!editing && !saveState.busy) applicationDialog.showModal(); };
+find("close-thermal-application").onclick = () => applicationDialog.close();
+find("thermal-application-form").onsubmit = event => {
+    event.preventDefault();
+    if (editing || saveState.busy) return;
+    const kind = find("thermal-application-kind").value;
+    if (![SPACE_HEATING, HOT_WATER].includes(kind)) return;
+    const application = {id: identity(), kind, name: "", area_id: null, climate_entity: null, maximum_preheat_c: null, sources: []};
+    editOriginId = selectedId;
+    (draft.applications ??= []).push(application);
+    selectedId = application.id;
+    editing = true;
+    applicationDialog.close();
+    renderEditor();
+    find("thermal-editor").querySelector("select, input")?.focus();
+    refreshSources();
+};
 /** Recheck the latest Energy snapshot after the modal closes without replacing existing drafts or saved configuration. */
 find("add-thermal").onclick = async () => {
     if (saveState.busy || editing || saveState.dirty) return;
@@ -202,9 +241,12 @@ find("remove-thermal").onclick = async () => {
     find("thermal-more").open = false;
     const store = selected(), openingDraft = draft, openingId = selectedId;
     if (saveState.busy || editing || !store) return;
-    if (!await confirmAction({title: "Remove electric boiler?", message: `${displayName(store)} will be removed from these settings.\n\nHome Assistant sources and historical evidence are retained. Choose Save settings to apply the removal. Cancel in the editor restores the saved settings.`, confirmLabel: "Remove boiler", returnFocus: find("thermal-more").querySelector("summary")})) return;
+    if (!await confirmAction({title: store.kind ? "Remove thermal application?" : "Remove electric boiler?", message: `${displayName(store)} will be removed from these settings.\n\nHome Assistant sources and historical evidence are retained. Choose Save settings to apply the removal. Cancel in the editor restores the saved settings.`, confirmLabel: store.kind ? "Remove application" : "Remove boiler", returnFocus: find("thermal-more").querySelector("summary")})) return;
     if (saveState.busy || editing || conflict || draft !== openingDraft || selectedId !== openingId || selected() !== store) return;
-    editOriginId = selectedId; draft.stores = draft.stores.filter(store => store.id !== selectedId); selectedId = null; editing = true; renderEditor(); saveState.update();
+    editOriginId = selectedId;
+    const collection = store.kind ? "applications" : "stores";
+    draft[collection] = draft[collection].filter(row => row.id !== selectedId);
+    selectedId = null; editing = true; renderEditor(); saveState.update();
 };
 find("refresh-thermal-evidence").onclick = refreshEvidence;
 find("connect").onsubmit = async event => { event.preventDefault(); token = find("token").value; try { await load(); } catch (error) { find("status").textContent = error.message; } };

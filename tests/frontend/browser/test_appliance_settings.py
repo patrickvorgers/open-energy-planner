@@ -529,7 +529,7 @@ def test_ev_selected_device_summary_add_edit_cancel_and_remove_preserve_saved_id
     page.locator('#vehicles > section [data-field="maximum_w"]').first.fill("7.4")
     expect(page.locator("#ev-device-select")).to_be_disabled()
     page.get_by_role("navigation", name="Appliance settings", exact=True).get_by_role(
-        "link", name="Electric boilers", exact=True
+        "link", name="Thermal", exact=True
     ).click()
     page.get_by_role("alertdialog", name="Leave without saving?", exact=True).get_by_role(
         "button", name="Cancel", exact=True

@@ -70,6 +70,36 @@ def report(service, *, observed=NOW, temperature=55, power=0):
     }
 
 
+def test_application_and_mode_history_restore_without_restoring_current_mode(service):
+    """Restore both settings and archived mode reports while a restarted app awaits fresh reports."""
+    sources = [{"energy_entity": ENERGY, "allow_scheduling": False}]
+    applications = [
+        {
+            "id": str(uuid4()),
+            "kind": "hot_water",
+            "name": name,
+            "area_id": None,
+            "climate_entity": None,
+            "maximum_preheat_c": None,
+            "sources": sources,
+        }
+        for name in ("Primary tank", "Utility tank")
+    ]
+    configuration = {**settings(), "applications": applications}
+    service.configure(configuration, catalogue())
+    identity = applications[0]["id"]
+    service.report_mode(ENERGY, identity, NOW)
+    assert service.document(NOW)["source_modes"][ENERGY]["application_id"] == identity
+
+    restored = ThermalService(service.documents, service.consumers, service.appliances, service.ev)
+    assert restored.state == configuration
+    assert restored.meters == {ENERGY}
+    assert restored.source_mode_history[ENERGY] == [
+        {"application_id": identity, "observed_at": NOW.isoformat()}
+    ]
+    assert restored.document(NOW)["source_modes"] == {}
+
+
 def snapshot():
     """Total household demand is 1 kWh, of which the boiler baseline contributes 0.4 kWh."""
     inputs = InstallationProblem((Interval(NOW, 1, 0.3, 0, load_kwh=1),), (), (), (), 5000, 5000)

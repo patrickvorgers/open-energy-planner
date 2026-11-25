@@ -40,6 +40,11 @@
 .settings-workspace input,.settings-workspace select { scroll-margin-top:190px; }
 .settings-layout { display:grid; grid-template-columns:minmax(0,1fr) minmax(260px,320px); align-items:start; gap:var(--oep-panel-gap); }
 .settings-layout > * { min-width:0; }
+.settings-layout.thermal-application-layout { grid-template-columns:minmax(0,1fr); }
+.thermal-heat-source h4 { margin:12px 0; }
+.thermal-heat-source h5 { margin:12px 0 4px; font-size:14px; }
+.thermal-heat-source > code { display:block; overflow-wrap:anywhere; }
+.thermal-heat-source:last-child { margin-bottom:12px; }
 .settings-layout aside { position:sticky; top:170px; }
 .settings-layout fieldset { min-width:0; }
 .settings-readonly input:not([type=hidden]),.settings-readonly select { background:#f4f7fa; opacity:1; color:var(--oep-ink); }

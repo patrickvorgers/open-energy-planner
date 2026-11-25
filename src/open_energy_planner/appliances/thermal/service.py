@@ -7,7 +7,18 @@ from itertools import pairwise
 from uuid import UUID
 from zoneinfo import ZoneInfo
 
-from open_energy_planner.appliances.sources import replacement_selection, validate_membership
+from open_energy_planner.appliances.thermal.applications import (
+    MAXIMUM_SPACE_TEMPERATURE_C,
+    UNKNOWN_MODE,
+    ApplicationKind,
+    application_documents,
+    application_meters,
+    attribute_history,
+    forecast_selection,
+    shared_sources,
+    validate_choices,
+    validate_shape,
+)
 from open_energy_planner.appliances.thermal.model import (
     MAX_THERMAL_CLOCK_SKEW_SECONDS,
     MAX_THERMAL_ENTITY_ID_LENGTH,
@@ -27,6 +38,9 @@ from open_energy_planner.installation.model import InstallationProblem, slice_in
 from open_energy_planner.planning_policy import FINE_INTERVAL_MINUTES
 
 STATE_KEY = "thermal-state.json"
+SOURCE_MODES_KEY = "thermal-source-modes.json"
+SOURCE_MODE_HISTORY_DAYS = 30
+MAX_SOURCE_MODE_SAMPLES = 4096
 CONFIGURATION_FIELDS = {
     "id",
     "energy_entity",
@@ -116,7 +130,10 @@ class ThermalService:
         self.issue = None
         self.configuration_unreadable = False
         self.readings, self.active_ids = {}, ()
+        self.climate_readings = {}
         self.captured_at = None
+        self.source_modes = {}
+        self.source_mode_history = {}
         try:
             if documents.exists(STATE_KEY):
                 candidate = documents.read(STATE_KEY)
@@ -125,6 +142,58 @@ class ThermalService:
         except (OSError, ValueError, TypeError, KeyError, OverflowError):
             self.configuration_unreadable = True
             self.issue = "Thermal configuration unreadable. Control is unavailable"
+        try:
+            if documents.exists(SOURCE_MODES_KEY):
+                history = documents.read(SOURCE_MODES_KEY)
+                if isinstance(history, dict) and all(
+                    isinstance(rows, list) for rows in history.values()
+                ):
+                    self.source_mode_history = history
+        except (OSError, ValueError, TypeError):
+            pass
+
+    def report_mode(self, meter, application_id, now):
+        """Commit observed mode without changing thermal permission or scheduling intent."""
+        if not isinstance(meter, str):
+            raise TypeError(UNKNOWN_MODE)
+        applications = application_documents(self.state, {})
+        source = shared_sources(applications).get(meter)
+        if source is None or (
+            application_id is not None
+            and application_id not in {row["id"] for row in source["options"]}
+        ):
+            raise ValueError(UNKNOWN_MODE)
+        mode = {"application_id": application_id, "observed_at": now.isoformat()}
+        oldest = (now - timedelta(days=SOURCE_MODE_HISTORY_DAYS)).isoformat()
+        history = {
+            identity: [
+                sample
+                for sample in samples
+                if isinstance(sample, dict)
+                and isinstance(sample.get("observed_at"), str)
+                and sample["observed_at"] >= oldest
+            ]
+            for identity, samples in self.source_mode_history.items()
+        }
+        history[meter] = [*history.get(meter, []), mode][-MAX_SOURCE_MODE_SAMPLES:]
+        history = {identity: rows for identity, rows in history.items() if rows}
+        self.documents.write(SOURCE_MODES_KEY, history)
+        self.source_mode_history = history
+        self.source_modes = {**self.source_modes, meter: mode}
+
+    def mode_attribution(self, sources, now):
+        """Summarize metered energy separately from forecasting and current mode reporting."""
+        return {
+            meter: attribute_history(
+                self.consumers.histories[meter],
+                self.source_mode_history.get(meter, ()),
+                {option["id"] for option in source["options"]},
+                now - timedelta(days=SOURCE_MODE_HISTORY_DAYS),
+                timedelta(seconds=TEMPERATURE_MAX_AGE_SECONDS),
+            )
+            for meter, source in sources.items()
+            if meter in self.consumers.histories
+        }
 
     @property
     def configuration_version(self):
@@ -136,11 +205,22 @@ class ThermalService:
         """Withdraw commands when settings or the admitted device set changes."""
         return digest([self.configuration_version, self.active_ids])
 
+    @property
+    def meters(self):
+        """Return the Energy identities reserved by applications and configured water heaters."""
+        return application_meters(self.state) | {
+            row["energy_entity"] for row in self.state["stores"]
+        }
+
     @staticmethod
     def _shape(configuration):
         """Validate durable physical settings without needing an online HA catalogue."""
-        if not isinstance(configuration, dict) or set(configuration) != {"stores"}:
+        if not isinstance(configuration, dict) or set(configuration) not in (
+            {"stores"},
+            {"stores", "applications"},
+        ):
             raise ValueError("Specify thermal stores")
+        validate_shape(configuration.get("applications", []))
         stores = configuration["stores"]
         if not isinstance(stores, list):
             raise TypeError("Expected thermal stores")
@@ -195,10 +275,14 @@ class ThermalService:
                 "Thermal configuration unreadable. Restore the saved database before editing"
             )
         self._shape(configuration)
-        metadata = {row["entity_id"]: row for row in (catalogue or {}).get("entities", [])}
-        selected = replacement_selection(
-            self.consumers.selected, self.state["stores"], configuration["stores"]
-        )
+        catalogue = catalogue or {}
+        validate_choices(configuration, self.state, catalogue)
+        if configuration.get("applications"):
+            configuration = deepcopy(configuration)
+            area_names = {area["id"]: area["name"] for area in catalogue.get("areas", [])}
+            for application in configuration["applications"]:
+                application["name"] = area_names.get(application["area_id"], application["name"])
+        metadata = {row["entity_id"]: row for row in catalogue.get("entities", [])}
         used = {row["energy_entity"] for row in self.ev.state["points"]}
         used.update(
             entity
@@ -219,7 +303,9 @@ class ThermalService:
                 raise ValueError("Select the heater's electrical power sensor")
             if row["energy_entity"] in used:
                 raise ValueError("A thermal meter cannot also control an EV or appliance cycle")
-        validate_membership(selected, self.consumers.options)
+        selected = forecast_selection(
+            configuration, self.state, self.consumers.selected, self.consumers.options, used
+        )
         self.commit(configuration, selected)
 
     def commit(self, configuration, selected=None):
@@ -238,11 +324,16 @@ class ThermalService:
         self.state, self.issue = checked, None
         self.configuration_unreadable = False
         self.readings, self.active_ids = {}, ()
+        self.climate_readings = {}
         self.captured_at = None
 
     def receive(self, body, now):
         """Admit a complete bounded HA report. Missing or stale values never become zero."""
-        if not isinstance(body, dict) or set(body) != {"configuration_version", "at", "readings"}:
+        if not isinstance(body, dict) or set(body) - {"climate"} != {
+            "configuration_version",
+            "at",
+            "readings",
+        }:
             raise ValueError("Invalid thermal observations")
         if body["configuration_version"] != self.configuration_version:
             raise ValueError("Thermal settings changed. Refresh observations")
@@ -274,8 +365,65 @@ class ThermalService:
             if observed > reported + timedelta(seconds=MAX_THERMAL_CLOCK_SKEW_SECONDS):
                 raise ValueError("Thermal observation expired")
             admitted[row["id"]] = {**deepcopy(row), "captured_at": body["at"]}
-        self.readings = admitted
+        climate = self.receive_climate(body.get("climate", []), reported, now)
+        self.readings, self.climate_readings = admitted, climate
         self.captured_at = reported
+
+    def receive_climate(self, rows, captured, now):
+        """Admit fresh current room temperatures and explicit HA thermostat targets."""
+        if not isinstance(rows, list):
+            raise TypeError("Invalid thermal readings")
+        allowed = {
+            application["id"]: application["climate_entity"]
+            for application in self.state.get("applications", [])
+            if application["kind"] == ApplicationKind.SPACE_HEATING
+            and application["climate_entity"]
+        }
+        admitted, seen = {}, set()
+        for row in rows:
+            if (
+                not isinstance(row, dict)
+                or set(row) != {"id", "entity_id", "temperature_c", "target_c", "observed_at"}
+                or row["id"] not in allowed
+                or row["id"] in seen
+                or row["entity_id"] != allowed[row["id"]]
+            ):
+                raise ValueError("Invalid thermal reading identity")
+            seen.add(row["id"])
+            for field in ("temperature_c", "target_c"):
+                number(row[field], 0, MAXIMUM_SPACE_TEMPERATURE_C)
+            observed = instant(row["observed_at"])
+            if observed > captured + timedelta(seconds=MAX_THERMAL_CLOCK_SKEW_SECONDS):
+                raise ValueError("Thermal observation expired")
+            if (now - observed).total_seconds() < TEMPERATURE_MAX_AGE_SECONDS:
+                admitted[row["id"]] = dict(row)
+        return admitted
+
+    def space_heating_status(self, application, now):
+        """Explain forecast-only operation and expose the effective cap from a fresh HA target."""
+        if application["kind"] != ApplicationKind.SPACE_HEATING:
+            return {}
+        reading = self.climate_readings.get(application["id"])
+        if (
+            reading is not None
+            and (now - instant(reading["observed_at"])).total_seconds()
+            >= TEMPERATURE_MAX_AGE_SECONDS
+        ):
+            reading = None
+        allows = any(source["allow_scheduling"] for source in application["sources"])
+        return {
+            "actual": deepcopy(reading),
+            "preheat_limit_c": reading["target_c"] + application["maximum_preheat_c"]
+            if reading and allows
+            else None,
+            "planning_status": (
+                "Forecast only"
+                if not allows
+                else "Waiting for a current thermostat target"
+                if not reading
+                else "Waiting for a validated thermal model"
+            ),
+        }
 
     def readiness_issue(self, row, now):
         """Explain the same physical and ownership admission rule used by the planner and UI."""
@@ -461,10 +609,26 @@ class ThermalService:
                     ),
                 }
             )
+        applications = application_documents(deepcopy(self.state), catalogue or {})
+        sources = shared_sources(applications)
+        for application in applications:
+            application.update(self.space_heating_status(application, now))
+        source_modes = {
+            meter: self.source_modes[meter]
+            for meter, source in sources.items()
+            if meter in self.source_modes
+            and self.source_modes[meter]["application_id"]
+            in {option["id"] for option in source["options"]}
+            and (now - instant(self.source_modes[meter]["observed_at"])).total_seconds()
+            < TEMPERATURE_MAX_AGE_SECONDS
+        }
         return {
             "configuration": deepcopy(self.state),
             "configuration_version": self.configuration_version,
             "revision": self.revision,
             "devices": devices,
+            "applications": applications,
+            "shared_sources": sources,
+            "source_modes": source_modes,
             "issue": self.issue,
         }

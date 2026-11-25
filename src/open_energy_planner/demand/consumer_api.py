@@ -6,6 +6,7 @@ from datetime import UTC, datetime
 from aiohttp import web
 
 from open_energy_planner.appliances.forecasting import parse_selection
+from open_energy_planner.appliances.thermal.applications import ApplicationKind, application_meters
 
 from ..storage.writes import complete_write
 
@@ -50,11 +51,16 @@ def register(app, demand, lock, ev, thermal, *, mark_command_free):
                     raise web.HTTPConflict(
                         text="Consumer configuration changed. Reload before saving"
                     )
-                reserved = {
-                    row["energy_entity"] for row in (*ev.state["points"], *thermal.state["stores"])
-                }
+                reserved = {row["energy_entity"] for row in ev.state["points"]} | thermal.meters
                 if not reserved <= {row["entity_id"] for row in selected}:
-                    raise ValueError("Retain meters assigned to charge points and electric boilers")
+                    raise ValueError(
+                        "Retain meters assigned to charge points and thermal applications"
+                    )
+                weather_meters = application_meters(thermal.state, ApplicationKind.SPACE_HEATING)
+                if not weather_meters <= {
+                    row["entity_id"] for row in selected if row["weather_sensitive"]
+                }:
+                    raise ValueError("Retain weather-sensitive forecasting for space heating")
                 cancellation = await complete_write(
                     demand.consumers.save, selected, body["expected_version"]
                 )

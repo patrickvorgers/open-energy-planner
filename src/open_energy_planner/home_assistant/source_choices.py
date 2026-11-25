@@ -19,6 +19,7 @@ def configured_sources(configuration, ev, thermal):
         (ev.get("vehicles", ()), ("soc_entity",)),
         (ev.get("points", ()), ("energy_entity", "power_entity", "connected_entity")),
         (thermal.get("stores", ()), ("energy_entity", "temperature_entity", "power_entity")),
+        (thermal.get("applications", ()), ("climate_entity",)),
     ):
         identities.update(row[field] for row in rows for field in fields if row.get(field))
     return sorted(identities)
@@ -118,9 +119,18 @@ class SourceChoices:
         if not active or scope not in self.results:
             return active
         entities = {row["entity_id"]: row for row in active["entities"]}
-        for row in self.results[scope][1]["entities"]:
+        candidates = self.results[scope][1]
+        for row in candidates["entities"]:
             entities.setdefault(row["entity_id"], row)
-        return {**active, "entities": list(entities.values())}
+        return {
+            **active,
+            "entities": list(entities.values()),
+            **(
+                {"areas": candidates["areas"]}
+                if "areas" not in active and "areas" in candidates
+                else {}
+            ),
+        }
 
     def status(self, scope, active, now):
         """Return progress and editor-only choices without modifying any saved configuration."""

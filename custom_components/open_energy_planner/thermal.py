@@ -3,6 +3,7 @@
 import re
 from copy import deepcopy
 from datetime import datetime
+from hashlib import sha256
 from math import isfinite
 
 from homeassistant.core import callback
@@ -27,6 +28,7 @@ MAX_THERMAL_ENERGY_KWH = 10000
 MAX_THERMAL_TEXT_LENGTH = 160
 MIN_TEMPERATURE_C = 0
 MAX_TEMPERATURE_C = 120
+MAX_SPACE_TEMPERATURE_C = 50
 SENSOR_PATTERN = re.compile(r"sensor\.[a-z0-9_]+")
 TEMPERATURE_ENTITY_PATTERN = re.compile(r"(?:sensor|water_heater)\.[a-z0-9_]+")
 HASH_PATTERN = re.compile(r"[0-9a-f]{64}")
@@ -100,11 +102,51 @@ def capture(coordinator, projection, now):
         measured = reading(coordinator.hass, device, now)
         if measured is not None:
             readings.append(measured)
-    return {
+    body = {
         "configuration_version": projection.get("configuration_version"),
         "at": now.isoformat(),
         "readings": readings,
     }
+    if applications := projection.get("climate_bindings"):
+        body["climate"] = [
+            observed
+            for application in applications
+            if (observed := read_climate(coordinator.hass, application, now)) is not None
+        ]
+    return body
+
+
+def read_climate(hass, application, now):
+    """Capture current temperature and a single active setpoint without assuming a schedule."""
+    entity_id = application["climate_entity"]
+    state = hass.states.get(entity_id)
+    if state is None or state.state in ("unknown", "unavailable", "off"):
+        return None
+    try:
+        observed = state.last_reported
+        if observed.utcoffset() is None or observed > now:
+            return None
+        values = {}
+        for field, attribute in (
+            ("temperature_c", "current_temperature"),
+            ("target_c", "temperature"),
+        ):
+            value = state.attributes[attribute]
+            if type(value) not in (float, int):
+                return None
+            if hass.config.units.temperature_unit == "°F":
+                value = (value - 32) * 5 / 9
+            elif hass.config.units.temperature_unit != "°C":
+                return None
+            values[field] = number(value, MIN_TEMPERATURE_C, MAX_SPACE_TEMPERATURE_C)
+        return {
+            "id": application["id"],
+            "entity_id": entity_id,
+            "observed_at": observed.isoformat(),
+            **values,
+        }
+    except (AttributeError, KeyError, TypeError, ValueError, OverflowError):
+        return None
 
 
 def receive(document):
@@ -114,7 +156,17 @@ def receive(document):
     if (
         not isinstance(document, dict)
         or not required <= document.keys()
-        or document.keys() - required - {"configuration", "catalogue", "energy_consumers", "issue"}
+        or document.keys()
+        - required
+        - {
+            "configuration",
+            "catalogue",
+            "energy_consumers",
+            "issue",
+            "applications",
+            "shared_sources",
+            "source_modes",
+        }
     ):
         raise ValueError("Invalid thermal projection")
     for field in ("configuration_version", "revision"):
@@ -245,10 +297,72 @@ def receive(document):
         if actual is not None:
             accepted["actual"] = {field: deepcopy(actual[field]) for field in actual_fields}
         normalized.append(accepted)
+    shared = document.get("shared_sources", {})
+    modes = document.get("source_modes", {})
+    if not isinstance(shared, dict) or not isinstance(modes, dict):
+        raise TypeError("Invalid thermal source modes")
+    shared_sources = []
+    for meter, source in shared.items():
+        if (
+            not SENSOR_PATTERN.fullmatch(identifier(meter))
+            or not isinstance(source, dict)
+            or set(source) != {"meter", "name", "options"}
+            or source["meter"] != meter
+            or not isinstance(source["name"], str)
+            or len(source["name"]) > MAX_THERMAL_TEXT_LENGTH
+            or not isinstance(source["options"], list)
+            or len(source["options"]) < 2
+        ):
+            raise ValueError("Invalid shared thermal source")
+        options = {}
+        for option in source["options"]:
+            if (
+                not isinstance(option, dict)
+                or set(option) != {"id", "name"}
+                or not isinstance(option["name"], str)
+                or len(option["name"]) > MAX_THERMAL_TEXT_LENGTH
+            ):
+                raise ValueError("Invalid thermal mode option")
+            option_id = identifier(option["id"])
+            if option_id in options:
+                raise ValueError("Duplicate thermal mode option")
+            options[option_id] = option["name"]
+        mode = modes.get(meter)
+        if mode is not None:
+            if not isinstance(mode, dict) or set(mode) != {"application_id", "observed_at"}:
+                raise ValueError("Invalid reported thermal mode")
+            timestamp(mode["observed_at"])
+            if mode["application_id"] not in options:
+                raise ValueError("Unknown reported thermal mode")
+        shared_sources.append(
+            {
+                "id": "source_" + sha256(meter.encode()).hexdigest(),
+                "meter": meter,
+                "name": source["name"],
+                "options": options,
+                "mode": deepcopy(mode),
+            }
+        )
+    applications = document.get("applications", [])
+    if not isinstance(applications, list):
+        raise TypeError("Invalid thermal applications")
+    climate_bindings = []
+    for application in applications:
+        if not isinstance(application, dict):
+            raise TypeError("Invalid thermal application")
+        if application.get("kind") != "space_heating" or application.get("climate_entity") is None:
+            continue
+        identity = identifier(application.get("id"))
+        climate = identifier(application["climate_entity"])
+        if not re.fullmatch(r"climate\.[a-z0-9_]+", climate):
+            raise ValueError("Invalid climate entity")
+        climate_bindings.append({"id": identity, "climate_entity": climate})
     return {
         "configuration_version": document["configuration_version"],
         "revision": document["revision"],
         "devices": normalized,
+        **({"shared_sources": shared_sources} if shared_sources else {}),
+        **({"climate_bindings": climate_bindings} if climate_bindings else {}),
     }
 
 
@@ -307,7 +421,13 @@ def command(coordinator, device_id):
 
 def register_entities(coordinator, async_add_entities, platform):
     """Reconcile virtual thermal entities without changing user-assigned names or source devices."""
-    from .thermal_controls import ThermalEnabled, ThermalHeating, ThermalMinimum, ThermalSensor
+    from .thermal_controls import (
+        ThermalEnabled,
+        ThermalHeating,
+        ThermalMinimum,
+        ThermalOperatingMode,
+        ThermalSensor,
+    )
 
     definitions = {
         "sensor": [
@@ -354,6 +474,13 @@ def register_entities(coordinator, async_add_entities, platform):
             for row in getattr(coordinator, "thermal", {}).get("devices", [])
             for key, factory in definitions
         }
+        if platform == "select":
+            desired.update(
+                {
+                    (row["id"], "operating_mode"): (row, ThermalOperatingMode)
+                    for row in getattr(coordinator, "thermal", {}).get("shared_sources", [])
+                }
+            )
         additions = []
         for key, (row, factory) in desired.items():
             device = dr.async_get(hass).async_get_device(
