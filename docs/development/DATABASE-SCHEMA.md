@@ -826,8 +826,10 @@ membership for all linked meters and configuration archives are written in
 the existing shared document transaction.
 `thermal-source-modes.json` uses the same namespace. It retains bounded,
 timestamped mode reports by Energy meter and application UUID for electricity
-attribution. Removing sources or restarting does not restore an old report as
-current. Current climate readings and thermostat targets are transient.
+attribution. Retention is at most 30 days and 4096 reports per meter. At capacity,
+attribution starts at the first full hour at or after the oldest retained timestamp
+when that shortens the window. Removing sources or restarting does not restore an
+old report as current. Current climate readings and thermostat targets are transient.
 Thermal work also retains `state_at`, the model initialization time, and
 `initially_heating`, its measured-running admission classification. Original HA
 report timestamps remain in `thermal_evidence`. Each thermal reading also retains

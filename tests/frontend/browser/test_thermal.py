@@ -212,6 +212,41 @@ def test_space_heating_area_controls_source_filter_and_preserves_boiler(thermal_
     assert len(state["posts"]) == 1
 
 
+def test_shared_heat_source_shows_actual_attribution_window(thermal_page):
+    """Only a capped mode archive replaces the usual period with its retained start time."""
+    page, state = thermal_page
+    document = state["document"]
+    meter = "sensor.boiler_energy"
+    document["configuration"]["applications"] = [
+        {
+            "id": identity,
+            "kind": "hot_water",
+            "name": name,
+            "sources": [{"energy_entity": meter, "allow_scheduling": False}],
+        }
+        for identity, name in (("primary", "Primary tank"), ("utility", "Utility tank"))
+    ]
+    attribution = {"applications_kwh": {"primary": 4}, "unknown_kwh": 1}
+    document["mode_attribution"] = {meter: attribution}
+    page.reload()
+    page.locator("#thermal-store-select").select_option("primary")
+    expect(page.get_by_text("Last 30 days", exact=True)).to_be_visible()
+
+    attribution["retained_from"] = "2026-11-25T08:00:00+00:00"
+    page.reload()
+    page.locator("#thermal-store-select").select_option("primary")
+    expect(page.get_by_text("Attribution period", exact=True)).to_be_visible()
+    expect(page.get_by_text(re.compile(r"^Since .*9:00"))).to_be_visible()
+    expect(page.get_by_text("4 kWh", exact=True)).to_be_visible()
+    expect(page.get_by_text("1 kWh", exact=True)).to_be_visible()
+    evidence = Path("results/ci")
+    evidence.mkdir(parents=True, exist_ok=True)
+    page.screenshot(
+        path=str(evidence / f"thermal-attribution-{page.viewport_size['width']}.png"),
+        full_page=True,
+    )
+
+
 def test_comfort_actions_align_with_field_on_desktop_tablet_and_mobile(thermal_monitor_page):
     """Comfort actions share a level row and wrap below the field on smaller screens."""
     page, _state = thermal_monitor_page

@@ -183,17 +183,22 @@ class ThermalService:
 
     def mode_attribution(self, sources, now):
         """Summarize metered energy separately from forecasting and current mode reporting."""
-        return {
-            meter: attribute_history(
-                self.consumers.histories[meter],
-                self.source_mode_history.get(meter, ()),
+        result = {}
+        start = now - timedelta(days=SOURCE_MODE_HISTORY_DAYS)
+        validity = timedelta(seconds=TEMPERATURE_MAX_AGE_SECONDS)
+        for meter, source in sources.items():
+            if (history := self.consumers.histories.get(meter)) is None:
+                continue
+            samples = self.source_mode_history.get(meter, ())
+            result[meter] = attribute_history(
+                history,
+                samples,
                 {option["id"] for option in source["options"]},
-                now - timedelta(days=SOURCE_MODE_HISTORY_DAYS),
-                timedelta(seconds=TEMPERATURE_MAX_AGE_SECONDS),
+                start,
+                validity,
+                limit_to_retained=len(samples) >= MAX_SOURCE_MODE_SAMPLES,
             )
-            for meter, source in sources.items()
-            if meter in self.consumers.histories
-        }
+        return result
 
     @property
     def configuration_version(self):

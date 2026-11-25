@@ -109,6 +109,39 @@ def test_application_and_mode_history_restore_without_restoring_current_mode(ser
     assert service.source_mode_history == restored.source_mode_history
 
 
+def test_mode_attribution_reports_a_shorter_window_only_at_retention_capacity(service):
+    """Exclude earlier hours only when the bounded archive cannot cover the ordinary window."""
+    first_hour = NOW - timedelta(days=9)
+    hour = timedelta(hours=1)
+    service.consumers.histories[ENERGY] = EnergyHistory(
+        ENERGY,
+        tuple(
+            EnergyHour(first_hour + offset * hour, total, total)
+            for offset, total in enumerate((0, 2, 5, 9), start=-1)
+        ),
+    )
+    reports = [
+        {
+            "application_id": "water",
+            "observed_at": (first_hour + timedelta(minutes=3 * step)).isoformat(),
+        }
+        for step in range(1, 4097)
+    ]
+    service.source_mode_history[ENERGY] = reports
+    sources = {ENERGY: {"options": [{"id": "water"}]}}
+    assert service.mode_attribution(sources, NOW)[ENERGY] == {
+        "applications_kwh": {"water": 7},
+        "unknown_kwh": 0,
+        "retained_from": (first_hour + hour).isoformat(),
+    }
+
+    reports.pop()
+    assert service.mode_attribution(sources, NOW)[ENERGY] == {
+        "applications_kwh": {"water": 7},
+        "unknown_kwh": 2,
+    }
+
+
 def snapshot():
     """Total household demand is 1 kWh, of which the boiler baseline contributes 0.4 kWh."""
     inputs = InstallationProblem((Interval(NOW, 1, 0.3, 0, load_kwh=1),), (), (), (), 5000, 5000)
