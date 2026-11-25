@@ -18,7 +18,7 @@ def register_appliance_routes(app, service, *, live=None):
     repository = SimpleNamespace(state={"enabled": False, "plan": None}, pending_invalidation=False)
     demand = SimpleNamespace(consumers=service.consumers, forecast=None)
     ev = SimpleNamespace(state={"points": []})
-    thermal = SimpleNamespace(state={"stores": []})
+    thermal = SimpleNamespace(meters=frozenset())
     lock = ApplicationStateLock()
     lock.bind_settings(service, demand, ev, thermal)
     register(app, service, repository, live, lock, ev, thermal, mark_command_free=mark_command_free)
