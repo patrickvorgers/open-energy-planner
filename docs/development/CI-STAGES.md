@@ -79,9 +79,10 @@ pull requests from this repository measure the exact commit being reported.
 A separate job authenticates uploads with GitHub OIDC. It downloads the reports
 without checking out or executing repository code.
 
-The workflow also sends JUnit test timings from relevant pushes to `main` and
-manual runs on `main`. The timings describe the unit tests under coverage
-instrumentation. The reports cover the Python app tests in `tests/app`.
+For relevant pushes and manual runs on `main`, the workflow also sends a
+coverage data file that maps individual tests to the source lines they execute,
+plus JUnit timings recorded under coverage instrumentation. The reports cover
+the Python app tests in `tests/app`.
 The existing candidate workflow remains responsible for merge evidence and
 required checks.
 

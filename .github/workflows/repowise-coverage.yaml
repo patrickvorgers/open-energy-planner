@@ -54,14 +54,19 @@ jobs:
       - name: Install the locked app dependencies and test tools
         run: |
           python -m pip install --require-hashes --only-binary=:all: -r requirements.lock
-          python -m pip install --only-binary=:all: pytest==9.1.1 coverage==7.17.5
-      - name: Run app unit tests and export line coverage
+          python -m pip install --only-binary=:all: pytest==9.1.1 coverage==7.17.5 pytest-cov==7.0.0
+      - name: Run app unit tests and export coverage
         env:
           COVERAGE_FILE: ${{ runner.temp }}/repowise-coverage-data
         run: |
-          python -m coverage run --source=src -m pytest -q tests/app -p no:cacheprovider \
+          coverage_options=(--cov=src --cov-report="xml:$RUNNER_TEMP/coverage.xml")
+          if [[ "$GITHUB_REF" == refs/heads/main ]]; then
+            # Use the C tracer to record dynamic contexts on Python 3.14.
+            export COVERAGE_CORE=ctrace
+            coverage_options+=(--cov-context=test)
+          fi
+          python -m pytest -q tests/app -p no:cacheprovider "${coverage_options[@]}" \
             --junitxml="$RUNNER_TEMP/unit-app.xml" -o junit_family=xunit1 -o junit_logging=no
-          python -m coverage xml -o "$RUNNER_TEMP/coverage.xml"
       - name: Retain the Python app test reports
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
@@ -69,6 +74,7 @@ jobs:
           path: |
             ${{ runner.temp }}/coverage.xml
             ${{ runner.temp }}/unit-app.xml
+            ${{ github.ref == 'refs/heads/main' && format('{0}/repowise-coverage-data', runner.temp) || '' }}
           if-no-files-found: error
           retention-days: 7
 
@@ -83,7 +89,7 @@ jobs:
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           name: repowise-app-test-reports
-      - name: Upload the coverage XML
+      - name: Upload coverage reports
         continue-on-error: true
         env:
           HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
@@ -93,9 +99,13 @@ jobs:
           token=$(curl --silent --show-error --fail --max-time 20 \
             --header "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
             "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=repowise" | jq -er '.value')
+          reports=(--form 'report=@coverage.xml')
+          if [[ "$GITHUB_REF" == refs/heads/main ]]; then
+            reports+=(--form 'report=@repowise-coverage-data;filename=.coverage')
+          fi
           curl --silent --show-error --fail --max-time 60 --output /dev/null \
             --header "Authorization: Bearer $token" \
-            --form 'report=@coverage.xml' \
+            "${reports[@]}" \
             --form "repository=$GITHUB_REPOSITORY" --form "head_sha=$HEAD_SHA" \
             --form "pr_number=$PR_NUMBER" --form "event=$GITHUB_EVENT_NAME" \
             --form "run_url=$RUN_URL" --form "workspace=$GITHUB_WORKSPACE" \
