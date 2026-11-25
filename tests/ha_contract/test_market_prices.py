@@ -84,7 +84,7 @@ def test_peer_discovery_report_updates_route_and_rejects_foreign_identity(tmp_pa
                 now = datetime.now(UTC)
                 await prices.refresh(now)
                 async with client.get(
-                    url + "/v1/snapshot", headers=headers, ssl=Fingerprint(bytes.fromhex(pin))
+                    url + "/v1/ha/requests", headers=headers, ssl=Fingerprint(bytes.fromhex(pin))
                 ) as result:
                     requested = (await result.json())["market_price_request"]
                     assert requested["market_area"] == "NL"

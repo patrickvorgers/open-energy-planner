@@ -264,7 +264,7 @@ class PlannerConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                         data["token"],
                         data.get("fingerprint"),
                         expected_instance_id=instance,
-                    ).snapshot()
+                    ).plan_status()
                 if replacing:
                     from .connection_lifecycle import reset_projection
 
@@ -343,7 +343,7 @@ class PlannerConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     raise ValueError("Invalid local URL")
                 data = await LocalClient(
                     async_get_clientsession(self.hass), user_input["url"], user_input["token"]
-                ).snapshot()
+                ).plan_status()
                 if data.get("release") != RELEASE:
                     raise ValueError("Release mismatch")
                 await self.async_set_unique_id(data["instance_id"])

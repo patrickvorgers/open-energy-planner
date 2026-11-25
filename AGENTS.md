@@ -13,6 +13,7 @@ These instructions apply to the entire repository. Read the requirements, releas
 - Use descriptive Python variable and parameter names, including loops, comprehensions, lambdas, helpers and tests. Prefer domain roles such as `battery_flow`, `interval_index`, `duration_hours`, `ports` and `add_constraint` over single letters or cryptic abbreviations. Use `_` only for an intentionally unused binding. Preserve external protocol/database fields and third-party attributes. SQLAlchemy's `Table.c` is not an application variable. See the naming guidance in the code documentation standard.
 - Keep calculation logic in the app and the HA integration thin. Physical device control and safety remain in user-owned HA automations and local equipment.
 - Keep HA/provider dictionaries, HTTP clients, ORM sessions and native solver objects inside their adapters. Use small typed contracts, focused classes and composition across module boundaries.
+- Apply separation of concerns when designing or changing modules and APIs. Give data, decisions and workflows clear owners. Separate operations with independent consistency, timing or failure requirements. Keep operations that share an atomic invariant together and document the reason for shared transactions or locks in the relevant design.
 - Preserve original plans, independent scenario expectations and measurement/source evidence. Do not regenerate expected results merely to make a changed solver pass.
 
 ## Change validation

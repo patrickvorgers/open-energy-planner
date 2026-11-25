@@ -3,7 +3,6 @@
 import asyncio
 from copy import deepcopy
 from datetime import datetime, timedelta
-from types import SimpleNamespace
 
 import pytest
 
@@ -247,6 +246,7 @@ def test_http_observation_age_includes_executor_queue_delay(service, monkeypatch
 
     from open_energy_planner.appliances.cycles import api as api_module
     from open_energy_planner.appliances.cycles import service as service_module
+    from tests.app.appliance.support import register_appliance_routes
 
     body = raw_trace(completed=False)
     observed = instant(body["end"]) if raw else NOW
@@ -279,15 +279,7 @@ def test_http_observation_age_includes_executor_queue_delay(service, monkeypatch
     async def scenario():
         """Dispatch the real HTTP operation through its lock and off-thread write owner."""
         application = web.Application()
-        api_module.register(
-            application,
-            service,
-            SimpleNamespace(state={"enabled": False, "plan": None}),
-            None,
-            asyncio.Lock(),
-            SimpleNamespace(state={"points": []}),
-            SimpleNamespace(state={"stores": []}),
-        )
+        register_appliance_routes(application, service)
         payload = (
             body
             if raw

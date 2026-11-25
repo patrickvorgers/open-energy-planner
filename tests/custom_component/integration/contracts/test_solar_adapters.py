@@ -32,8 +32,7 @@ def test_catalogue_preparation_uses_worker_and_drains_before_unload(
         """Coordinate worker and event-loop checkpoints without timing-based performance assertions."""
         async with running_chain(live=True) as (hass, entry, _url, _root):
             coordinator = entry.runtime_data
-            coordinator.poll_cancel()
-            coordinator.poll_cancel = None
+            coordinator.plan_watch_task.cancel()
             loop = asyncio.get_running_loop()
             loop_thread = get_ident()
             entered, closing = asyncio.Event(), asyncio.Event()
@@ -129,8 +128,7 @@ def test_unload_drains_solar_work_without_reopening_listeners(monkeypatch, pause
         """Pause each asynchronous boundary and unload through the real config-entry lifecycle."""
         async with running_chain() as (hass, entry, _url, _root):
             coordinator = entry.runtime_data
-            coordinator.poll_cancel()
-            coordinator.poll_cancel = None
+            coordinator.plan_watch_task.cancel()
             coordinator.catalogue_sent = None
             bridge = coordinator.solar_forecast_bridge
             provider_coordinator = DataUpdateCoordinator(
@@ -156,7 +154,7 @@ def test_unload_drains_solar_work_without_reopening_listeners(monkeypatch, pause
                 """Delay catalogue or upload while recording any request started after closure."""
                 if coordinator.closed:
                     late_requests.append(path)
-                if path == "/v1/snapshot":
+                if path == "/v1/ha/requests":
                     return {
                         **await original_request(method, path, body),
                         "source": "home_assistant",
@@ -677,8 +675,7 @@ def test_forecast_capture_uses_only_accepted_normalized_catalogue(
             _root,
         ):
             coordinator = oep_entry.runtime_data
-            coordinator.poll_cancel()
-            coordinator.poll_cancel = None
+            coordinator.plan_watch_task.cancel()
             captured = dt_util.utcnow()
             body, providers = _solar_transfer_fixture(monkeypatch, 1, captured)
             if transfer_result == "accepted_large":

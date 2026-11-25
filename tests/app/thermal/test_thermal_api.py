@@ -218,12 +218,14 @@ def test_thermal_api_versioning_telemetry_and_peer_authority(tmp_path):
                         json={"device_id": STORE, "field": field, "value": value},
                     ) as response:
                         assert response.status == expected, await response.text()
-                async with client.get(peer_url + "/v1/snapshot", headers=peer, ssl=ssl) as response:
+                async with client.get(
+                    peer_url + "/v1/ha/requests", headers=peer, ssl=ssl
+                ) as response:
                     assert response.status == 200
-                    snapshot = await response.json()
-                assert snapshot["thermal"]["configuration"]["stores"][0]["enabled"] is False
-                assert snapshot["thermal"]["configuration"]["stores"][0]["minimum_c"] == 42
-                assert snapshot["thermal"]["configuration"]["stores"][0]["heater_w"] == 2000
+                    metadata = await response.json()
+                assert metadata["thermal"]["configuration"]["stores"][0]["enabled"] is False
+                assert metadata["thermal"]["configuration"]["stores"][0]["minimum_c"] == 42
+                assert metadata["thermal"]["configuration"]["stores"][0]["heater_w"] == 2000
             async with client.get(url + "/v1/thermal", headers=admin) as response:
                 durable = (await response.json())["configuration"]
         restored = create_app(tmp_path, TOKEN, source="home_assistant")

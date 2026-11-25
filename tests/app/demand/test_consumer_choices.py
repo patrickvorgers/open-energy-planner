@@ -52,11 +52,13 @@ def test_consumer_choices_are_authenticated_versioned_and_energy_owned(tmp_path)
 def test_settings_view_omits_forecasts_but_preserves_selection_and_full_read(tmp_path, monkeypatch):
     """Appliance editors need choices and ownership, not large original model forecasts."""
     instances = []
+    result = {"status": "active", "synthetic_forecast": "x" * 200000}
     original_init = ConsumerForecasts.__init__
 
     def remember(service, *arguments, **keywords):
-        """Retain the actual runtime so both HTTP views read the same forecast result."""
+        """Install fixture evidence before the initial settings inputs are published."""
         original_init(service, *arguments, **keywords)
+        service.result = result
         instances.append(service)
 
     monkeypatch.setattr(ConsumerForecasts, "__init__", remember)
@@ -68,8 +70,6 @@ def test_settings_view_omits_forecasts_but_preserves_selection_and_full_read(tmp
         async with TestClient(
             TestServer(create_app(tmp_path, token, source="home_assistant"))
         ) as client:
-            result = {"status": "active", "synthetic_forecast": "x" * 200000}
-            instances[0].result = result
             full = await (await client.get("/v1/consumers", headers=headers)).json()
             settings = await (
                 await client.get("/v1/consumers?view=settings", headers=headers)

@@ -178,7 +178,7 @@ def test_loaded_peer_and_app_identity_match_and_missing_peer_is_explicit(tmp_pat
             async with session.get(url + "/setup/session") as response:
                 assert (await response.json())["build_info"]["status"] == "unavailable"
             client = LocalClient(session, url, TOKEN)
-            assert (await client.snapshot())["release"] == BUILD_INFO["version"]
+            assert (await client.plan_status())["release"] == BUILD_INFO["version"]
             async with session.get(
                 url + "/v1/version", headers={"Authorization": "Bearer " + TOKEN}
             ) as response:
@@ -200,7 +200,7 @@ def test_peer_contact_expires_and_unauthenticated_spoof_cannot_update_it(tmp_pat
             server(create_app(tmp_path, TOKEN, source="home_assistant")) as url,
             ClientSession() as session,
         ):
-            await LocalClient(session, url, TOKEN).snapshot()
+            await LocalClient(session, url, TOKEN).plan_status()
             async with session.get(
                 url + "/v1/version", headers={"X-OEP-Release": "spoof"}
             ) as response:
@@ -229,14 +229,14 @@ def test_integration_rejects_unidentified_or_different_app(field):
             headers[HEADER_FIELDS[field]] = "different"
         app = web.Application()
 
-        async def snapshot(request):
+        async def plan_status(request):
             """Return a plausible release with absent or different process provenance."""
             return web.json_response({"release": BUILD_INFO["version"]}, headers=headers)
 
-        app.router.add_get("/v1/snapshot", snapshot)
+        app.router.add_get("/v1/ha/plan-status", plan_status)
         async with server(app) as url, ClientSession() as session:
             with pytest.raises(ReleaseMismatchError):
-                await LocalClient(session, url, TOKEN).snapshot()
+                await LocalClient(session, url, TOKEN).plan_status()
 
     asyncio.run(scenario())
 
@@ -281,7 +281,7 @@ def test_commit_metadata_does_not_change_runtime_version_build_compatibility(tmp
             server(create_app(tmp_path, TOKEN, source="home_assistant")) as url,
             ClientSession() as session,
         ):
-            assert (await LocalClient(session, url, TOKEN).snapshot())["release"] == BUILD_INFO[
+            assert (await LocalClient(session, url, TOKEN).plan_status())["release"] == BUILD_INFO[
                 "version"
             ]
             async with session.get(url + "/setup/session") as response:

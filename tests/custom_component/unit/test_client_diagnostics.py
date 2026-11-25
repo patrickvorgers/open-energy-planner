@@ -37,10 +37,10 @@ def test_request_logs_failures_and_recovery_without_private_values(caplog, monke
             return web.json_response({"ok": True}, headers=headers)
 
         application = web.Application()
-        application.router.add_get("/v1/snapshot", respond)
+        application.router.add_get("/v1/ha/plan-status", respond)
         async with TestServer(application) as server, ClientSession() as session:
             client = LocalClient(session, str(server.make_url("")), "synthetic-private-token")
-            route = "/v1/snapshot?key=synthetic-private-query"
+            route = "/v1/ha/plan-status?key=synthetic-private-query"
             for status in (503, 503, 409):
                 with pytest.raises(ClientResponseError) as failure:
                     await client.request("GET", route)
@@ -54,20 +54,20 @@ def test_request_logs_failures_and_recovery_without_private_values(caplog, monke
     assert [(record.levelno, record.getMessage()) for record in records] == [
         (
             logging.WARNING,
-            "App request GET /v1/snapshot failed after 1.000 s (ClientResponseError (HTTP 503)).",
+            "App request GET /v1/ha/plan-status failed after 1.000 s (ClientResponseError (HTTP 503)).",
         ),
         (
             logging.DEBUG,
-            "App request GET /v1/snapshot failed after 1.000 s (ClientResponseError (HTTP 503)).",
+            "App request GET /v1/ha/plan-status failed after 1.000 s (ClientResponseError (HTTP 503)).",
         ),
         (
             logging.WARNING,
-            "App request GET /v1/snapshot failed after 1.000 s (ClientResponseError (HTTP 409)).",
+            "App request GET /v1/ha/plan-status failed after 1.000 s (ClientResponseError (HTTP 409)).",
         ),
-        (logging.INFO, "App request GET /v1/snapshot recovered in 1.000 s."),
+        (logging.INFO, "App request GET /v1/ha/plan-status recovered in 1.000 s."),
         (
             logging.WARNING,
-            "App request GET /v1/snapshot failed after 1.000 s (ClientResponseError (HTTP 503)).",
+            "App request GET /v1/ha/plan-status failed after 1.000 s (ClientResponseError (HTTP 503)).",
         ),
     ]
     assert "synthetic-private" not in caplog.text
@@ -121,11 +121,11 @@ def test_request_logs_status_for_app_rejections(caplog, status, headers, error_t
             return web.Response(status=status, headers=headers)
 
         application = web.Application()
-        application.router.add_get("/v1/snapshot", respond)
+        application.router.add_get("/v1/ha/plan-status", respond)
         async with TestServer(application) as server, ClientSession() as session:
             client = LocalClient(session, str(server.make_url("")), "synthetic-private-token")
             with pytest.raises(error_type):
-                await client.snapshot()
+                await client.plan_status()
 
     asyncio.run(scenario())
     assert f"({error_type.__name__} (HTTP {status}))" in caplog.text

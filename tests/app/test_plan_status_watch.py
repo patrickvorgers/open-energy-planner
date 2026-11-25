@@ -58,3 +58,39 @@ def test_watch_http_replies_only_with_cursor_and_rejects_invalid_parameter():
                 assert response.status == 400
 
     asyncio.run(scenario())
+
+
+def test_shutdown_releases_a_pending_watch(monkeypatch):
+    """Return a retryable failure immediately when the app restarts with a matched wait."""
+
+    async def scenario():
+        """Gate a real matched HTTP watch and then run the application's shutdown callbacks."""
+        application = web.Application()
+        watch = plan_status_watch.PlanStatusWatch()
+        entered = asyncio.Event()
+        initial = await watch.wait(None)
+        wait = watch.wait
+
+        async def track_wait(cursor):
+            """Record the matching wait just before entering the pending branch."""
+            assert cursor == initial
+            entered.set()
+            return await wait(cursor)
+
+        monkeypatch.setattr(watch, "wait", track_wait)
+        application.router.add_get("/v1/ha/plan-status/watch", watch.response)
+        application.on_shutdown.append(watch.shutdown)
+        async with TestServer(application) as server, ClientSession() as session:
+            url = server.make_url("/v1/ha/plan-status/watch")
+            awaiting = asyncio.create_task(session.get(url, params={"cursor": initial}))
+            try:
+                await asyncio.wait_for(entered.wait(), timeout=2)
+                assert not awaiting.done()
+                await application.shutdown()
+                async with await asyncio.wait_for(awaiting, timeout=2) as response:
+                    assert response.status == 503
+            finally:
+                awaiting.cancel()
+                await asyncio.gather(awaiting, return_exceptions=True)
+
+    asyncio.run(scenario())

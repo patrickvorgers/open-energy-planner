@@ -4,15 +4,24 @@ Developer reference for the authenticated app/integration boundary. For ordinary
 
 HA OS exposes administration through authenticated HA ingress and pairs automatically through Supervisor without user tokens/codes. Standalone administration requires the app Bearer token and explicit pairing consent. The standalone app listener uses HTTP, so remote standalone administration requires a TLS-terminating reverse proxy. The separate discovery and peer listener uses a persistent certificate with a SHA-256 pin and a separate persistent HA credential restricted to synchronization routes. See [automatic pairing](AUTOMATIC-PAIRING.md). The explicit `--demo` mode optimizes synthetic inputs through the same installation model and schema-3 device commands as live planning. Empty archives contain no fabricated plan. Deterministic test schedules and injected solver results belong to test fixtures.
 
-- `GET /v1/snapshot`: full accepted plan, release/configuration, enable intent, receipt acknowledgement and current calculation status/source ID. In HA mode, polling checks input validity and may request a rate-limited planning round when due. `Server-Timing` reports milliseconds inside the app. `snapshot_capture_wait` and `snapshot_state_wait` measure the two state-lock acquisitions. `snapshot_settlement`, `snapshot_appliance_tick`, `snapshot_live_refresh`, `snapshot_bonus_history`, `snapshot_forecast_history`, `snapshot_demand`, `snapshot_document` and `snapshot_json` identify the work that follows. Pending durable plan revocation adds `revocation_wait` and `revocation_save` when applicable. The header records fixed operation names and durations.
-- `PUT /v1/enabled`: boolean plus stable control request ID. Returns only `{"accepted": true, "enabled": false, "request_id": "example-pause"}` after successful persistence, with the confirmed boolean and request ID. This development API returns a control receipt rather than a snapshot. It does not read historical financial data. Pause is immediate in HA. Resume requests a fresh optimizer round. Repeated delivery of one control request does not create repeated plans. The integration validates the exact receipt shape, boolean intent and request ID, in addition to the paired release/build headers. A delayed receipt cannot clear a newer local intent. Normal periodic synchronization still fetches the complete `GET /v1/snapshot` and performs catalogue, observation and history work. Resume commands require a newly valid plan generated after the resume boundary.
+- `GET /v1/readiness`: app-owned health probe with source mode, planning status and whether a committed plan exists. Compose treats a reachable HA-mode app awaiting configuration as healthy. Synthetic mode waits for a first validated plan. The probe leaves planning and history work to their runtime owners.
+- `GET /v1/ha/plan-status`: small status containing the installation ID, configuration revision, committed enable intent, planning status, active plan ID, and acknowledged plan ID. A pending pause with a retained plan returns `command_suspended: true` and no active plan ID. Home Assistant withdraws commands during the write and saves the pause only after it commits. If the write fails, the same plan can recover within its validity. The status performs no plan projection, historical read, or planning refresh.
+- `GET /v1/ha/plan-status/watch?cursor=...`: authenticated advisory wake signal for plan reconciliation. See [plan status subscription](#plan-status-subscription).
+- `GET /v1/ha/plan?plan_id=...`: current command envelope and the device capabilities needed to validate it. A superseded, expired or disabled plan returns HTTP 409. The integration requests this document only when it has no matching accepted plan. It validates the complete commands, acknowledges the plan if a receipt is missing and confirms current plan status before installing the commands.
+- `GET /v1/ha/measurement-config?revision=...`: active sensor bindings for the advertised revision. A changed revision returns HTTP 409. The integration updates bindings independently of Recorder and setup work.
+- `GET /v1/ha/requests`: pending Recorder/history requests, setup/catalogue work and virtual-entity projections. Demand and solar contribute their pending requests and actionable issues. Consumer virtual sensors receive their own active forecast and validity. The route omits household and solar dashboard forecasts, alternate consumer scenarios, measurement bindings and the command plan. An outstanding historical transfer leaves command status and acceptance independent.
+- `GET /v1/snapshot`: app administration view containing the full accepted plan, release/configuration, enable intent, receipt acknowledgement and current calculation status/source ID. The app-owned view retains its validity check. The Home Assistant peer uses the focused routes above. `Server-Timing` reports milliseconds inside the app. `snapshot_capture_wait` and `snapshot_state_wait` measure the two state-lock acquisitions. `snapshot_settlement`, `snapshot_appliance_tick`, `snapshot_live_refresh`, `snapshot_bonus_history`, `snapshot_forecast_history`, `snapshot_demand` and `snapshot_projection_capture` identify request and projection-input capture. `snapshot_document` and `snapshot_json` measure worker projection and encoding outside the lock. The app rechecks plan validity and enable intent after the worker finishes. Pending durable plan revocation adds `revocation_wait` and `revocation_save` when applicable. The header records fixed operation names and durations.
+- `GET /v1/appliances` and `GET /v1/consumers?view=settings` read the latest complete published settings inputs, including source ownership and save versions. Readers can finish during a pending settings transaction. A failed persistence leaves the previous settings in effect. Active appliance start requests must still pass current plan, authorization and expiry checks before being returned.
+- `PUT /v1/enabled`: boolean plus stable control request ID. Returns only `{"accepted": true, "enabled": false, "request_id": "example-pause"}` after successful persistence, with the confirmed boolean and request ID. This development API returns a control receipt rather than a snapshot. It does not read historical financial data. Pause is immediate in HA. Resume requests a fresh optimizer round. Repeated delivery of one control request does not create repeated plans. The integration validates the exact receipt shape, boolean intent and request ID, in addition to the paired release/build headers. A delayed receipt cannot clear a newer local intent. Command reconciliation reads current plan status when the watch signals a change or reconnects. A failed watch falls back to lightweight status checks. Catalogue, current observations and history each run outside the command reconciliation lock. Resume commands require a newly valid plan generated after the resume boundary.
 - `POST /v1/replan`: explicit synthetic source update (`initial_kwh`, optional first-slot `first_load_kwh`). Invalid input is rejected. In HA mode it requests a fresh calculation from accepted real measurements and the independent future-input provider. Synthetic initial-state fields are not used.
 - `PUT /v1/sources`: HA-mode app-owned source configuration with expected-revision checks.
+- `POST /v1/ha/catalogue`: accept a complete Home Assistant catalogue and report `configuration_issue` with the `config_revision` evaluated by the app. If the integration adopts new source bindings during the upload, a late issue applies to those bindings only when the app evaluated their revision. A newer plan using the same bindings remains subject to the issue.
 - `PUT /v1/setup`: validate the installation, solar and demand proposals together against current Energy membership and each expected version. Commit only changed settings in one transaction and return canonical settings, devices and warnings. Revoke obsolete plans before confirming the save. Forecast calculation, the planning snapshot and settlement history are outside this response.
   See the [installation save sequence](INSTALLATION-PLANNING.md#saving-installation-settings) for commit, acknowledgement and recovery.
-- `POST /v1/observations`: HA-mode normalized readings/issues with per-source timestamps and configuration revision.
+- `POST /v1/observations`: HA-mode normalized readings and issues with per-source timestamps and configuration revision. The peer receipt identifies the accepted revision. A changed revision returns HTTP 409 and withdraws the old observation authority.
 - `POST /v1/history`: normalized hourly export evidence for the current app-requested missing bonus baseline, or an explicit read failure. Stale request versions cannot overwrite confirmed counters.
-- `POST /v1/ack`: receipt of the current plan ID, never physical execution confirmation.
+- `POST /v1/demand/history` and `POST /v1/solar/history`: source-bound Recorder evidence for the current request. The peer receipt carries the accepted domain diagnostics so Home Assistant can display recovery advice immediately.
+- `POST /v1/ack`: idempotently records receipt of the current authorized plan ID. Physical execution has separate measurement and feedback paths.
 - `GET /v1/savings?start=...&end=...`: read-only stored daily Savings once daily backfill has begun. `daily: true` identifies the three-scenario `totals`, independent `coverage`, bounded `days` and SQL `chart` contract. Days are complete local calendar periods within aware UTC query bounds. Current-day quarters are not published as a completed day. Internal continuation is omitted. Benefits sum only pairwise matching coverage and unavailable amounts remain null. Legacy `revision` reads retain their interval contract while temporary evidence remains. See [daily settlement](SAVINGS.md).
 
 ### Plan status subscription
@@ -20,18 +29,24 @@ HA OS exposes administration through authenticated HA ingress and pairs automati
 `GET /v1/ha/plan-status/watch?cursor=...` uses the paired credential, pinned TLS
 where applicable and the release/build checks of the other synchronization
 routes. A missing or unknown cursor returns immediately. A matching cursor
-waits for a changed position or returns the same position after at most
-20 seconds. The response is a non-cacheable JSON object with one `cursor`
-field. The cursor is process-local and carries no plan contents.
+waits for a change or returns the same cursor after at most 20 seconds.
+The non-cacheable JSON response contains one `cursor` field with no plan
+contents. The cursor belongs to the current app process.
 
-The integration subscribes before reading authoritative plan status. A change
-that happens during that read remains visible to the next subscription wait.
-On publication, revocation or reconnect it reconciles current state, downloads
-only a needed plan version and confirms that version after local acceptance.
-An idle reply with the same cursor does not cause another status read. When the
-subscription fails, the integration checks plan status on its recovery cadence.
-The local schedule still enforces the original command expiry independently.
-Measurement reports and Recorder requests use their own exchanges.
+The integration acquires the cursor before reading authoritative status.
+A pause transaction wakes the watch immediately. If the transaction rolls back,
+the next wake allows a still-valid plan to resume without downloading it again.
+Changes during that read still reach the next watch. A publication or
+revocation wakes the integration, which reads current status and fetches
+and acknowledges only the plan it needs. When no plan is valid, changes to
+the readiness explanation can also signal that status should be refreshed.
+An unchanged cursor does not trigger a status read. Watch failure falls back
+to lightweight status checks while the integration tries to reconnect. An
+app restart releases pending waits so the integration can reconnect promptly.
+
+A watch signals revocation while an archive write is pending. Home Assistant
+continues to enforce local command expiry independently. Sensor reports and
+requested Recorder data use their own exchanges.
 
 EV endpoints share the same authenticated boundary:
 

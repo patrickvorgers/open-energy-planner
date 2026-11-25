@@ -512,6 +512,7 @@ class Schedule:
         self.max_age_seconds = max_age_seconds
         self.plan = None
         self.document = None
+        self.suspended = False
         self.invalidated_generation = None
         self.enabled = True
         self.resume_after = None
@@ -522,7 +523,26 @@ class Schedule:
         Copy the accepted document so caller mutation cannot alter it. Return False
         for an identical already-accepted plan and True for a new accepted version.
         """
+        candidate = self.validate_candidate(document, now)
+        return self.install_candidate(candidate, document, now)
+
+    def validate_candidate(self, document, now):
+        """Parse and check a complete candidate before acknowledging it to the app."""
         candidate = Plan.parse(document, self.config_revision)
+        self._check_candidate(candidate, document, now)
+        return candidate
+
+    def install_candidate(self, candidate, document, now):
+        """Install a parsed candidate after checking local authority and elapsed time again."""
+        if not self._check_candidate(candidate, document, now):
+            return False
+        self.plan, self.document = candidate, deepcopy(document)
+        return True
+
+    def _check_candidate(self, candidate, document, now):
+        """Keep plan identity, revision and local validity checks independent of parsing."""
+        if candidate.config_revision != self.config_revision:
+            raise RevokedPlan("Plan was prepared for a different configuration")
         if (
             self.invalidated_generation is not None
             and candidate.generated_at <= self.invalidated_generation
@@ -539,7 +559,6 @@ class Schedule:
                 return False
             if candidate.generated_at <= self.plan.generated_at:
                 raise ValueError("Older candidate cannot replace current plan")
-        self.plan, self.document = candidate, deepcopy(document)
         return True
 
     def invalidate(self):
@@ -550,6 +569,7 @@ class Schedule:
         ):
             self.invalidated_generation = self.plan.generated_at
         self.plan = self.document = None
+        self.suspended = False
 
     def pause(self, now):
         """Disable projection immediately and record the boundary for a later explicit resume."""
@@ -567,7 +587,7 @@ class Schedule:
             return Projection("paused", None)
         if self.resume_after and (not self.plan or self.plan.generated_at <= self.resume_after):
             return Projection("waiting_for_new_plan", None)
-        if not self.plan:
+        if self.suspended or not self.plan:
             return Projection("not_ready", None)
         if now >= self.plan.valid_until:
             return Projection("expired", None)
@@ -580,7 +600,7 @@ class Schedule:
 
     def next_boundary(self, now):
         """Return the next step/freshness/validity boundary, or None without an enabled plan."""
-        if not self.plan or not self.enabled:
+        if not self.plan or not self.enabled or self.suspended:
             return None
         from datetime import timedelta
 

@@ -20,10 +20,11 @@ class PlanStatusWatch:
         self._cursor = uuid4().hex
         self._changed = asyncio.Event()
         self._status: tuple | None = None
+        self._closing = False
 
     def publish(self, status: tuple):
         """Wake existing requests after a new authoritative status becomes visible."""
-        if status == self._status:
+        if self._closing or status == self._status:
             return
         self._status = status
         self._cursor = uuid4().hex
@@ -38,12 +39,20 @@ class PlanStatusWatch:
                     await self._changed.wait()
         return self._cursor
 
+    async def shutdown(self, _app: web.Application):
+        """Release pending waits before the app starts draining HTTP handlers."""
+        self._closing = True
+        self._changed.set()
+
     async def response(self, request: web.Request) -> web.Response:
         """Return only the advisory cursor through the existing authenticated API."""
         cursor = request.query.get("cursor")
         if cursor is not None and not _CURSOR.fullmatch(cursor):
             raise web.HTTPBadRequest(text="Invalid plan status cursor")
+        observed = await self.wait(cursor)
+        if self._closing:
+            raise web.HTTPServiceUnavailable(text="Restart in progress")
         return web.json_response(
-            {"cursor": await self.wait(cursor)},
+            {"cursor": observed},
             headers={"Cache-Control": "no-store"},
         )

@@ -384,7 +384,7 @@ def test_hourly_api_rejects_forged_progress_and_replans_only_on_effective_profil
     from aiohttp import web
     from aiohttp.test_utils import TestClient, TestServer
 
-    from open_energy_planner.appliances.cycles.api import register
+    from tests.app.appliance.support import register_appliance_routes
 
     async def scenario():
         """Exercise real HTTP parsing and SQL commits, without replacing the owning service with a mock."""
@@ -401,15 +401,7 @@ def test_hourly_api_rejects_forged_progress_and_replans_only_on_effective_profil
         events = Events(ActivityStore(service.documents.engine))
         app[EVENTS] = events
         service.configure(ENTITY, False)
-        register(
-            app,
-            service,
-            SimpleNamespace(state={"enabled": False, "plan": None}),
-            SimpleNamespace(refresh_async=refresh_async),
-            asyncio.Lock(),
-            SimpleNamespace(state={"points": []}),
-            SimpleNamespace(state={"stores": []}),
-        )
+        register_appliance_routes(app, service, live=SimpleNamespace(refresh_async=refresh_async))
         start = (datetime.now(UTC) - timedelta(days=30)).replace(minute=0, second=0, microsecond=0)
         body = {
             "entity_id": ENTITY,

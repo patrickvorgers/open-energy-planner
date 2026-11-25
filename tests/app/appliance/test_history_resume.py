@@ -218,15 +218,14 @@ def test_forward_batch_activity_reports_usable_coverage_and_skips_only_exact_rep
     """Real HTTP activity marks actual paired forward evidence usable and its identical replay skipped."""
     import asyncio
     from datetime import UTC, datetime
-    from types import SimpleNamespace
 
     from aiohttp import web
     from aiohttp.test_utils import TestClient, TestServer
 
     from open_energy_planner.activities.api import EVENTS
     from open_energy_planner.activities.events import Events
-    from open_energy_planner.appliances.cycles.api import register
     from open_energy_planner.storage.adapters.activities import ActivityStore
+    from tests.app.appliance.support import register_appliance_routes
 
     async def scenario():
         """Exercise genuine batch admission, SQL progress and ActivityStore publication."""
@@ -239,15 +238,7 @@ def test_forward_batch_activity_reports_usable_coverage_and_skips_only_exact_rep
         app = web.Application()
         events = Events(ActivityStore(service.documents.engine))
         app[EVENTS] = events
-        register(
-            app,
-            service,
-            SimpleNamespace(state={"enabled": False, "plan": None}),
-            None,
-            asyncio.Lock(),
-            SimpleNamespace(state={"points": []}),
-            SimpleNamespace(state={"stores": []}),
-        )
+        register_appliance_routes(app, service)
         core_start = instant(pending["start"])
         body = {
             "entity_id": ENTITY,

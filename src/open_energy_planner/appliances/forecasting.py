@@ -1,7 +1,7 @@
 """Forecast Energy-owned consumers separately, retaining the total-household safety baseline."""
 
 from contextlib import contextmanager
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from datetime import datetime, timedelta
 from functools import partial
 from zoneinfo import ZoneInfo
@@ -99,18 +99,8 @@ class ConsumerForecasts:
 
     @property
     def version(self):
-        """Bind worker admission and model comparisons to choices and current Energy membership."""
-        return digest(
-            [
-                self.selected,
-                [
-                    {key: value for key, value in row.items() if key != "name"}
-                    for row in self.options
-                ],
-                self.catalogue_known,
-                self.issue,
-            ]
-        )
+        """Version choices independently of their display names."""
+        return consumer_version(self.selected, self.options, self.catalogue_known, self.issue)
 
     def sync(self, catalogue):
         """Use authoritative consumer membership, including upstream links and physical names."""
@@ -227,7 +217,52 @@ class ConsumerForecasts:
         self.weather_reference = weather_reference
         self.weather_valid_until = weather_valid_until
 
-    def _live_document(self, forecast, now):
+    def read_view(self, *, forecasts=True):
+        """Capture accepted inputs for projection without borrowing the mutable service."""
+        return ConsumerView(
+            self.selected,
+            self.options,
+            self.catalogue_known,
+            self.issue,
+            dict(self.failures),
+            self.result if forecasts else None,
+            self.checked_at,
+            self.weather_reference,
+            self.weather_valid_until,
+        )
+
+    def document(self, *, forecasts=True, now=None):
+        """Expose current choices and component issues through the shared read projection."""
+        return self.read_view(forecasts=forecasts).document(forecasts=forecasts, now=now)
+
+
+def consumer_version(selected, options, catalogue_known, issue):
+    """Bind settings to choices and Energy source membership independently of display names."""
+    return digest(
+        [
+            selected,
+            [{key: value for key, value in row.items() if key != "name"} for row in options],
+            catalogue_known,
+            issue,
+        ]
+    )
+
+
+@dataclass(frozen=True, eq=False)
+class ConsumerView:
+    """Copy-on-write source choices and forecasts, with a private history-diagnostic copy."""
+
+    selected: tuple
+    options: tuple
+    catalogue_known: bool
+    issue: str | None
+    failures: dict
+    result: dict | None
+    checked_at: datetime | None
+    weather_reference: str | None
+    weather_valid_until: datetime | None
+
+    def _live_document(self, forecast, now, *, for_ha=False):
         """Project a native issue onto the transport grid with the app-owned validity deadline."""
         issued_at = datetime.fromisoformat(forecast["issued_at"])
         valid_until = (self.checked_at or issued_at) + timedelta(minutes=FORECAST_MAX_AGE_MINUTES)
@@ -238,7 +273,11 @@ class ConsumerForecasts:
             for step in forecast["steps"]
         )
         return {
-            **forecast,
+            **(
+                {key: forecast[key] for key in ("model", "unit", "issued_at")}
+                if for_ha
+                else forecast
+            ),
             "valid_until": valid_until.isoformat(),
             "steps": [
                 {"start": step.start.isoformat(), "duration_h": step.duration_h, "kwh": step.kwh}
@@ -246,10 +285,39 @@ class ConsumerForecasts:
             ],
         }
 
+    def ha_projection(self, now):
+        """Project only membership and active forecasts consumed by HA virtual devices."""
+        result = self.result
+        return {
+            "options": [
+                {key: option[key] for key in ("entity_id", "name", "power_entity") if key in option}
+                for option in self.options
+            ],
+            "selected": [
+                {"entity_id": item["entity_id"], "weather_sensitive": item["weather_sensitive"]}
+                for item in self.selected
+            ],
+            "result": {
+                "status": result["status"],
+                "devices": [
+                    {
+                        "entity_id": device["entity_id"],
+                        "status": device.get("status", result["status"]),
+                        "forecast": self._live_document(device["forecast"], now, for_ha=True),
+                    }
+                    for device in result.get("devices", ())
+                ],
+            }
+            if result is not None
+            else None,
+        }
+
     def document(self, *, forecasts=True, now=None):
         """Expose current choices and project live component issues when a request time is supplied."""
         document = {
-            "version": self.version,
+            "version": consumer_version(
+                self.selected, self.options, self.catalogue_known, self.issue
+            ),
             "selected": list(self.selected),
             "options": list(self.options),
             "issue": self.issue,

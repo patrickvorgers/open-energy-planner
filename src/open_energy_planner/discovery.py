@@ -145,7 +145,7 @@ def connection_app(pairing, token, upstream, ui_url):
                     content_type="application/json",
                     headers={
                         name: response.headers[name]
-                        for name in (*HEADER_FIELDS.values(), "X-OEP-Mismatch")
+                        for name in (*HEADER_FIELDS.values(), "X-OEP-Mismatch", "Cache-Control")
                         if name in response.headers
                     },
                 )

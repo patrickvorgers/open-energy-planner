@@ -170,6 +170,10 @@ def register(app, runtime, live, lock, persist, snapshot, membership):
                     raise cancellation
             except ValueError:
                 raise web.HTTPBadRequest(text="Invalid solar history source/range") from None
+            if request.headers.get("X-OEP-View") == "commands":
+                return web.json_response(
+                    {"accepted": True, "diagnostics": runtime.history_diagnostics()}
+                )
         return await snapshot(request)
 
     async def feedback(request):

@@ -16,6 +16,22 @@ from homeassistant.util import dt as dt_util
 from tests.custom_component.support.chain import running_chain, setup_energy
 
 
+async def wait_for_simulator_history(hass):
+    """Drain only finite laboratory tasks while the OEP connection remains live."""
+    fixture_tasks = {
+        "OEP existing Energy test history",
+        "OEP laboratory initialization",
+        "OEP test history seed",
+    }
+    async with asyncio.timeout(90):
+        while True:
+            await hass.async_block_till_done()
+            pending = [task for task in asyncio.all_tasks() if task.get_name() in fixture_tasks]
+            if not pending:
+                return
+            await asyncio.gather(*pending)
+
+
 @pytest.mark.parametrize("value", [float("nan"), float("inf"), -float("inf")])
 def test_simulated_ev_rejects_nonfinite_service_values(value):
     """Nonfinite power or SoC must fail before a durable simulated counter can be poisoned."""
@@ -80,7 +96,7 @@ def test_seeded_lab_without_schema_marker_preserves_energy_configuration(monkeyp
                 "test_environment.oep_test_fixture.history.async_import_statistics", imports
             )
             assert await oep_test_fixture.async_setup_entry(hass, entry)
-            await hass.async_block_till_done(wait_background_tasks=True)
+            await wait_for_simulator_history(hass)
             await get_instance(hass).async_block_till_done()
             assert manager.data["energy_sources"] == original["energy_sources"]
             assert all(item in manager.data["device_consumption"] for item in devices)
@@ -213,7 +229,7 @@ def test_native_test_data_reuses_energy_ids_units_and_preferences(power_config):
             assert hints["batteries"][0]["power_entity"] == "sensor.oep_test_battery_power"
             assert abs(float(hass.states.get("sensor.native_power").state)) <= 3000
             assert hass.states.get("sensor.native_power").attributes["unit_of_measurement"] == "W"
-            await hass.async_block_till_done(wait_background_tasks=True)
+            await wait_for_simulator_history(hass)
             await get_instance(hass).async_block_till_done()
             metadata = await get_instance(hass).async_add_executor_job(
                 partial(get_metadata, hass, statistic_ids=ids)
@@ -292,7 +308,7 @@ def test_native_test_data_reuses_energy_ids_units_and_preferences(power_config):
 
                 cancel = hass.bus.async_listen("state_changed", record_counter)
                 assert await async_setup_existing(hass, entry)
-                await hass.async_block_till_done(wait_background_tasks=True)
+                await wait_for_simulator_history(hass)
                 await get_instance(hass).async_block_till_done()
                 second = await get_instance(hass).async_add_executor_job(
                     statistics_during_period,
@@ -318,7 +334,7 @@ def test_native_test_data_reuses_energy_ids_units_and_preferences(power_config):
                     else:
                         hass.states.async_remove(entity)
                 assert await async_setup_existing(hass, entry)
-                await hass.async_block_till_done(wait_background_tasks=True)
+                await wait_for_simulator_history(hass)
                 await get_instance(hass).async_block_till_done()
                 restored_history = await get_instance(hass).async_add_executor_job(
                     statistics_during_period,
@@ -441,7 +457,7 @@ def test_existing_lab_initializes_new_ev_history_after_ha_start_without_bootstra
             _url,
             _root,
         ):
-            await hass.async_block_till_done(wait_background_tasks=True)
+            await wait_for_simulator_history(hass)
             await get_instance(hass).async_block_till_done()
             assert hass.states.get("sensor.oep_test_car_a_soc").state == "35"
             assert hass.states.get("sensor.oep_test_car_b_soc").state == "45"
@@ -465,7 +481,7 @@ def test_fresh_lab_seeds_household_before_individual_consumer():
             manager = await async_get_manager(hass)
             await manager.async_update({"energy_sources": [], "device_consumption": []})
             assert await oep_test_fixture.async_setup_entry(hass, entry)
-            await hass.async_block_till_done(wait_background_tasks=True)
+            await wait_for_simulator_history(hass)
             await get_instance(hass).async_block_till_done()
             assert manager.data["energy_sources"]
             consumer = manager.data["device_consumption"][0]["stat_consumption"]

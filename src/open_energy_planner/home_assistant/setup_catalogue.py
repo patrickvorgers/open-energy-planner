@@ -334,6 +334,9 @@ class SetupDiscovery:
                 result = {
                     "accepted": True,
                     "configuration_issue": self.live.configuration_issue(),
+                    "config_revision": self.live.configuration.revision
+                    if self.live.configuration
+                    else "demo-1",
                     "devices": self.catalogue.devices(
                         installation_catalogue(
                             self.installation, self.solar, self.live.current_snapshot

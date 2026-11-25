@@ -2,7 +2,7 @@
 
 from bisect import bisect_left, bisect_right
 from copy import deepcopy
-from dataclasses import asdict, replace
+from dataclasses import asdict, dataclass, replace
 from datetime import UTC, date, datetime, time, timedelta
 from math import fsum
 from time import monotonic
@@ -125,62 +125,12 @@ class ApplianceService:
     @property
     def revision(self):
         """Version the appliance state and observations exposed by the appliance API."""
-        return self._revision(include_observation_progress=True)
+        return self.read_view().revision(include_observation_progress=True)
 
     @property
     def planning_revision(self):
         """Version task and program changes without counting progress in the same observed run."""
-        return self._revision(include_observation_progress=False)
-
-    def _revision(self, *, include_observation_progress):
-        """Keep observation progress out of frozen planning identity."""
-        return digest(
-            [
-                {
-                    entity: {
-                        key: (
-                            {
-                                field: detail
-                                for field, detail in value.items()
-                                if field not in ("observed_until", "energy_kwh")
-                            }
-                            if key == "observed_run"
-                            and not include_observation_progress
-                            and isinstance(value, dict)
-                            else value
-                        )
-                        for key, value in settings.items()
-                        if key
-                        not in (
-                            "finish_before",
-                            "finish_date",
-                            "finish_time",
-                            "finish_time_zone",
-                            "learning_history",
-                            "history_import",
-                            "fine_import",
-                            "raw_history",
-                            "report_coverage",
-                        )
-                        and not key.startswith("hourly_")
-                    }
-                    for entity, settings in self.state["devices"].items()
-                },
-                [
-                    {
-                        key: task[key]
-                        for key in ("id", "entity_id", "ready_at", "deadline", "profile")
-                    }
-                    | {
-                        "status": task["status"]
-                        if task["attempt"] or task["status"] not in OPEN_STATUSES
-                        else "waiting",
-                        "attempt": task["attempt"],
-                    }
-                    for task in self.state["tasks"].values()
-                ],
-            ]
-        )
+        return self.read_view().revision(include_observation_progress=False)
 
     def commit(self, candidate, *, extra=()):
         """Commit cycles, changed task/model state and mutable progress atomically before publishing live state.
@@ -207,11 +157,7 @@ class ApplianceService:
 
     def member(self, entity):
         """Require a selected, still Energy-owned, disjoint measured device."""
-        EnergyTerm(entity, 1)
-        selected = self.consumers.selected
-        validate_membership(selected, self.consumers.options)
-        if entity not in {item["entity_id"] for item in selected}:
-            raise ValueError("Select this consumer in Appliances settings first")
+        self.read_view().member(entity)
 
     def configure(self, entity, enabled, expected_version=None):
         """Grant explicit shift permission without changing Energy membership or measurement links."""
@@ -251,8 +197,7 @@ class ApplianceService:
 
     def source(self, entity):
         """Bind learning to the authoritative Energy energy/power pair."""
-        option = next((row for row in self.consumers.options if row["entity_id"] == entity), {})
-        return option.get("power_entity")
+        return appliance_source(self.consumers.options, entity)
 
     def sync_sources(self):
         """Withdraw learned profiles after a sensor change, retaining manual estimates and archives."""
@@ -770,15 +715,8 @@ class ApplianceService:
         self._cycle_records[(entity, power_entity)] = records
 
     def observed(self, entity):
-        """Return unresolved source-bound measured running evidence, independently of task feedback."""
-        run = self.state["devices"].get(entity, {}).get("observed_run")
-        return (
-            run
-            if run
-            and run["status"] not in ("complete", "idle")
-            and run["power_entity"] == self.source(entity)
-            else None
-        )
+        """Return unresolved source-bound measurement evidence."""
+        return observed_run(self.state, self.consumers.options, entity)
 
     def set_deadline(self, entity, deadline, now):
         """Persist a dashboard's draft deadline without submitting or changing an accepted task."""
@@ -1578,11 +1516,125 @@ class ApplianceService:
         return self._projection(self.state, now, enabled, plan, raw_entity=raw_entity)
 
     def _projection(self, state, now=None, enabled=False, plan=None, *, raw_entity=None):
+        """Project a candidate while retaining the current version and source admission."""
+        return self.read_view().document(
+            now, enabled, plan, raw_entity=raw_entity, projection=state
+        )
+
+    def read_view(self):
+        """Borrow committed copy-on-write state and the current consumer source binding."""
+        return ApplianceView(
+            self.state,
+            self.consumers.selected,
+            self.consumers.options,
+            self.issue,
+            frozenset(self._phase_limited_entities),
+        )
+
+
+def appliance_source(options, entity):
+    """Bind learning to the authoritative Energy energy/power pair."""
+    option = next((row for row in options if row["entity_id"] == entity), {})
+    return option.get("power_entity")
+
+
+def observed_run(state, options, entity):
+    """Return unresolved source-bound measured running evidence, independently of task feedback."""
+    run = state["devices"].get(entity, {}).get("observed_run")
+    return (
+        run
+        if run
+        and run["status"] not in ("complete", "idle")
+        and run["power_entity"] == appliance_source(options, entity)
+        else None
+    )
+
+
+@dataclass(frozen=True, eq=False)
+class ApplianceView:
+    """Read-only projection inputs. The service replaces accepted state instead of editing it."""
+
+    state: dict
+    selected: tuple
+    options: tuple
+    issue: str | None
+    phase_limited_entities: frozenset
+
+    def same_inputs(self, current):
+        """Check copy-on-write inputs without traversing tasks or raw measurements."""
+        return (
+            self.state is current.state
+            and self.selected is current.selected
+            and self.options is current.options
+            and self.issue == current.issue
+            and self.phase_limited_entities == current.phase_limited_entities
+        )
+
+    def revision(self, *, include_observation_progress):
+        """Keep observation progress out of frozen planning identity."""
+        return digest(
+            [
+                {
+                    entity: {
+                        key: (
+                            {
+                                field: detail
+                                for field, detail in value.items()
+                                if field not in ("observed_until", "energy_kwh")
+                            }
+                            if key == "observed_run"
+                            and not include_observation_progress
+                            and isinstance(value, dict)
+                            else value
+                        )
+                        for key, value in settings.items()
+                        if key
+                        not in (
+                            "finish_before",
+                            "finish_date",
+                            "finish_time",
+                            "finish_time_zone",
+                            "learning_history",
+                            "history_import",
+                            "fine_import",
+                            "raw_history",
+                            "report_coverage",
+                        )
+                        and not key.startswith("hourly_")
+                    }
+                    for entity, settings in self.state["devices"].items()
+                },
+                [
+                    {
+                        key: task[key]
+                        for key in ("id", "entity_id", "ready_at", "deadline", "profile")
+                    }
+                    | {
+                        "status": task["status"]
+                        if task["attempt"] or task["status"] not in OPEN_STATUSES
+                        else "waiting",
+                        "attempt": task["attempt"],
+                    }
+                    for task in self.state["tasks"].values()
+                ],
+            ]
+        )
+
+    def member(self, entity):
+        """Require a selected, still Energy-owned, disjoint measured device."""
+        EnergyTerm(entity, 1)
+        selected = self.selected
+        validate_membership(selected, self.options)
+        if entity not in {item["entity_id"] for item in selected}:
+            raise ValueError("Select this consumer in Appliances settings first")
+
+    def document(self, now=None, enabled=False, plan=None, *, raw_entity=None, projection=None):
         """Keep ordinary all-device reads small and bind full raw detail to one explicitly selected entity."""
         from .history import request as history_request
 
-        names = {row["entity_id"]: row["name"] for row in self.consumers.options}
-        active = {row["entity_id"] for row in self.consumers.selected}
+        state = self.state if projection is None else projection
+        names = {row["entity_id"]: row["name"] for row in self.options}
+        active = {row["entity_id"] for row in self.selected}
         devices = []
         for entity, settings in state["devices"].items():
             if entity not in active or raw_entity is not None and entity != raw_entity:
@@ -1590,7 +1642,7 @@ class ApplianceService:
             projection = settings
             if settings.get("raw_history", {}).get("power_entity") not in (
                 None,
-                self.source(entity),
+                appliance_source(self.options, entity),
             ):
                 projection = {key: value for key, value in settings.items() if key != "raw_history"}
             elif entity != raw_entity and settings.get("raw_history"):
@@ -1607,7 +1659,7 @@ class ApplianceService:
             request = None
             if (
                 not self.issue
-                and not self.observed(entity)
+                and not observed_run(self.state, self.options, entity)
                 and now
                 and enabled
                 and plan
@@ -1627,9 +1679,9 @@ class ApplianceService:
                     "entity_id": entity,
                     "name": names.get(entity, entity),
                     **projection,
-                    "power_entity": self.source(entity),
+                    "power_entity": appliance_source(self.options, entity),
                     "planning_issue": "This cycle cannot currently be scheduled. Its measured curve is retained and ordinary consumption forecasts remain in use."
-                    if entity in self._phase_limited_entities
+                    if entity in self.phase_limited_entities
                     else None,
                     "history_request": history_request(settings),
                     "fine_history_request": history_request(settings, resolution="5minute"),
@@ -1644,7 +1696,7 @@ class ApplianceService:
                     if settings.get("profile")
                     else None,
                     "learning_status": "missing_power_sensor"
-                    if not self.source(entity)
+                    if not appliance_source(self.options, entity)
                     else "ready"
                     if settings.get("learned_profile", {}).get("samples", 0) >= MIN_COMPLETE_CYCLES
                     else "provisional"
@@ -1654,4 +1706,8 @@ class ApplianceService:
                     "request": request,
                 }
             )
-        return {"revision": self.revision, "issue": self.issue, "devices": devices}
+        return {
+            "revision": self.revision(include_observation_progress=True),
+            "issue": self.issue,
+            "devices": devices,
+        }

@@ -200,9 +200,10 @@ def test_synthetic_device_catalogue_survives_expired_publication_inputs(tmp_path
                 assert after["planning"]["requested_snapshot_id"] is None
                 assert after["installation"]["devices"] == before["installation"]["devices"]
                 assert after["plan"] is None
-                execution = await LocalClient(session, url, TOKEN).snapshot()
-                assert execution["plan"] is None
-                assert execution["installation"]["devices"] == before["installation"]["devices"]
+                peer = LocalClient(session, url, TOKEN)
+                assert (await peer.plan_status())["plan_id"] is None
+                metadata = await peer.service_requests()
+                assert metadata["installation"]["devices"] == before["installation"]["devices"]
         finally:
             release.set()
             await runner.cleanup()

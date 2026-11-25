@@ -176,6 +176,10 @@ def register(app, demand, live, setup_catalogue, lock, persist_then_install, sna
                     raise web.HTTPBadRequest(text="Energy history source changed") from None
                 except (ValueError, TypeError, KeyError, OverflowError, OSError):
                     raise web.HTTPBadRequest(text="Invalid household energy history") from None
+        if request.headers.get("X-OEP-View") == "commands":
+            return web.json_response(
+                {"accepted": True, "diagnostics": demand.history_diagnostics()}
+            )
         return await snapshot(request)
 
     app.router.add_get("/v1/demand", demand_settings)

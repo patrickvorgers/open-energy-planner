@@ -9,8 +9,10 @@ from aiohttp import web
 from aiohttp.test_utils import TestClient, TestServer, make_mocked_request
 
 from open_energy_planner.app import create_app
+from open_energy_planner.build_info import BUILD_INFO
 from open_energy_planner.savings.runtime import SavingsRuntime
-from tests.app.planning.test_live_app import running_app
+from tests.app.planning.test_live_app import FutureSource, configure, running_app, send, wait_ready
+from tests.ha_contract.support.metadata import setup_metadata
 
 
 @pytest.mark.parametrize("operation", ["snapshot", "settlement"])
@@ -203,5 +205,169 @@ def test_cancelled_snapshot_drains_historical_reader_before_handler_finishes(tmp
                 release.set()
             with pytest.raises(asyncio.CancelledError):
                 await pending
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("failed", [False, True])
+def test_appliance_settings_keep_published_state_until_consumer_write_finishes(
+    tmp_path, monkeypatch, failed
+):
+    """Read both real settings routes while SQL is stalled, then verify commit or rollback."""
+    from open_energy_planner.appliances.forecasting import CONSUMER_SETTINGS_POINTER
+    from open_energy_planner.storage.adapters.documents import SqlDocuments
+
+    async def scenario():
+        """Deselect a measured device and verify its old and new projections stay coherent."""
+        entity = "sensor.dishwasher_energy"
+        metadata = setup_metadata()
+        metadata["entities"].append(
+            {
+                "entity_id": entity,
+                "name": "Dishwasher",
+                "unit": "kWh",
+                "device_id": "dishwasher",
+                "device_class": "energy",
+                "state_class": "total_increasing",
+            }
+        )
+        metadata["suggestions"]["consumers"] = [{"entity_id": entity, "upstream": None}]
+        entered, release = threading.Event(), threading.Event()
+        original_write = SqlDocuments.write
+
+        def stalled_write(documents, key, value):
+            """Pause the real pointer write inside its transaction."""
+            if key == CONSUMER_SETTINGS_POINTER and value == []:
+                entered.set()
+                assert release.wait(8)
+                if failed:
+                    raise OSError("Synthetic settings persistence failure")
+            return original_write(documents, key, value)
+
+        async with running_app(tmp_path) as (session, url):
+            assert (await session.post(url + "/v1/ha/catalogue", json=metadata)).status == 200
+            consumers_path = url + "/v1/consumers?view=settings"
+            appliances_path = url + "/v1/appliances"
+            original = await (await session.get(consumers_path)).json()
+            selection = [{"entity_id": entity, "weather_sensitive": False}]
+            selection_response = await session.put(
+                consumers_path,
+                json={"selected": selection, "expected_version": original["version"]},
+            )
+            assert selection_response.status == 200
+            selected = await selection_response.json()
+            configured = await session.post(
+                appliances_path + "/device", json={"entity_id": entity, "shiftable": True}
+            )
+            assert configured.status == 200
+            prior_appliances = (await configured.json())["appliances"]
+            assert prior_appliances["devices"][0]["entity_id"] == entity
+            monkeypatch.setattr(SqlDocuments, "write", stalled_write)
+            save = asyncio.create_task(
+                session.put(
+                    consumers_path,
+                    json={"selected": [], "expected_version": selected["version"]},
+                )
+            )
+            try:
+                assert await asyncio.to_thread(entered.wait, 5)
+                async with asyncio.timeout(1):
+                    consumers, appliances, navigation = await asyncio.gather(
+                        session.get(consumers_path),
+                        session.get(appliances_path),
+                        session.get(url + "/setup/session"),
+                    )
+                    assert await consumers.json() == selected
+                    assert await appliances.json() == prior_appliances
+                    assert navigation.status == 200
+                assert not save.done()
+            finally:
+                release.set()
+                saved = await save
+            assert saved.status == (500 if failed else 200)
+            consumers, appliances = await asyncio.gather(
+                session.get(consumers_path), session.get(appliances_path)
+            )
+            assert (await consumers.json())["selected"] == (selection if failed else [])
+            assert (await appliances.json())["devices"] == (
+                prior_appliances["devices"] if failed else []
+            )
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("action", ["pause", "revoke"])
+def test_snapshot_projection_does_not_block_and_discards_stale_controls(
+    tmp_path, monkeypatch, action
+):
+    """Delay a live projection and require pause and revocation to each win before HTTP delivery."""
+    from open_energy_planner.runtime.snapshot import SnapshotProjection
+
+    async def scenario():
+        """Allow ordinary reads and control persistence while projection is still suspended."""
+        entered, release = threading.Event(), threading.Event()
+        original_project = SnapshotProjection.project
+        future = FutureSource()
+        async with running_app(tmp_path, future) as (session, url):
+            configured = await configure(session, url)
+            await send(session, url, configured["measurement_config"])
+            accepted = await wait_ready(session, url)
+            assert accepted["enabled"] and accepted["plan"]
+
+            def suspended_projection(projection):
+                """Gate only the first real snapshot worker holding the old plan."""
+                if not entered.is_set():
+                    assert projection.plan["plan_id"] == accepted["plan"]["plan_id"]
+                    entered.set()
+                    assert release.wait(8)
+                return original_project(projection)
+
+            monkeypatch.setattr(SnapshotProjection, "project", suspended_projection)
+            pending = asyncio.create_task(
+                session.get(
+                    url + "/v1/snapshot",
+                    headers={
+                        "X-OEP-Release": BUILD_INFO["version"],
+                        "X-OEP-Build": BUILD_INFO["build"] or "",
+                    },
+                )
+            )
+            try:
+                assert await asyncio.to_thread(entered.wait, 5)
+                async with asyncio.timeout(1):
+                    read_paths = ("/v1/appliances", "/v1/consumers?view=settings", "/setup/session")
+                    for response in await asyncio.gather(
+                        *(session.get(url + path) for path in read_paths)
+                    ):
+                        assert response.status == 200
+                        await response.read()
+                    if action == "pause":
+                        pause = await session.put(
+                            url + "/v1/enabled",
+                            json={"enabled": False, "request_id": "pause-projection"},
+                        )
+                        assert pause.status == 200
+                    else:
+                        future.available = False
+                        revocation = await session.post(url + "/v1/replan")
+                        assert revocation.status == 200
+                        assert (await revocation.json())["plan"] is None
+                assert not pending.done()
+            finally:
+                release.set()
+                response = await pending
+            assert response.status == 200
+            assert {"snapshot_state_wait", "snapshot_document", "snapshot_json"} <= {
+                part.strip().split(";")[0] for part in response.headers["Server-Timing"].split(",")
+            }
+            final = await response.json()
+            if action == "pause":
+                assert final["enabled"] is False
+                assert final["plan"]["plan_id"] == accepted["plan"]["plan_id"]
+                assert final["plan_invalidated"] is False
+            else:
+                assert final["enabled"] is True
+                assert final["plan"] is None
+                assert final["plan_invalidated"] is True
 
     asyncio.run(scenario())

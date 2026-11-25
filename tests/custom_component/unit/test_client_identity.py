@@ -6,7 +6,11 @@ import pytest
 from aiohttp import ClientSession, web
 from aiohttp.test_utils import TestServer
 
-from custom_components.open_energy_planner.client import InstallationMismatchError, LocalClient
+from custom_components.open_energy_planner.client import (
+    InstallationMismatchError,
+    LocalClient,
+    SupersededInstallationExchangeError,
+)
 from open_energy_planner.build_info import BUILD_INFO, HEADER_FIELDS
 
 
@@ -24,14 +28,14 @@ def test_changed_identity_blocks_exchanges_until_original_installation_returns(r
             """Retain only request paths and return a separately mutable installation identity."""
             requests.append(request.path)
             return web.json_response(
-                snapshot if request.path == "/v1/snapshot" else {"accepted": True},
+                snapshot if request.path == "/v1/ha/plan-status" else {"accepted": True},
                 headers={
                     header: BUILD_INFO[field] or "" for field, header in HEADER_FIELDS.items()
                 },
             )
 
         application = web.Application()
-        application.router.add_get("/v1/snapshot", respond)
+        application.router.add_get("/v1/ha/plan-status", respond)
         application.router.add_post("/v1/ha/source-choices", respond)
         async with TestServer(application) as server, ClientSession() as session:
             client = LocalClient(
@@ -45,28 +49,31 @@ def test_changed_identity_blocks_exchanges_until_original_installation_returns(r
             )
             with pytest.raises(InstallationMismatchError):
                 await unconfirmed.request("POST", "/v1/ha/source-choices", {"failed": True})
-            assert requests == ["/v1/snapshot"]
+            assert requests == ["/v1/ha/plan-status"]
             requests.clear()
-            assert (await client.snapshot())["instance_id"] == original
+            assert (await client.plan_status())["instance_id"] == original
             snapshot.clear()
             if replacement is not None:
                 snapshot["instance_id"] = replacement
             with pytest.raises(InstallationMismatchError):
-                await client.snapshot()
+                await client.plan_status()
             with pytest.raises(InstallationMismatchError):
                 await client.request("POST", "/v1/ha/source-choices", {"failed": True})
-            assert requests == ["/v1/snapshot", "/v1/snapshot"]
+            assert requests == ["/v1/ha/plan-status", "/v1/ha/plan-status"]
             snapshot["instance_id"] = original
-            await client.snapshot()
+            await client.plan_status()
             assert (await client.request("POST", "/v1/ha/source-choices", {"failed": True}))[
                 "accepted"
             ]
-            assert requests[-2:] == ["/v1/snapshot", "/v1/ha/source-choices"]
+            assert requests[-2:] == ["/v1/ha/plan-status", "/v1/ha/source-choices"]
 
     asyncio.run(scenario())
 
 
-@pytest.mark.parametrize("late_exchange", ["initial_snapshot", "identified_reply", "receipt"])
+@pytest.mark.parametrize(
+    "late_exchange",
+    ["initial_snapshot", "identified_reply", "foreign_reply", "receipt", "conflict"],
+)
 def test_reply_started_before_a_mismatch_cannot_confirm_identity_or_success(late_exchange):
     """Late matching snapshots or receipts cannot undo a newer installation mismatch."""
 
@@ -82,7 +89,7 @@ def test_reply_started_before_a_mismatch_cannot_confirm_identity_or_success(late
         async def respond(request):
             """Return independently ordered identities and count only source publications."""
             nonlocal snapshots, writes
-            if request.path == "/v1/snapshot":
+            if request.path == "/v1/ha/plan-status":
                 snapshots += 1
                 order = snapshots
                 if late_exchange == "initial_snapshot" and order == 1:
@@ -92,11 +99,14 @@ def test_reply_started_before_a_mismatch_cannot_confirm_identity_or_success(late
             elif request.path == "/v1/history":
                 started.set()
                 await release.wait()
-                document = (
-                    {"instance_id": original}
-                    if late_exchange == "identified_reply"
-                    else {"accepted": True}
-                )
+                if late_exchange == "conflict":
+                    return web.Response(status=409)
+                if late_exchange in ("identified_reply", "foreign_reply"):
+                    document = {
+                        "instance_id": foreign if late_exchange == "foreign_reply" else original
+                    }
+                else:
+                    document = {"accepted": True}
             else:
                 writes += 1
                 document = {"accepted": True}
@@ -108,7 +118,7 @@ def test_reply_started_before_a_mismatch_cannot_confirm_identity_or_success(late
             )
 
         application = web.Application()
-        application.router.add_get("/v1/snapshot", respond)
+        application.router.add_get("/v1/ha/plan-status", respond)
         application.router.add_post("/v1/history", respond)
         application.router.add_post("/v1/ha/source-choices", respond)
         async with TestServer(application) as server, ClientSession() as session:
@@ -116,7 +126,7 @@ def test_reply_started_before_a_mismatch_cannot_confirm_identity_or_success(late
                 session, str(server.make_url("")), "synthetic-token", expected_instance_id=original
             )
             if late_exchange != "initial_snapshot":
-                await client.snapshot()
+                await client.plan_status()
             late = asyncio.create_task(
                 client.request(
                     "POST",
@@ -129,15 +139,15 @@ def test_reply_started_before_a_mismatch_cannot_confirm_identity_or_success(late
             try:
                 await asyncio.wait_for(started.wait(), 2)
                 with pytest.raises(InstallationMismatchError):
-                    await client.snapshot()
+                    await client.plan_status()
+                with pytest.raises(InstallationMismatchError):
+                    await client.request("POST", "/v1/ha/source-choices", {})
+                await client.plan_status()
             finally:
                 release.set()
-            with pytest.raises(InstallationMismatchError):
+            with pytest.raises(SupersededInstallationExchangeError):
                 await late
-            with pytest.raises(InstallationMismatchError):
-                await client.request("POST", "/v1/ha/source-choices", {})
             assert writes == 0
-            await client.snapshot()
             await client.request("POST", "/v1/ha/source-choices", {})
             assert writes == 1
 

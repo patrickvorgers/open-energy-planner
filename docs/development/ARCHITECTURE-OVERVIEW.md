@@ -79,7 +79,7 @@ flowchart TD
     accTitle: Home Assistant source and measurement flow
     accDescr: Home Assistant pushes coalesced, timestamped captures of selected sources and independently responds to app requests for bounded Recorder history. App services own admission and planning roles.
     ENERGY["HA Energy and entity registry<br/>Membership, meter identities and location"] --> HA["HA coordinator.py<br/>Manage catalogue and requested history"]
-    STATES["Selected HA entity states<br/>Power and battery SoC"] --> PUSH["Observation sender<br/>Initial capture, changes and freshness heartbeat"]
+    STATES["Selected HA entity states<br/>Power and battery SoC"] --> PUSH["HA observation sender<br/>Initial capture, changes and freshness heartbeat"]
     RECORDER["HA Recorder<br/>Statistics and supported raw histories"] --> HA
     HA -->|Catalogue| CATALOGUE["home_assistant/setup_catalogue.py<br/>Admit and expose available sources"]
     PUSH -->|Current timestamped observations| OBS["home_assistant/observations.py and live_inputs.py<br/>Validate observations against the configured sources"]
@@ -211,22 +211,24 @@ publish never extends a previous command's validity. See
 ```mermaid
 flowchart TD
     accTitle: Plan synchronization and feedback in Home Assistant
-    accDescr: A paired app wake signal prompts the HA integration to reconcile authoritative plan status. The integration fetches and acknowledges a needed plan and applies local command limits.
+    accDescr: An authenticated app wake signal prompts Home Assistant to reconcile authoritative plan status. The integration fetches and acknowledges a needed plan and checks local command validity.
     PLAN["Authoritative app plan status"] -->|Publication or revocation| WATCH["Authenticated plan status watch<br/>Advisory wake cursor"]
-    WATCH --> SYNC["HA coordinator.py<br/>Reconcile current status and fetch a needed plan"]
+    WATCH --> SYNC["HA command reconciliation<br/>Read status and fetch changed commands"]
     PLAN -->|Status and version-specific commands| SYNC
-    SYNC -->|Receipt for the accepted version| PLAN
+    SYNC -->|Receipt for the accepted plan| PLAN
     SYNC --> SCHEDULE["HA local schedule and validity<br/>Select the applicable interval or withdraw commands"]
     SCHEDULE --> ENTITIES["Virtual devices and entities<br/>Expose current proposals and status"]
     ENTITIES --> AUTOMATION["User-owned HA automations<br/>Translate proposals into device actions"]
     AUTOMATION --> EQUIPMENT["Physical equipment<br/>Apply local control and safeguards"]
     EQUIPMENT --> EVIDENCE["HA states, Recorder and execution feedback"]
-    EVIDENCE -->|Independent observation and feedback exchanges| LIVE["App admission and live planning inputs"]
+    EVIDENCE --> SEPARATE["HA integration data exchange<br/>Selected captures and requested Recorder evidence"]
+    SEPARATE -->|Measurements and execution state| LIVE["App admission and live planning inputs"]
 ```
 
 The integration checks local validity independently of the app. Expiry and
 pause withdraw virtual commands. A receipt proves delivery. Measurements,
 claims and execution feedback provide separate evidence of device behavior.
+The integration can reconcile a new command plan while Recorder or observation transfers wait.
 See [virtual devices](VIRTUAL-DEVICES.md).
 
 ### Historical evaluation, storage and the web UI
@@ -288,11 +290,19 @@ There is no physical-device driver hidden in the HTTP UI. The app's static pages
 
 ## Keep calculation work outside the interface loop
 
+Each module and API owns one responsibility with an explicit owner for its data
+and workflow. Separate reads, updates and calculation when their consistency
+needs or cadence differ. Keep changes that share an atomic invariant in the
+same transaction, with the owning backend coordinating validation and publication.
+
 Snapshot reads capture immutable settlement source definitions under the state
 lock, then await historical database I/O outside that lock. The handler reacquires
-the lock afterward to refresh validity and read current state. A pause or source
-change therefore remains responsive and cannot be hidden by an older captured
-screen state. Historical transfers also read outside the state lock and reject
+the lock afterward to refresh validity and capture the current read inputs.
+Forecast series, appliance evidence and plan projection then run on a worker,
+together with JSON encoding. After this worker completes, the loop rechecks the
+plan, enable state and command deadlines before returning. A pause or source
+change can take effect during projection and is reflected in the response.
+Historical transfers also read outside the state lock and reject
 source changes made during validation before admitting a write. Financial
 mutations retain their separate serialization lock. Concurrent readers publish
 the cached historical plan identity and its bindings as one pair and use their
@@ -307,8 +317,11 @@ confirmed current intent, never an intent superseded during the exchange or
 after shutdown. Local pause withdraws commands before waiting for the HA
 synchronization lock. Its confirmation can wait for an in-flight synchronization
 to finish, but the control receipt does not start another historical read.
-Its next periodic synchronization retains the complete snapshot,
-catalogue, observation and history flow. Resume still requires a plan generated
+An authenticated watch wakes the coordinator on publication or revocation.
+Reconciliation reads commit-aware plan status and fetches commands only for a
+different active identity. A broken watch uses lightweight status checks while
+reconnecting. Catalogue, current measurements and requested history use
+independent exchanges. Resume still requires a plan generated
 after the local resume boundary, so a receipt cannot revive older commands.
 
 The shared PostgreSQL engine also bounds each native driver I/O wait to thirty
@@ -324,7 +337,13 @@ ownership or disposing its engine.
 Appliance editors request `/v1/consumers?view=settings`. This projection retains
 selection versions, Energy choices and specialized-meter ownership without
 transferring model forecasts that these editors do not use. The default consumer
-response retains complete forecast evidence for existing clients.
+response retains complete forecast evidence for existing clients. Both consumer
+and appliance reads capture the latest published view without acquiring the
+shared state lock. The app publishes their inputs together after a serialized
+state operation, when committed settings and ownership are installed. A read
+during a save can finish from the preceding complete view. Version validation
+and persistence remain inside the write boundary. Appliance start requests are
+checked again against current validity before the read returns.
 
 Live HTTP and background refresh owners await `LiveInputs.refresh_async` or
 `receive_async` while retaining the application state lock. The event loop first

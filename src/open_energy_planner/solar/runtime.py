@@ -1154,7 +1154,22 @@ class SolarRuntime:
             "model", self.baseline.model if self.baseline else None
         )
 
-    def document(self, now, *, series=False):
+    def history_diagnostics(self):
+        """Expose only actionable source and Recorder issues needed by Home Assistant."""
+        return {
+            "issue": self.issue,
+            "history_issues": dict(self.history_issues),
+        }
+
+    def ha_history(self, now):
+        """Expose requested history and curtailment feedback independently of forecast diagnostics."""
+        return {
+            **self.history_diagnostics(),
+            "feedback_requests": self.feedback_requests(now),
+            "request": self.request(now),
+        }
+
+    def document(self, now, *, series=False, include_learning=True):
         """Expose active prediction, per-source candidates and actionable status without recomputation."""
         forecast = forecast_document(self.forecast, series=False)
         candidate = forecast_document(self.candidate, series=False)
@@ -1183,7 +1198,7 @@ class SolarRuntime:
                 statuses[source.source_id] = status
         return {
             "configuration": configuration_document(self.configuration),
-            "feedback_requests": self.feedback_requests(now),
+            **self.ha_history(now),
             "feedback_issues": dict(self.feedback_issues),
             "forecast": forecast,
             "candidate": candidate,
@@ -1197,18 +1212,7 @@ class SolarRuntime:
                 for model in self.calibrations
             ],
             "calibration_status": statuses,
-            "learning": {
-                source_id: {
-                    **{
-                        key: value
-                        for key, value in document(row.summary).items()
-                        if key not in ("excluded_periods", "diagnostic_periods")
-                    },
-                    "candidate_model": row.model.schema if row.model else None,
-                    "audit_reference": row.archive_reference,
-                }
-                for source_id, row in self.learning.items()
-            },
+            "learning": learning_document(self.learning) if include_learning else {},
             "source_selection": self.source_selection,
             "ha_issues": self.ha_issues,
             "source_models": {
@@ -1225,8 +1229,6 @@ class SolarRuntime:
             }
             if self.configuration
             else {},
-            "issue": self.issue,
-            "history_issues": dict(self.history_issues),
             "weather_service": dict(self.weather_service),
             "history_import": self.history_import.status(
                 (source.entity_id for source in self.configuration.sources)
@@ -1234,5 +1236,22 @@ class SolarRuntime:
                 else (),
                 self.histories,
             ),
-            "request": self.request(now),
         }
+
+
+def learning_document(learning):
+    """Summarize model evidence without traversing archived diagnostic interval series."""
+    return {
+        source_id: {
+            **{
+                key: value
+                for key, value in document(
+                    replace(row.summary, excluded_periods=(), diagnostic_periods=())
+                ).items()
+                if key not in ("excluded_periods", "diagnostic_periods")
+            },
+            "candidate_model": row.model.schema if row.model else None,
+            "audit_reference": row.archive_reference,
+        }
+        for source_id, row in learning.items()
+    }

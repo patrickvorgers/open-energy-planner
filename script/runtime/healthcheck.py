@@ -13,9 +13,9 @@ def check(base, token):
     headers = {"Authorization": f"Bearer {token}"}
     try:
         with urlopen(
-            Request(base + "/v1/snapshot", headers=headers), timeout=HEALTHCHECK_TIMEOUT_SECONDS
+            Request(base + "/v1/readiness", headers=headers), timeout=HEALTHCHECK_TIMEOUT_SECONDS
         ) as response:
-            snapshot = json.load(response)
+            readiness = json.load(response)
     except HTTPError as error:
         code = error.code
         error.close()
@@ -37,15 +37,15 @@ def check(base, token):
         }:
             raise SystemExit("Invalid maintenance status")
         return
-    if snapshot.get("source") == "home_assistant":
-        if snapshot.get("planning", {}).get("status") not in (
+    if readiness.get("source") == "home_assistant":
+        if readiness.get("planning_status") not in (
             "not_ready",
             "calculating",
             "ready",
             "failed",
         ):
             raise SystemExit("Invalid HA-mode status")
-    elif not snapshot.get("plan"):
+    elif readiness.get("plan_available") is not True:
         raise SystemExit("No validated plan yet")
 
 

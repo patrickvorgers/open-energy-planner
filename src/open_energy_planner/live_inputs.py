@@ -81,6 +81,7 @@ class LiveInputs:
         self.requested_strategy = lambda: Strategy.COST
         self.strategy_issue = lambda: None
         self.prepare_snapshot = lambda snapshot, now: snapshot
+        self.command_authority_changed = lambda: None
 
     def invalidate(self, reason):
         """Revoke the current planning generation and persisted publication with a readiness reason."""
@@ -89,6 +90,7 @@ class LiveInputs:
             self.replan_requested = True
         self.planner.invalidate(reason)
         self.repository.invalidate_plan()
+        self.command_authority_changed()
 
     def configure(self, configuration):
         # Do not install an unacknowledged revision or invalidate a still-valid plan
@@ -106,6 +108,7 @@ class LiveInputs:
         self.replan_requested = True
         self.planner.invalidate("waiting_for_measurements")
         self.repository.invalidate_plan()
+        self.command_authority_changed()
         _LOGGER.info(
             "Measurement configuration loaded (%d selected inputs). Waiting for a fresh Home Assistant capture before planning.",
             len(configuration.bindings),
