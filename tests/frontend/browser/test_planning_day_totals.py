@@ -154,7 +154,8 @@ def test_all_planning_dates_expose_daily_energy(app_page):
 
 @pytest.mark.parametrize("app_site", ["device_planning"], indirect=True)
 @pytest.mark.parametrize("available", [True, False])
-def test_delayed_day_benefit_stays_with_its_own_date(app_page, available):
+@pytest.mark.parametrize("hover_before_focus", [False, True], ids=["focus", "hover_then_focus"])
+def test_delayed_day_benefit_stays_with_its_own_date(app_page, available, hover_before_focus):
     """A late first-day result leaves a second-day loss or missing comparison intact."""
     page, url = app_page
     page.clock.set_fixed_time(START)
@@ -175,6 +176,7 @@ def test_delayed_day_benefit_stays_with_its_own_date(app_page, available):
             route.fulfill(status=503)
 
     page.route("**/comparison?start=**", comparison)
+    page.mouse.move(0, 0)
     card = page.locator("#plan-chart").locator("..")
     card.evaluate("element => element.scrollIntoView({block:'center'})")
     first, second = [
@@ -182,15 +184,17 @@ def test_delayed_day_benefit_stays_with_its_own_date(app_page, available):
     ]
     tooltip = page.locator("#plan-chart-tooltip")
     line = tooltip.locator(".chart-tooltip-day-benefit")
-    with page.expect_request("**/comparison?start=**"):
-        first.focus()
+    if hover_before_focus:
+        first.hover()
+        expect(line).to_contain_text("Loading")
+    first.focus()
     expect(line).to_contain_text("Loading")
     second.focus()
     amount = "-1.25 EUR" if available else "Unavailable"
     expect(line).to_have_text(f"Expected benefit versus without battery: {amount}")
-    with page.expect_response(lambda item: queued[0].request.url == item.url):
-        [old] = queued
-        old.fulfill(json={"scenarios": {"optimizer": {"benefit_vs_without_battery": 99}}})
+    [delayed] = queued
+    with page.expect_response(lambda response: response.url == delayed.request.url):
+        delayed.fulfill(json={"scenarios": {"optimizer": {"benefit_vs_without_battery": 99}}})
     expect(tooltip.locator(".chart-tooltip-title")).to_have_text(
         "Expected energy totals: 11/5/2026"
     )
