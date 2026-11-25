@@ -54,16 +54,16 @@ def decay_response(loss, duration):
 def aligned_room_samples(indoor, outdoor, energy_history, now, maximum_hourly_kwh):
     """Join complete metered hours with indoor and outdoor readings and check the power bound."""
     weather = {row.start: row.celsius for row in outdoor}
+    earliest = now - INDOOR_HISTORY_HOURS * HOUR
     samples = []
     for before, after in pairwise(energy_history.hours):
         start = after.start
         if (
-            start < now - INDOOR_HISTORY_HOURS * HOUR
+            start < earliest
             or before.start + HOUR != start
             or start + HOUR > now
             or start not in weather
-            or start not in indoor
-            or start + HOUR not in indoor
+            or not all(stamp in indoor for stamp in (start, start + HOUR))
         ):
             continue
         energy = after.total_kwh - before.total_kwh
@@ -84,6 +84,42 @@ def fit_room(indoor, outdoor, energy_history, now, *, full_load_power_w):
     if len(samples) < MINIMUM_TRAINING_HOURS + HOLDOUT_HOURS:
         return None
     training, held_out = samples[:-HOLDOUT_HOURS], samples[-HOLDOUT_HOURS:]
+    idle = _usable_idle_hours(training, held_out)
+    if idle is None:
+        return None
+
+    loss = min(
+        LOSS_RATES_PER_HOUR,
+        key=lambda candidate: sum(
+            (row[3] - _passive_temperature(row, exp(-candidate))) ** 2 for row in idle
+        ),
+    )
+    if loss in (LOSS_RATES_PER_HOUR[0], LOSS_RATES_PER_HOUR[-1]):
+        return None
+    retention, response = decay_response(loss, 1)
+    gain = sum((row[3] - _passive_temperature(row, retention)) * row[2] for row in training) / (
+        response * sum(row[2] ** 2 for row in training)
+    )
+    if (
+        not isfinite(gain)
+        or not EFFECTIVE_GAIN_BOUNDS_C_PER_KWH[0] <= gain <= EFFECTIVE_GAIN_BOUNDS_C_PER_KWH[1]
+    ):
+        return None
+    holdout_error = _validated_holdout_error(held_out, retention, response * gain)
+    if holdout_error is None:
+        return None
+    return RoomModel(
+        loss,
+        gain,
+        full_load_power_w,
+        min(row[1] for row in training),
+        max(row[1] for row in training),
+        holdout_error,
+    )
+
+
+def _usable_idle_hours(training, held_out):
+    """Require distinct idle and heating evidence in both parts of the history."""
     idle = [row for row in training if row[2] <= IDLE_KWH and row[0] - row[1] >= 3]
     if (
         len(idle) < MINIMUM_IDLE_HOURS
@@ -92,43 +128,30 @@ def fit_room(indoor, outdoor, energy_history, now, *, full_load_power_w):
         or sum(row[2] <= IDLE_KWH for row in held_out) < 3
     ):
         return None
+    return idle
 
-    def passive(row, retention):
-        """Predict end temperature with outdoor heat exchange alone."""
-        return row[1] + (row[0] - row[1]) * retention
 
-    loss = min(
-        LOSS_RATES_PER_HOUR,
-        key=lambda candidate: sum((row[3] - passive(row, exp(-candidate))) ** 2 for row in idle),
-    )
-    if loss in (LOSS_RATES_PER_HOUR[0], LOSS_RATES_PER_HOUR[-1]):
-        return None
-    retention, response = decay_response(loss, 1)
-    gain = sum((row[3] - passive(row, retention)) * row[2] for row in training) / (
-        response * sum(row[2] ** 2 for row in training)
-    )
-    if (
-        not isfinite(gain)
-        or not EFFECTIVE_GAIN_BOUNDS_C_PER_KWH[0] <= gain <= EFFECTIVE_GAIN_BOUNDS_C_PER_KWH[1]
-    ):
-        return None
-    errors = [abs(row[3] - passive(row, retention) - response * gain * row[2]) for row in held_out]
+def _passive_temperature(row, retention):
+    """Predict end temperature with outdoor heat exchange alone."""
+    return row[1] + (row[0] - row[1]) * retention
+
+
+def _validated_holdout_error(held_out, retention, heating_gain):
+    """Return worst error when the fitted model beats the passive baseline."""
+    errors = [
+        abs(row[3] - _passive_temperature(row, retention) - heating_gain * row[2])
+        for row in held_out
+    ]
     mean_error = mean(errors)
+    worst_error = max(errors)
     if (
         mean_error > MAXIMUM_HOLDOUT_MEAN_ERROR_C
-        or max(errors) > MAXIMUM_HOLDOUT_ERROR_C
-        or mean(abs(row[3] - passive(row, retention)) for row in held_out) - mean_error
+        or worst_error > MAXIMUM_HOLDOUT_ERROR_C
+        or mean(abs(row[3] - _passive_temperature(row, retention)) for row in held_out) - mean_error
         < MINIMUM_IMPROVEMENT_C
     ):
         return None
-    return RoomModel(
-        loss,
-        gain,
-        full_load_power_w,
-        min(row[1] for row in training),
-        max(row[1] for row in training),
-        max(errors),
-    )
+    return worst_error
 
 
 def room_work(application, reading, model, weather, intervals, now, ready):
@@ -147,19 +170,9 @@ def room_work(application, reading, model, weather, intervals, now, ready):
     min_capacity, max_capacity = THERMAL_HEAT_CAPACITY_BOUNDS_KWH_PER_C
     if not min_capacity <= capacity <= max_capacity or loss > 1000:
         return None
-    ambient = tuple(
-        weather.get(step.start.replace(minute=0, second=0, microsecond=0)) for step in intervals
-    )
-    if any(
-        value is None or not model.coldest_c <= value <= min(model.warmest_c, target)
-        for value in ambient
-    ):
+    ambient = _validated_ambient_profile(model, intervals, weather, initial, target)
+    if ambient is None:
         return None
-    passive = initial
-    for step, outside in zip(intervals, ambient, strict=True):
-        passive = outside + (passive - outside) * exp(-model.loss_per_hour * step.duration_h)
-        if passive < 0:
-            return None
     return ThermalWork(
         application["id"],
         ready,
@@ -176,3 +189,21 @@ def room_work(application, reading, model, weather, intervals, now, ready):
         state_at=now,
         ambient_profile_c=ambient,
     )
+
+
+def _validated_ambient_profile(model, intervals, weather, initial, target):
+    """Reject extrapolated weather and a passive trajectory below the physical bound."""
+    ambient = tuple(
+        weather.get(step.start.replace(minute=0, second=0, microsecond=0)) for step in intervals
+    )
+    if any(
+        value is None or not model.coldest_c <= value <= min(model.warmest_c, target)
+        for value in ambient
+    ):
+        return None
+    passive = initial
+    for step, outside in zip(intervals, ambient, strict=True):
+        passive = outside + (passive - outside) * exp(-model.loss_per_hour * step.duration_h)
+        if passive < 0:
+            return None
+    return ambient

@@ -91,6 +91,15 @@ def _admit_boiler_readings(rows, allowed, reported, captured_at):
     return admitted
 
 
+def _validate_climate_observation(row, captured):
+    """Admit bounded temperatures and reject observations ahead of the capture."""
+    for field in ("temperature_c", "target_c"):
+        number(row[field], 0, MAXIMUM_SPACE_TEMPERATURE_C)
+    observed = instant(row["observed_at"])
+    if observed > captured + timedelta(seconds=MAX_THERMAL_CLOCK_SKEW_SECONDS):
+        raise ValueError("Thermal observation expired")
+
+
 def _stored_boiler_plan(plan, revision, identity):
     """Project planned boiler intervals from the plan with the matching Thermal revision."""
     planned = []
@@ -526,7 +535,7 @@ class ThermalService:
             if application["kind"] == ApplicationKind.SPACE_HEATING
             and application["climate_entity"]
         }
-        admitted, seen = {}, set()
+        admitted = {}
         for row in rows:
             if (
                 not isinstance(row, dict)
@@ -534,16 +543,11 @@ class ThermalService:
                 != {"id", "entity_id", "temperature_c", "target_c", "observed_at"}
                 or type(row.get("heat_mode", False)) is not bool
                 or row["id"] not in allowed
-                or row["id"] in seen
+                or row["id"] in admitted
                 or row["entity_id"] != allowed[row["id"]]
             ):
                 raise ValueError("Invalid thermal reading identity")
-            seen.add(row["id"])
-            for field in ("temperature_c", "target_c"):
-                number(row[field], 0, MAXIMUM_SPACE_TEMPERATURE_C)
-            observed = instant(row["observed_at"])
-            if observed > captured + timedelta(seconds=MAX_THERMAL_CLOCK_SKEW_SECONDS):
-                raise ValueError("Thermal observation expired")
+            _validate_climate_observation(row, captured)
             admitted[row["id"]] = {**row, "captured_at": captured.isoformat()}
         return admitted
 
@@ -694,6 +698,15 @@ class ThermalService:
             if row["enabled"] and self.readiness_issue(row, now) is None
         ]
 
+    def _exclusive_room_meters(self, applications):
+        """Select Energy meters with a single Thermal binding and no other owner."""
+        options = {row["entity_id"] for row in self.consumers.options}
+        bindings = Counter(
+            source["energy_entity"] for app in applications for source in app["sources"]
+        )
+        reserved = self.occupied_meters | {row["energy_entity"] for row in self.state["stores"]}
+        return {meter for meter in options - reserved if bindings[meter] == 1}
+
     def room_candidates(self, problem, demand, now, ready):
         """Admit a single identified heater per room, with an exclusive physical meter."""
         if (
@@ -703,12 +716,7 @@ class ThermalService:
         ):
             return (), {}
         applications = self.state.get("applications", [])
-        options = {row["entity_id"] for row in self.consumers.options}
-        bindings = Counter(
-            source["energy_entity"] for app in applications for source in app["sources"]
-        )
-        reserved = self.occupied_meters | {row["energy_entity"] for row in self.state["stores"]}
-        exclusive_meters = {meter for meter in options - reserved if bindings[meter] == 1}
+        exclusive_meters = self._exclusive_room_meters(applications)
         outdoor = {row.start: row.celsius for row in demand.live_temperatures}
         intervals = refine(problem, ready).intervals
         candidates = []

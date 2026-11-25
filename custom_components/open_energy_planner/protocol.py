@@ -359,15 +359,20 @@ def validate_thermal_context(context, steps):
         raise ValueError("Thermal commands and execution context disagree")
     for step in steps:
         for command in step.command.devices:
-            if command.kind == "thermal" and command.power_w not in (
-                0,
-                by_id[command.device_id]["heater_w"],
-            ):
-                raise ValueError("Thermal command differs from fixed heater power")
-            if command.kind == "thermal" and command.power_w:
-                row = by_id[command.device_id]
-                if row.get("kind") == "space_heating" and step.start < timestamp(row["ready_at"]):
-                    raise ValueError("Space heating command precedes its dispatch boundary")
+            if command.kind == "thermal":
+                _validate_thermal_command(step.start, command, by_id[command.device_id])
+
+
+def _validate_thermal_command(start, command, row):
+    """Check the heater's fixed power and room dispatch boundary for one interval."""
+    if command.power_w not in (0, row["heater_w"]):
+        raise ValueError("Thermal command differs from fixed heater power")
+    if (
+        command.power_w
+        and row.get("kind") == "space_heating"
+        and start < timestamp(row["ready_at"])
+    ):
+        raise ValueError("Space heating command precedes its dispatch boundary")
 
 
 def validate_boiler_context(row, by_id, seen):
@@ -460,6 +465,14 @@ def validate_space_heating_context(row, by_id, seen):
         or not fullmatch(r"climate\.[a-z0-9_]+", climate)
     ):
         raise ValueError("Invalid or duplicate space heating source")
+    _validate_space_heating_quantities(row)
+    timestamp(row["ready_at"])
+    seen["energy_entity"].add(meter)
+    return identity
+
+
+def _validate_space_heating_quantities(row):
+    """Check the fixed input and thermostat ceiling before accepting a room command."""
     for field, lower, upper in (
         ("heater_w", 100, 12000),
         ("target_c", 0, 50),
@@ -470,9 +483,6 @@ def validate_space_heating_context(row, by_id, seen):
             raise ValueError("Invalid space heating execution quantity")
     if not float(row["heater_w"]).is_integer() or row["target_c"] + row["maximum_preheat_c"] > 50:
         raise ValueError("Invalid space heating execution bounds")
-    timestamp(row["ready_at"])
-    seen["energy_entity"].add(meter)
-    return identity
 
 
 @dataclass(frozen=True)

@@ -193,6 +193,11 @@ def test_room_virtual_targets_stop_on_thermostat_override_or_shared_source(tmp_p
             step.start -= timedelta(minutes=1)
             with pytest.raises(ValueError, match="precedes its dispatch boundary"):
                 validate_thermal_context(data.schedule.document["thermal_context"], [step])
+            step.start += timedelta(minutes=1)
+            power.power_w = 500
+            with pytest.raises(ValueError, match="differs from fixed heater power"):
+                validate_thermal_context(data.schedule.document["thermal_context"], [step])
+            power.power_w = 1000
             data.schedule.project = lambda _now: SimpleNamespace(
                 command=SimpleNamespace(devices=[power])
             )
@@ -203,6 +208,11 @@ def test_room_virtual_targets_stop_on_thermostat_override_or_shared_source(tmp_p
             )
             assert target.native_value == 20.6
             assert enabled.available and enabled.is_on
+            for invalid_power in (500, True):
+                power.power_w = invalid_power
+                assert target.native_value is None
+                assert not enabled.available
+            power.power_w = 1000
             later = dt_util.utcnow() + timedelta(minutes=6)
             current_project = data.schedule.project
             with patch(
