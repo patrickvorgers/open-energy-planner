@@ -1,7 +1,7 @@
 """Validate thermal applications and derive one forecast membership per physical Energy meter."""
 
 from bisect import bisect_right
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 from itertools import pairwise
 from uuid import UUID
@@ -202,7 +202,7 @@ def shared_sources(applications):
     return {meter: row for meter, row in by_meter.items() if len(row["options"]) > 1}
 
 
-def attribute_history(history, samples, linked_ids, start, validity):
+def attribute_history(history, samples, linked_ids, start, validity, *, limit_to_retained=False):
     """Allocate a complete metered hour only when fresh reports agree throughout it."""
     reports = []
     for sample in samples:
@@ -217,6 +217,13 @@ def attribute_history(history, samples, linked_ids, start, validity):
     totals = {identity: 0.0 for identity in linked_ids}
     unknown = 0.0
     hour = timedelta(hours=1)
+    retained_from = None
+    if limit_to_retained and times and times[0] > start:
+        oldest = times[0].astimezone(UTC)
+        start = oldest.replace(minute=0, second=0, microsecond=0)
+        if start < oldest:
+            start += hour
+        retained_from = start.isoformat()
     for before, after in pairwise(history.hours):
         if before.start + hour != after.start or after.start < start:
             continue
@@ -244,4 +251,7 @@ def attribute_history(history, samples, linked_ids, start, validity):
             unknown += usage
         else:
             totals[assigned] += usage
-    return {"applications_kwh": totals, "unknown_kwh": unknown}
+    result = {"applications_kwh": totals, "unknown_kwh": unknown}
+    if retained_from is not None:
+        result["retained_from"] = retained_from
+    return result

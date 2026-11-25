@@ -152,6 +152,8 @@ def test_space_heating_area_controls_source_filter_and_preserves_boiler(thermal_
         ("sensor.living_airco", "Living room air conditioner", "living"),
         ("sensor.attic_airco", "Attic air conditioner", "attic"),
         ("sensor.quatt", "Quatt", "hall"),
+        ("sensor.reserved_ev", "EV electricity meter", "living"),
+        ("sensor.reserved_cycle", "Shiftable appliance meter", "hall"),
         ("climate.central", "Central thermostat", "hall"),
         ("climate.living", "Local thermostat", "living"),
     ):
@@ -160,6 +162,7 @@ def test_space_heating_area_controls_source_filter_and_preserves_boiler(thermal_
         )
         if identity.startswith("sensor."):
             document["energy_consumers"].append({"entity_id": identity, "name": label})
+    document["occupied_meters"] = ["sensor.reserved_ev", "sensor.reserved_cycle"]
     page.reload()
     saved_boiler = deepcopy(document["configuration"]["stores"])
     page.get_by_role("button", name="Add application", exact=True).click()
@@ -179,6 +182,9 @@ def test_space_heating_area_controls_source_filter_and_preserves_boiler(thermal_
         "Living room air conditioner",
     ]
     picker.get_by_label("Show devices from all areas").check()
+    assert not {"EV electricity meter", "Shiftable appliance meter"}.intersection(
+        devices.locator("option").all_text_contents()
+    )
     devices.select_option("sensor.quatt")
     picker.get_by_role("button", name="Add source", exact=True).click()
     page.get_by_label("Allow scheduling", exact=True).check()
@@ -204,6 +210,41 @@ def test_space_heating_area_controls_source_filter_and_preserves_boiler(thermal_
     page.locator("#cancel-thermal").click()
     expect(page.get_by_role("heading", name="Living room", exact=True)).to_be_visible()
     assert len(state["posts"]) == 1
+
+
+def test_shared_heat_source_shows_actual_attribution_window(thermal_page):
+    """Only a capped mode archive replaces the usual period with its retained start time."""
+    page, state = thermal_page
+    document = state["document"]
+    meter = "sensor.boiler_energy"
+    document["configuration"]["applications"] = [
+        {
+            "id": identity,
+            "kind": "hot_water",
+            "name": name,
+            "sources": [{"energy_entity": meter, "allow_scheduling": False}],
+        }
+        for identity, name in (("primary", "Primary tank"), ("utility", "Utility tank"))
+    ]
+    attribution = {"applications_kwh": {"primary": 4}, "unknown_kwh": 1}
+    document["mode_attribution"] = {meter: attribution}
+    page.reload()
+    page.locator("#thermal-store-select").select_option("primary")
+    expect(page.get_by_text("Last 30 days", exact=True)).to_be_visible()
+
+    attribution["retained_from"] = "2026-11-25T08:00:00+00:00"
+    page.reload()
+    page.locator("#thermal-store-select").select_option("primary")
+    expect(page.get_by_text("Attribution period", exact=True)).to_be_visible()
+    expect(page.get_by_text(re.compile(r"^Since .*9:00"))).to_be_visible()
+    expect(page.get_by_text("4 kWh", exact=True)).to_be_visible()
+    expect(page.get_by_text("1 kWh", exact=True)).to_be_visible()
+    evidence = Path("results/ci")
+    evidence.mkdir(parents=True, exist_ok=True)
+    page.screenshot(
+        path=str(evidence / f"thermal-attribution-{page.viewport_size['width']}.png"),
+        full_page=True,
+    )
 
 
 def test_comfort_actions_align_with_field_on_desktop_tablet_and_mobile(thermal_monitor_page):

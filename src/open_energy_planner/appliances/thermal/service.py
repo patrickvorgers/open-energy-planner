@@ -201,17 +201,22 @@ class ThermalService:
 
     def mode_attribution(self, sources, now):
         """Summarize metered energy separately from forecasting and current mode reporting."""
-        return {
-            meter: attribute_history(
-                self.consumers.histories[meter],
-                self.source_mode_history.get(meter, ()),
+        result = {}
+        start = now - timedelta(days=SOURCE_MODE_HISTORY_DAYS)
+        validity = timedelta(seconds=TEMPERATURE_MAX_AGE_SECONDS)
+        for meter, source in sources.items():
+            if (history := self.consumers.histories.get(meter)) is None:
+                continue
+            samples = self.source_mode_history.get(meter, ())
+            result[meter] = attribute_history(
+                history,
+                samples,
                 {option["id"] for option in source["options"]},
-                now - timedelta(days=SOURCE_MODE_HISTORY_DAYS),
-                timedelta(seconds=TEMPERATURE_MAX_AGE_SECONDS),
+                start,
+                validity,
+                limit_to_retained=len(samples) >= MAX_SOURCE_MODE_SAMPLES,
             )
-            for meter, source in sources.items()
-            if meter in self.consumers.histories
-        }
+        return result
 
     @property
     def configuration_version(self):
@@ -239,6 +244,15 @@ class ThermalService:
         """Return the Energy identities reserved by applications and configured water heaters."""
         return application_meters(self.state) | {
             row["energy_entity"] for row in self.state["stores"]
+        }
+
+    @property
+    def occupied_meters(self):
+        """Return Energy meters already assigned to EV charging or a shiftable cycle."""
+        return {row["energy_entity"] for row in self.ev.state["points"]} | {
+            entity
+            for entity, row in self.appliances.state["devices"].items()
+            if row.get("shiftable")
         }
 
     @staticmethod
@@ -316,12 +330,7 @@ class ThermalService:
             for application in configuration["applications"]:
                 application["name"] = area_names.get(application["area_id"], application["name"])
         metadata = {row["entity_id"]: row for row in catalogue.get("entities", [])}
-        used = {row["energy_entity"] for row in self.ev.state["points"]}
-        used.update(
-            entity
-            for entity, row in self.appliances.state["devices"].items()
-            if row.get("shiftable")
-        )
+        used = self.occupied_meters
         for row in configuration["stores"]:
             temperature, power = (
                 metadata.get(row["temperature_entity"], {}),
@@ -344,6 +353,16 @@ class ThermalService:
     def commit(self, configuration, selected=None):
         """Archive settings and optional forecast membership before installing either in memory."""
         checked = deepcopy(configuration)
+        before = shared_sources(application_documents(self.state, {}))
+        after = shared_sources(application_documents(checked, {}))
+        current_modes = {
+            meter: mode
+            for meter, mode in self.source_modes.items()
+            if meter in before
+            and meter in after
+            and {option["id"] for option in before[meter]["options"]}
+            == {option["id"] for option in after[meter]["options"]}
+        }
         transaction = (
             self.documents.transaction()
             if selected is None
@@ -361,6 +380,7 @@ class ThermalService:
         self.active_rooms = ()
         self.echoed_targets = {}
         self.captured_at = None
+        self.source_modes = current_modes
 
     def receive(self, body, now, plan=None):
         """Admit a complete bounded HA report. Missing or stale values never become zero."""
@@ -400,14 +420,14 @@ class ThermalService:
             if observed > reported + timedelta(seconds=MAX_THERMAL_CLOCK_SKEW_SECONDS):
                 raise ValueError("Thermal observation expired")
             admitted[row["id"]] = {**deepcopy(row), "captured_at": body["at"]}
-        climate = self.receive_climate(body.get("climate", []), reported, now)
+        climate = self.receive_climate(body.get("climate", []), reported)
         self.record_room_history(climate, reported)
         self.discard_echoed_targets(climate, plan)
         self.readings, self.climate_readings = admitted, climate
         self.captured_at = reported
 
-    def receive_climate(self, rows, captured, now):
-        """Admit fresh current room temperatures and explicit HA thermostat targets."""
+    def receive_climate(self, rows, captured):
+        """Admit current thermostat values from an already validated integration capture."""
         if not isinstance(rows, list):
             raise TypeError("Invalid thermal readings")
         allowed = {
@@ -434,8 +454,7 @@ class ThermalService:
             observed = instant(row["observed_at"])
             if observed > captured + timedelta(seconds=MAX_THERMAL_CLOCK_SKEW_SECONDS):
                 raise ValueError("Thermal observation expired")
-            if (now - observed).total_seconds() < TEMPERATURE_MAX_AGE_SECONDS:
-                admitted[row["id"]] = dict(row)
+            admitted[row["id"]] = {**row, "captured_at": captured.isoformat()}
         return admitted
 
     def discard_echoed_targets(self, climate, plan):
@@ -523,8 +542,8 @@ class ThermalService:
         reading = self.climate_readings.get(identity)
         if (
             reading
-            and -MAX_THERMAL_CLOCK_SKEW_SECONDS
-            <= (now - instant(reading["observed_at"])).total_seconds()
+            and 0
+            <= (now - instant(reading["captured_at"])).total_seconds()
             < TEMPERATURE_MAX_AGE_SECONDS
         ):
             return reading
@@ -557,17 +576,11 @@ class ThermalService:
     def readiness_issue(self, row, now):
         """Explain the same physical and ownership admission rule used by the planner and UI."""
         available = {row["entity_id"] for row in self.consumers.options}
-        owned = {row["energy_entity"] for row in self.ev.state["points"]}
-        owned.update(
-            entity
-            for entity, row in self.appliances.state["devices"].items()
-            if row.get("shiftable")
-        )
         if row["energy_entity"] not in available:
             return (
                 "Energy consumer missing. Configure this electricity meter in Home Assistant Energy"
             )
-        if row["energy_entity"] in owned:
+        if row["energy_entity"] in self.occupied_meters:
             return "This electricity meter is already controlled by an EV or appliance"
         reading = self.readings.get(row["id"])
         if (

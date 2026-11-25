@@ -29,7 +29,6 @@ MAX_THERMAL_TEXT_LENGTH = 160
 MIN_TEMPERATURE_C = 0
 MAX_TEMPERATURE_C = 120
 MAX_SPACE_TEMPERATURE_C = 50
-SPACE_OBSERVATION_VALIDITY_SECONDS = 300
 SPACE_TARGET_TOLERANCE_C = 0.01
 SENSOR_PATTERN = re.compile(r"sensor\.[a-z0-9_]+")
 TEMPERATURE_ENTITY_PATTERN = re.compile(r"(?:sensor|water_heater)\.[a-z0-9_]+")
@@ -475,8 +474,6 @@ def room_command(coordinator, identity):
         if (
             not reading
             or not reading["heat_mode"]
-            or (now - timestamp(reading["observed_at"])).total_seconds()
-            >= SPACE_OBSERVATION_VALIDITY_SECONDS
             or abs(reading["target_c"] - frozen["target_c"]) >= SPACE_TARGET_TOLERANCE_C
             or reading["temperature_c"] >= limit
         ):

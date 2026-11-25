@@ -31,11 +31,36 @@ available under **Consumption and cycles** once it has no remaining thermal bind
 An Energy meter can be linked to several thermal applications and contributes
 one electricity forecast. For a shared source, a Home Assistant automation can
 use `select.select_option` on its **Reported operating mode** entity. Report
-the observed application on changes and at least every five minutes while it
-is known. Use **Unknown** when the source cannot be attributed to one application.
+the observed application on changes and refresh the report within five minutes
+even when the mode is unchanged. Use **Unknown** when the source cannot be
+attributed to one application.
 The editor shows unknown consumption when an entire metered hour cannot be
-attributed from consistent reports. Updating the reported mode never controls
-physical equipment.
+attributed from consistent reports. Attribution covers up to 30 days. If the
+source reaches its storage limit, the editor shows totals from the first full
+hour supported by the retained reports and displays that starting time. The
+meter's full electricity history still contributes to forecasting. Updating the
+reported mode never controls physical equipment.
+
+For example, this automation reads an existing heat pump mode on each change
+and every three minutes. Replace the example entity IDs, mode values and
+application names with those in your installation.
+
+```yaml
+alias: Report the shared heat pump mode to OEP
+triggers:
+  - trigger: state
+    entity_id: sensor.heat_pump_mode
+  - trigger: time_pattern
+    minutes: "/3"
+actions:
+  - action: select.select_option
+    target:
+      entity_id: select.heat_pump_reported_operating_mode
+    data:
+      option: >-
+        {{ {'space_heating': 'Living room', 'hot_water': 'Hot water'}
+           .get(states('sensor.heat_pump_mode'), 'Unknown') }}
+```
 
 **Allow scheduling** records permission per source. For space heating with
 permission, enter **Maximum preheating** and select a thermostat. The settings
@@ -361,7 +386,7 @@ target.
 ## Prepare thermal storage
 
 The supported thermal model is a fixed-power resistive electric water heater.
-Under **Settings > Appliances > Electric boilers**, choose **Add electric boiler**
+Under **Settings > Appliances > Thermal**, choose **Add electric boiler**
 and select an available device from the same Energy chooser. Its Energy meter
 and configured device power sensor are selected together. Then configure the
 temperature measurement, volume, temperatures, standing losses, electrical

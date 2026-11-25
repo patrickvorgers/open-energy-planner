@@ -4,7 +4,7 @@ import asyncio
 from copy import deepcopy
 from datetime import timedelta
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, call, patch
 
 import pytest
 
@@ -130,10 +130,30 @@ def test_climate_and_mode_share_normal_ha_virtual_control(tmp_path):
             }
             assert mode.current_option == "Unknown"
             await mode.async_select_option("Hot water")
-            data.client.request.assert_awaited_once_with(
+            projection["shared_sources"][0]["mode"]["observed_at"] = now.isoformat()
+            assert mode.current_option == "Hot water"
+            await mode.async_select_option("Hot water")
+            mode_report = call(
                 "POST", "/v1/thermal/mode", {"meter": meter, "application_id": "tank"}
             )
-            data.sync.assert_awaited_once()
+            assert data.client.request.await_args_list == [mode_report, mode_report]
+            assert data.sync.await_count == 2
+
+            projection["shared_sources"][0]["options"] = {
+                "room": "Unknown",
+                "tank": "Unknown (room)",
+                "pool": "Unknown (room) 2",
+            }
+            assert mode.options == [
+                "Unknown",
+                "Unknown (room) 3",
+                "Unknown (room)",
+                "Unknown (room) 2",
+            ]
+            await mode.async_select_option("Unknown (room) 3")
+            data.client.request.assert_awaited_with(
+                "POST", "/v1/thermal/mode", {"meter": meter, "application_id": "room"}
+            )
         finally:
             await hass.async_stop()
 
@@ -183,6 +203,15 @@ def test_room_virtual_targets_stop_on_thermostat_override_or_shared_source(tmp_p
             )
             assert target.native_value == 20.6
             assert enabled.available and enabled.is_on
+            later = dt_util.utcnow() + timedelta(minutes=6)
+            current_project = data.schedule.project
+            with patch(
+                "custom_components.open_energy_planner.thermal.dt_util.utcnow", return_value=later
+            ):
+                assert target.native_value == 20.6
+                data.schedule.project = lambda _now: SimpleNamespace(command=None)
+                assert target.native_value is None
+            data.schedule.project = current_project
             power.power_w = 0
             assert target.native_value is None
             assert enabled.available and enabled.is_on is False

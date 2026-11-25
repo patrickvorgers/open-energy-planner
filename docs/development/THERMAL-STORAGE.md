@@ -240,8 +240,9 @@ The existing joint solver replaces that source's AC forecast from the dispatch
 boundary. The ordinary forecast covers the earlier part of the horizon.
 Room commands use the current target, the selected margin and the existing
 thermal plan publication lifecycle. The integration withdraws a room command
-if the local thermostat changes, becomes stale, leaves heating mode or reaches
-the upper limit. It leaves comfort recovery to local controls if the room is
+if the local thermostat target changes, the thermostat becomes unavailable or
+leaves heating mode, the room reaches the upper limit or the command expires.
+It leaves comfort recovery to local controls if the room is
 below the thermostat target during a proposed off interval. A reflected
 virtual target is withheld as an ambiguous new reference target.
 

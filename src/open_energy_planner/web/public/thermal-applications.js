@@ -1,5 +1,6 @@
 /** Configure area-based and named applications using the existing thermal settings draft. */
 import {settingsSummary} from "./appliance-settings-detail.js";
+import {when} from "./display.js";
 
 export const SPACE_HEATING = "space_heating";
 export const HOT_WATER = "hot_water";
@@ -129,7 +130,9 @@ export function renderApplication({app, current, draft, editor, summary, dialog,
             const attribution = current.mode_attribution?.[meter];
             if (attribution) {
                 const energy = value => value.toLocaleString(undefined, {maximumFractionDigits: 2}) + " kWh";
-                facts.push(["Attributed electricity (last 30 days)", energy(attribution.applications_kwh[app.id] ?? 0)],
+                const period = attribution.retained_from ? `Since ${when(attribution.retained_from)}` : "Last 30 days";
+                facts.push(["Attribution period", period],
+                    ["Attributed electricity", energy(attribution.applications_kwh[app.id] ?? 0)],
                     ["Unattributed electricity at source", energy(attribution.unknown_kwh)]);
             }
         }
@@ -220,7 +223,9 @@ export function renderApplication({app, current, draft, editor, summary, dialog,
         }));
         editor.append(section);
     }
-    const add = action("Add heat source", () => chooseSource(dialog, app, options, metadata, rerender));
+    const occupiedMeters = new Set(current.occupied_meters || []);
+    const add = action("Add heat source", () => chooseSource(dialog, app,
+        options.filter(option => !occupiedMeters.has(option.entity_id)), metadata, rerender));
     if (space && !app.area_id) add.dataset.requiresArea = "";
     editor.append(add);
 }

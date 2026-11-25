@@ -91,6 +91,8 @@ def test_application_and_mode_history_restore_without_restoring_current_mode(ser
     identity = applications[0]["id"]
     service.report_mode(ENERGY, identity, NOW)
     assert service.document(NOW)["source_modes"][ENERGY]["application_id"] == identity
+    service.configure(configuration, catalogue())
+    assert service.document(NOW)["source_modes"][ENERGY]["application_id"] == identity
 
     restored = ThermalService(service.documents, service.consumers, service.appliances, service.ev)
     assert restored.state == configuration
@@ -99,6 +101,90 @@ def test_application_and_mode_history_restore_without_restoring_current_mode(ser
         {"application_id": identity, "observed_at": NOW.isoformat()}
     ]
     assert restored.document(NOW)["source_modes"] == {}
+
+    unlinked = deepcopy(configuration)
+    unlinked["applications"][0]["sources"] = []
+    service.configure(unlinked, catalogue())
+    service.configure(configuration, catalogue())
+    assert service.document(NOW + timedelta(minutes=1))["source_modes"] == {}
+    assert service.source_mode_history == restored.source_mode_history
+
+
+def test_mode_attribution_reports_a_shorter_window_only_at_retention_capacity(service):
+    """Exclude earlier hours only when the bounded archive cannot cover the ordinary window."""
+    first_hour = NOW - timedelta(days=9)
+    hour = timedelta(hours=1)
+    service.consumers.histories[ENERGY] = EnergyHistory(
+        ENERGY,
+        tuple(
+            EnergyHour(first_hour + offset * hour, total, total)
+            for offset, total in enumerate((0, 2, 5, 9), start=-1)
+        ),
+    )
+    reports = [
+        {
+            "application_id": "water",
+            "observed_at": (first_hour + timedelta(minutes=3 * step)).isoformat(),
+        }
+        for step in range(1, 4097)
+    ]
+    service.source_mode_history[ENERGY] = reports
+    sources = {ENERGY: {"options": [{"id": "water"}]}}
+    assert service.mode_attribution(sources, NOW)[ENERGY] == {
+        "applications_kwh": {"water": 7},
+        "unknown_kwh": 0,
+        "retained_from": (first_hour + hour).isoformat(),
+    }
+
+    reports.pop()
+    assert service.mode_attribution(sources, NOW)[ENERGY] == {
+        "applications_kwh": {"water": 7},
+        "unknown_kwh": 2,
+    }
+
+
+def test_thermostat_target_expires_when_current_integration_captures_stop(service):
+    """The original thermostat timestamp stays intact as current captures keep the target fresh."""
+    identity = str(uuid4())
+    thermostat = "climate.room"
+    discovery = catalogue()
+    discovery["areas"] = [{"id": "room", "name": "Room"}]
+    discovery["entities"].append({"entity_id": thermostat})
+    configuration = settings()
+    configuration["applications"] = [
+        {
+            "id": identity,
+            "kind": "space_heating",
+            "area_id": "room",
+            "name": "Room",
+            "climate_entity": thermostat,
+            "maximum_preheat_c": 0.5,
+            "sources": [{"energy_entity": ENERGY, "allow_scheduling": True}],
+        }
+    ]
+    service.configure(configuration, discovery)
+    observed_at = (NOW - timedelta(minutes=30)).isoformat()
+    row = {
+        "id": identity,
+        "entity_id": thermostat,
+        "temperature_c": 19,
+        "target_c": 20,
+        "observed_at": observed_at,
+    }
+    capture = {**report(service), "climate": [row]}
+    service.receive(capture, NOW)
+    saved = service.document(NOW, discovery)["applications"][0]
+    assert saved["actual"] == {**row, "captured_at": NOW.isoformat()}
+    assert saved["preheat_limit_c"] == 20.5
+
+    expired_at = NOW + timedelta(minutes=5)
+    expired = service.document(expired_at, discovery)["applications"][0]
+    assert expired["actual"] is None
+    assert expired["preheat_limit_c"] is None
+    service.receive({**capture, "at": expired_at.isoformat()}, expired_at)
+    refreshed = service.document(expired_at, discovery)["applications"][0]
+    assert refreshed["actual"] == {**row, "captured_at": expired_at.isoformat()}
+    assert refreshed["preheat_limit_c"] == 20.5
 
 
 def snapshot():
@@ -176,8 +262,8 @@ def test_room_planning_uses_one_meter_and_withdraws_on_target_changes_or_sharing
         live_weather_until=NOW + timedelta(hours=2),
     )
 
-    def observe(target, now, plan=None):
-        """Send a fresh room measurement through the authority boundary."""
+    def observe(target, now, plan=None, *, observed_at=None):
+        """Send a current room capture with independent thermostat provenance."""
         service.receive(
             {
                 "configuration_version": service.configuration_version,
@@ -190,7 +276,7 @@ def test_room_planning_uses_one_meter_and_withdraws_on_target_changes_or_sharing
                         "temperature_c": 20.28,
                         "target_c": target,
                         "heat_mode": True,
-                        "observed_at": now.isoformat(),
+                        "observed_at": (observed_at or now).isoformat(),
                     }
                 ],
             },
@@ -198,13 +284,16 @@ def test_room_planning_uses_one_meter_and_withdraws_on_target_changes_or_sharing
             plan,
         )
 
-    observe(20, NOW)
+    observed_at = NOW - timedelta(minutes=30)
+    observe(20, NOW, observed_at=observed_at)
     prepared = service.prepare(snapshot(), live, NOW, "Europe/Amsterdam")
     (work,) = prepared.problem.thermal_work
     assert work.device_id == ROOM
     assert work.minimum_c == 20
     assert work.terminal_c == 20
     assert prepared.thermal_evidence[0]["configuration"]["energy_entity"] == METER
+    assert prepared.thermal_evidence[0]["reading"]["observed_at"] == observed_at.isoformat()
+    assert prepared.thermal_evidence[0]["reading"]["captured_at"] == NOW.isoformat()
     assert sum(step.load_kwh for step in prepared.problem.intervals) == pytest.approx(
         0.8 + 0.2 * (work.ready_at - NOW).total_seconds() / 3600
     )
@@ -233,6 +322,10 @@ def test_room_planning_uses_one_meter_and_withdraws_on_target_changes_or_sharing
     shared = service.prepare(snapshot(), live, NOW + timedelta(seconds=30), "Europe/Amsterdam")
     assert shared.problem.thermal_work == ()
     assert sum(step.load_kwh for step in shared.problem.intervals) == pytest.approx(1)
+
+    next_hour = NOW + timedelta(hours=1)
+    observe(20, next_hour, observed_at=observed_at)
+    assert next_hour not in service.room_history[service.room_history_id(room)]
 
 
 def test_real_mixed_preparation_preserves_cycle_ev_thermal_ownership_through_publication(service):
@@ -667,6 +760,7 @@ def test_later_control_ownership_conflict_withdraws_thermal_work_without_losing_
         )
     else:
         service.appliances.state["devices"][ENERGY] = {"shiftable": True}
+    assert service.occupied_meters == {ENERGY}
     withdrawn = prepare(service)
     assert withdrawn.problem.thermal_work == ()
     assert service.document(NOW)["devices"][0]["issue"]
