@@ -71,6 +71,21 @@ PR diff, not the default after each correction. Latest-head review and dispositi
 of every finding remain mandatory. Once candidate CI starts, keep that candidate
 frozen unless a new finding or failure requires a correction.
 
+## Repowise CI reports
+
+The independent Repowise CI reports workflow measures Python app line coverage
+with the app unit tests. Relevant pushes to `main` and Ready transitions for
+pull requests from this repository measure the exact commit being reported.
+A separate job authenticates uploads with GitHub OIDC. It downloads the reports
+without checking out or executing repository code.
+
+For relevant pushes and manual runs on `main`, the workflow also sends a
+coverage data file that maps individual tests to the source lines they execute,
+plus JUnit timings recorded under coverage instrumentation. The reports cover
+the Python app tests in `tests/app`.
+The existing candidate workflow remains responsible for merge evidence and
+required checks.
+
 ## Follow the intended merge order
 
 Develop Drafts and run builder checks in parallel. Agree on one
