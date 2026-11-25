@@ -1,0 +1,117 @@
+name: Repowise CI reports
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'src/**'
+      - 'tests/**'
+      - requirements.lock
+      - pyproject.toml
+      - .github/workflows/repowise-coverage.yaml
+  pull_request:
+    branches: [main]
+    types: [ready_for_review]
+    paths:
+      - 'src/**'
+      - 'tests/**'
+      - requirements.lock
+      - pyproject.toml
+      - .github/workflows/repowise-coverage.yaml
+
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: repowise-coverage-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  measure:
+    name: Measure Python app coverage
+    if: >-
+      github.repository == 'patrickvorgers/open-energy-planner' &&
+      (github.ref == 'refs/heads/main' ||
+       (github.event_name == 'pull_request' &&
+        github.event.pull_request.head.repo.full_name == github.repository))
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    env:
+      OPENBLAS_NUM_THREADS: '1'
+      OMP_NUM_THREADS: '1'
+      MKL_NUM_THREADS: '1'
+      PYTHONPATH: src
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: '3.14'
+      - name: Install the locked app dependencies and test tools
+        run: |
+          python -m pip install --require-hashes --only-binary=:all: -r requirements.lock
+          python -m pip install --only-binary=:all: pytest==9.1.1 coverage==7.17.5
+      - name: Run app unit tests and export line coverage
+        env:
+          COVERAGE_FILE: ${{ runner.temp }}/repowise-coverage-data
+        run: |
+          python -m coverage run --source=src -m pytest -q tests/app -p no:cacheprovider \
+            --junitxml="$RUNNER_TEMP/unit-app.xml" -o junit_family=xunit1 -o junit_logging=no
+          python -m coverage xml -o "$RUNNER_TEMP/coverage.xml"
+      - name: Retain the Python app test reports
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: repowise-app-test-reports
+          path: |
+            ${{ runner.temp }}/coverage.xml
+            ${{ runner.temp }}/unit-app.xml
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    name: Submit test reports to Repowise
+    needs: measure
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          name: repowise-app-test-reports
+      - name: Upload the coverage XML
+        continue-on-error: true
+        env:
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          token=$(curl --silent --show-error --fail --max-time 20 \
+            --header "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=repowise" | jq -er '.value')
+          curl --silent --show-error --fail --max-time 60 --output /dev/null \
+            --header "Authorization: Bearer $token" \
+            --form 'report=@coverage.xml' \
+            --form "repository=$GITHUB_REPOSITORY" --form "head_sha=$HEAD_SHA" \
+            --form "pr_number=$PR_NUMBER" --form "event=$GITHUB_EVENT_NAME" \
+            --form "run_url=$RUN_URL" --form "workspace=$GITHUB_WORKSPACE" \
+            https://api.repowise.dev/ci/coverage
+
+      - name: Upload app unit test timings
+        if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+        continue-on-error: true
+        run: |
+          token=$(curl --silent --show-error --fail --max-time 20 \
+            --header "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=repowise" | jq -er '.value')
+          curl --silent --show-error --fail --max-time 120 --output /dev/null \
+            --header "Authorization: Bearer $token" \
+            --form 'evidence=@unit-app.xml' \
+            --form "repository=$GITHUB_REPOSITORY" --form "commit=$GITHUB_SHA" \
+            --form 'workload=app-unit-tests-with-coverage' --form 'class=unit_test' \
+            --form 'environment=linux-ci' \
+            https://api.repowise.dev/ci/evidence
