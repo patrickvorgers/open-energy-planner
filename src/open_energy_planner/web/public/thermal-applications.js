@@ -10,13 +10,17 @@ export function applicationType(application) {
     return application.kind === SPACE_HEATING ? "Space heating" : "Domestic hot water";
 }
 
+/** Validate the preheating margin against the same limits as the saved settings. */
+function validMargin(margin) {
+    return Number.isFinite(margin) && margin >= 0 && margin <= 3;
+}
+
 /** Reject incomplete edits before submitting the combined thermal draft. */
 export function validApplication(application) {
     if (application.kind === HOT_WATER) return Boolean(application.name.trim());
     if (!application.area_id) return false;
     if (!application.sources.some(source => source.allow_scheduling)) return true;
-    const margin = application.maximum_preheat_c;
-    return Boolean(application.climate_entity) && Number.isFinite(margin) && margin >= 0 && margin <= 3;
+    return Boolean(application.climate_entity) && validMargin(application.maximum_preheat_c);
 }
 
 /** Create one text-only form or display element. */
@@ -203,13 +207,19 @@ export function renderApplication({app, current, draft, editor, summary, dialog,
     }
     editor.append(fields, node("h3", "Heat sources"));
     if (!app.sources.length) editor.append(node("p", "No heat sources linked."));
+    const updateSources = () => {
+        if (space && !app.sources.some(source => source.allow_scheduling) && !validMargin(app.maximum_preheat_c)) {
+            app.maximum_preheat_c = null;
+        }
+        rerender();
+    };
     for (const source of app.sources) {
         const section = renderSource(source);
         const permit = node("input"), label = node("label");
         permit.type = "checkbox";
         permit.dataset.field = "allow-scheduling:" + source.energy_entity;
         permit.checked = source.allow_scheduling;
-        permit.onchange = () => { source.allow_scheduling = permit.checked; rerender(); };
+        permit.onchange = () => { source.allow_scheduling = permit.checked; updateSources(); };
         label.className = "settings-switch";
         const permission = node("span", "Allow scheduling");
         permit.setAttribute("aria-label", "Allow scheduling");
@@ -217,7 +227,7 @@ export function renderApplication({app, current, draft, editor, summary, dialog,
         label.append(permit, permission);
         section.append(label, action("Remove " + sourceName(source), () => {
             app.sources = app.sources.filter(row => row !== source);
-            rerender();
+            updateSources();
         }));
         editor.append(section);
     }
