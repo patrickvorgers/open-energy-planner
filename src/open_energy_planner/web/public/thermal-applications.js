@@ -208,7 +208,10 @@ export function renderApplication({app, current, draft, editor, summary, dialog,
         permit.checked = source.allow_scheduling;
         permit.onchange = () => { source.allow_scheduling = permit.checked; rerender(); };
         label.className = "settings-switch";
-        label.append(permit, node("span", "Allow scheduling"));
+        const permission = node("span", "Allow scheduling");
+        permit.setAttribute("aria-label", "Allow scheduling");
+        permission.append(node("small", "Saves your permission for future scheduling."));
+        label.append(permit, permission);
         section.append(label, action("Remove " + sourceName(source), () => {
             app.sources = app.sources.filter(row => row !== source);
             rerender();

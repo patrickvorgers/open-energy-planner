@@ -235,7 +235,7 @@ def test_shared_heat_source_keeps_one_weather_forecast_and_configured_boiler(tmp
                 assert changed["applications"][0]["preheat_limit_c"] == target + 0.5
                 assert (
                     changed["applications"][0]["planning_status"]
-                    == "Waiting for a validated thermal model"
+                    == "Space heating scheduling is not available yet"
                 )
                 assert changed["applications"][1]["planning_status"] == "Forecast only"
             async with client.post(

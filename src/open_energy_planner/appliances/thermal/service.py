@@ -419,9 +419,7 @@ class ThermalService:
             "planning_status": (
                 "Forecast only"
                 if not allows
-                else "Waiting for a current thermostat target"
-                if not reading
-                else "Waiting for a validated thermal model"
+                else "Space heating scheduling is not available yet"
             ),
         }
 

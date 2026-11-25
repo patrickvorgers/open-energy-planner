@@ -40,8 +40,8 @@ physical equipment.
 **Allow scheduling** records permission per source. For space heating with
 permission, enter **Maximum preheating** and select a thermostat. The settings
 show the current usable thermostat target, preheating limit and readiness.
-Space heating currently stays in forecasting while a validated heat-response
-model is required. Existing supported fixed-power electric boilers continue to
+Space heating currently runs in forecast-only mode. The app saves your permission
+for future scheduling. Existing supported fixed-power electric boilers continue to
 use their own thermal plan, volume, limits, measured power and hourly heat draw.
 
 ## Schedule a complete appliance cycle
