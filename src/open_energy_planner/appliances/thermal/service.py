@@ -212,6 +212,15 @@ class ThermalService:
             row["energy_entity"] for row in self.state["stores"]
         }
 
+    @property
+    def occupied_meters(self):
+        """Return Energy meters already assigned to EV charging or a shiftable cycle."""
+        return {row["energy_entity"] for row in self.ev.state["points"]} | {
+            entity
+            for entity, row in self.appliances.state["devices"].items()
+            if row.get("shiftable")
+        }
+
     @staticmethod
     def _shape(configuration):
         """Validate durable physical settings without needing an online HA catalogue."""
@@ -283,12 +292,7 @@ class ThermalService:
             for application in configuration["applications"]:
                 application["name"] = area_names.get(application["area_id"], application["name"])
         metadata = {row["entity_id"]: row for row in catalogue.get("entities", [])}
-        used = {row["energy_entity"] for row in self.ev.state["points"]}
-        used.update(
-            entity
-            for entity, row in self.appliances.state["devices"].items()
-            if row.get("shiftable")
-        )
+        used = self.occupied_meters
         for row in configuration["stores"]:
             temperature, power = (
                 metadata.get(row["temperature_entity"], {}),
@@ -311,6 +315,16 @@ class ThermalService:
     def commit(self, configuration, selected=None):
         """Archive settings and optional forecast membership before installing either in memory."""
         checked = deepcopy(configuration)
+        before = shared_sources(application_documents(self.state, {}))
+        after = shared_sources(application_documents(checked, {}))
+        current_modes = {
+            meter: mode
+            for meter, mode in self.source_modes.items()
+            if meter in before
+            and meter in after
+            and {option["id"] for option in before[meter]["options"]}
+            == {option["id"] for option in after[meter]["options"]}
+        }
         transaction = (
             self.documents.transaction()
             if selected is None
@@ -326,6 +340,7 @@ class ThermalService:
         self.readings, self.active_ids = {}, ()
         self.climate_readings = {}
         self.captured_at = None
+        self.source_modes = current_modes
 
     def receive(self, body, now):
         """Admit a complete bounded HA report. Missing or stale values never become zero."""
@@ -424,17 +439,11 @@ class ThermalService:
     def readiness_issue(self, row, now):
         """Explain the same physical and ownership admission rule used by the planner and UI."""
         available = {row["entity_id"] for row in self.consumers.options}
-        owned = {row["energy_entity"] for row in self.ev.state["points"]}
-        owned.update(
-            entity
-            for entity, row in self.appliances.state["devices"].items()
-            if row.get("shiftable")
-        )
         if row["energy_entity"] not in available:
             return (
                 "Energy consumer missing. Configure this electricity meter in Home Assistant Energy"
             )
-        if row["energy_entity"] in owned:
+        if row["energy_entity"] in self.occupied_meters:
             return "This electricity meter is already controlled by an EV or appliance"
         reading = self.readings.get(row["id"])
         if (

@@ -152,6 +152,8 @@ def test_space_heating_area_controls_source_filter_and_preserves_boiler(thermal_
         ("sensor.living_airco", "Living room air conditioner", "living"),
         ("sensor.attic_airco", "Attic air conditioner", "attic"),
         ("sensor.quatt", "Quatt", "hall"),
+        ("sensor.reserved_ev", "EV electricity meter", "living"),
+        ("sensor.reserved_cycle", "Shiftable appliance meter", "hall"),
         ("climate.central", "Central thermostat", "hall"),
         ("climate.living", "Local thermostat", "living"),
     ):
@@ -160,6 +162,7 @@ def test_space_heating_area_controls_source_filter_and_preserves_boiler(thermal_
         )
         if identity.startswith("sensor."):
             document["energy_consumers"].append({"entity_id": identity, "name": label})
+    document["occupied_meters"] = ["sensor.reserved_ev", "sensor.reserved_cycle"]
     page.reload()
     saved_boiler = deepcopy(document["configuration"]["stores"])
     page.get_by_role("button", name="Add application", exact=True).click()
@@ -179,6 +182,9 @@ def test_space_heating_area_controls_source_filter_and_preserves_boiler(thermal_
         "Living room air conditioner",
     ]
     picker.get_by_label("Show devices from all areas").check()
+    assert not {"EV electricity meter", "Shiftable appliance meter"}.intersection(
+        devices.locator("option").all_text_contents()
+    )
     devices.select_option("sensor.quatt")
     picker.get_by_role("button", name="Add source", exact=True).click()
     page.get_by_label("Allow scheduling", exact=True).check()

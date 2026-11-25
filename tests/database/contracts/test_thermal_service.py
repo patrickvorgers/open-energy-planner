@@ -90,6 +90,8 @@ def test_application_and_mode_history_restore_without_restoring_current_mode(ser
     identity = applications[0]["id"]
     service.report_mode(ENERGY, identity, NOW)
     assert service.document(NOW)["source_modes"][ENERGY]["application_id"] == identity
+    service.configure(configuration, catalogue())
+    assert service.document(NOW)["source_modes"][ENERGY]["application_id"] == identity
 
     restored = ThermalService(service.documents, service.consumers, service.appliances, service.ev)
     assert restored.state == configuration
@@ -98,6 +100,13 @@ def test_application_and_mode_history_restore_without_restoring_current_mode(ser
         {"application_id": identity, "observed_at": NOW.isoformat()}
     ]
     assert restored.document(NOW)["source_modes"] == {}
+
+    unlinked = deepcopy(configuration)
+    unlinked["applications"][0]["sources"] = []
+    service.configure(unlinked, catalogue())
+    service.configure(configuration, catalogue())
+    assert service.document(NOW + timedelta(minutes=1))["source_modes"] == {}
+    assert service.source_mode_history == restored.source_mode_history
 
 
 def snapshot():
@@ -563,6 +572,7 @@ def test_later_control_ownership_conflict_withdraws_thermal_work_without_losing_
         )
     else:
         service.appliances.state["devices"][ENERGY] = {"shiftable": True}
+    assert service.occupied_meters == {ENERGY}
     withdrawn = prepare(service)
     assert withdrawn.problem.thermal_work == ()
     assert service.document(NOW)["devices"][0]["issue"]

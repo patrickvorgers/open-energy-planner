@@ -218,7 +218,9 @@ export function renderApplication({app, current, draft, editor, summary, dialog,
         }));
         editor.append(section);
     }
-    const add = action("Add heat source", () => chooseSource(dialog, app, options, metadata, rerender));
+    const occupiedMeters = new Set(current.occupied_meters || []);
+    const add = action("Add heat source", () => chooseSource(dialog, app,
+        options.filter(option => !occupiedMeters.has(option.entity_id)), metadata, rerender));
     if (space && !app.area_id) add.dataset.requiresArea = "";
     editor.append(add);
 }
