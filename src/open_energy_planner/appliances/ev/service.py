@@ -582,12 +582,20 @@ class EVService:
             if point["energy_entity"] not in available
         )
 
-    def prepare(self, snapshot, demand, now, timezone, *, excluded_entities=()):
+    def prepare(
+        self, snapshot, demand, now, timezone, *, excluded_entities=(), replacement_windows=()
+    ):
         """Remove every configured charger forecast and add only explicit live SOC work."""
         works = self.work(now, timezone)
         entities = {point["energy_entity"] for point in self.state["points"]}
         entities.update(excluded_entities)
-        prepared = self.appliances.prepare(snapshot, demand, now, excluded_entities=entities)
+        prepared = self.appliances.prepare(
+            snapshot,
+            demand,
+            now,
+            excluded_entities=entities,
+            replacement_windows=replacement_windows,
+        )
         if entities and not prepared.appliance_evidence:
             if self.state["points"]:
                 self.issue = (

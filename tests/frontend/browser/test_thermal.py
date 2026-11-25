@@ -144,8 +144,8 @@ def test_space_heating_area_controls_source_filter_and_preserves_boiler(thermal_
     page, state = thermal_page
     document = state["document"]
     document["catalogue"]["areas"] = [
-        {"id": "living", "name": "Living room"},
         {"id": "attic", "name": "Attic"},
+        {"id": "living", "name": "Living room"},
         {"id": "hall", "name": "Hall"},
     ]
     for identity, label, area in (
@@ -156,6 +156,8 @@ def test_space_heating_area_controls_source_filter_and_preserves_boiler(thermal_
         ("sensor.reserved_cycle", "Shiftable appliance meter", "hall"),
         ("climate.central", "Central thermostat", "hall"),
         ("climate.living", "Local thermostat", "living"),
+        ("climate.attic", "Attic thermostat", "attic"),
+        ("climate.without_area", "Unassigned thermostat", None),
     ):
         document["catalogue"]["entities"].append(
             {"entity_id": identity, "name": label, "area_id": area}
@@ -172,7 +174,7 @@ def test_space_heating_area_controls_source_filter_and_preserves_boiler(thermal_
     climate = page.get_by_label("Temperature and target", exact=True)
     assert climate.locator("optgroup").evaluate_all(
         "groups => groups.map(group => group.label)"
-    ) == ["In Living room", "Other Home Assistant areas"]
+    ) == ["In Living room", "In Attic", "In Hall", "No Home Assistant area"]
     climate.select_option("climate.central")
     page.get_by_role("button", name="Add heat source", exact=True).click()
     picker = page.get_by_role("dialog", name="Add heat source", exact=True)
@@ -187,10 +189,15 @@ def test_space_heating_area_controls_source_filter_and_preserves_boiler(thermal_
     )
     devices.select_option("sensor.quatt")
     picker.get_by_role("button", name="Add source", exact=True).click()
+    power = page.get_by_label("Electrical input at full load (W)", exact=True)
+    expect(power).to_have_count(0)
     page.get_by_label("Allow scheduling", exact=True).check()
     expect(page.get_by_label("Maximum preheating (°C)", exact=True)).to_be_visible()
     page.get_by_label("Maximum preheating (°C)", exact=True).fill("0.5")
     page.get_by_label("Maximum preheating (°C)", exact=True).blur()
+    power.fill("1200.5")
+    expect(page.get_by_role("button", name="Save settings", exact=True)).to_be_disabled()
+    power.fill("1200")
     page.evaluate("window.scrollTo(0, 0)")
     evidence = Path("results/ci")
     evidence.mkdir(parents=True, exist_ok=True)
@@ -202,6 +209,7 @@ def test_space_heating_area_controls_source_filter_and_preserves_boiler(thermal_
     expect(page.get_by_role("heading", name="Quatt", exact=True)).to_be_visible()
     assert document["configuration"]["stores"] == saved_boiler
     assert document["configuration"]["applications"][0]["climate_entity"] == "climate.central"
+    assert document["configuration"]["applications"][0]["sources"][0]["full_load_power_w"] == 1200
     page.get_by_role("button", name="Add application", exact=True).click()
     page.get_by_role("button", name="Continue", exact=True).click()
     assert (

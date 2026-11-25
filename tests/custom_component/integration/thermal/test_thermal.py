@@ -15,8 +15,11 @@ from homeassistant.exceptions import HomeAssistantError
 from homeassistant.util import dt as dt_util
 
 from custom_components.open_energy_planner.ev_controls import EVTarget
+from custom_components.open_energy_planner.protocol import validate_thermal_context
 from custom_components.open_energy_planner.thermal import capture, command, reading, receive
 from custom_components.open_energy_planner.thermal_controls import (
+    RoomHeatRequested,
+    RoomPreheatTarget,
     ThermalEnabled,
     ThermalHeating,
     ThermalMinimum,
@@ -151,6 +154,77 @@ def test_climate_and_mode_share_normal_ha_virtual_control(tmp_path):
             data.client.request.assert_awaited_with(
                 "POST", "/v1/thermal/mode", {"meter": meter, "application_id": "room"}
             )
+        finally:
+            await hass.async_stop()
+
+    asyncio.run(scenario())
+
+
+def test_room_virtual_targets_stop_on_thermostat_override_or_shared_source(tmp_path):
+    """A valid room plan issues bounded virtual intent and releases it on changed physical evidence."""
+
+    async def scenario():
+        """Distinguish valid off intervals from missing or revoked authority."""
+        hass = HomeAssistant(str(tmp_path))
+        try:
+            identity = "00000000-0000-4000-8000-000000000500"
+            meter = "sensor.room_airco"
+            app = {
+                "id": identity,
+                "climate_entity": "climate.hall",
+                "name": "Living room",
+                "energy_entity": meter,
+                "maximum_preheat_c": 0.6,
+            }
+            data = coordinator(hass, device(dt_util.utcnow()))
+            data.thermal["climate_bindings"] = [app]
+            data.consumer_forecasts["options"] = [{"entity_id": meter}]
+            context = {
+                **{key: value for key, value in app.items() if key != "name"},
+                "kind": "space_heating",
+                "target_c": 20,
+                "heater_w": 1000,
+                "ready_at": dt_util.utcnow().isoformat(),
+            }
+            data.schedule.document["thermal_context"]["devices"] = [context]
+            power = SimpleNamespace(kind="thermal", device_id=identity, power_w=1000)
+            step = SimpleNamespace(start=dt_util.utcnow(), command=SimpleNamespace(devices=[power]))
+            validate_thermal_context(data.schedule.document["thermal_context"], [step])
+            step.start -= timedelta(minutes=1)
+            with pytest.raises(ValueError, match="precedes its dispatch boundary"):
+                validate_thermal_context(data.schedule.document["thermal_context"], [step])
+            data.schedule.project = lambda _now: SimpleNamespace(
+                command=SimpleNamespace(devices=[power])
+            )
+            target = RoomPreheatTarget(data, app, "preheat_target")
+            enabled = RoomHeatRequested(data, app, "room_heat_requested")
+            hass.states.async_set(
+                "climate.hall", "heat", {"current_temperature": 20.1, "temperature": 20}
+            )
+            assert target.native_value == 20.6
+            assert enabled.available and enabled.is_on
+            later = dt_util.utcnow() + timedelta(minutes=6)
+            current_project = data.schedule.project
+            with patch(
+                "custom_components.open_energy_planner.thermal.dt_util.utcnow", return_value=later
+            ):
+                assert target.native_value == 20.6
+                data.schedule.project = lambda _now: SimpleNamespace(command=None)
+                assert target.native_value is None
+            data.schedule.project = current_project
+            power.power_w = 0
+            assert target.native_value is None
+            assert enabled.available and enabled.is_on is False
+            power.power_w = 1000
+            data.thermal["shared_sources"] = [{"meter": meter}]
+            assert target.native_value is None
+            assert not enabled.available
+            data.thermal["shared_sources"] = []
+            hass.states.async_set(
+                "climate.hall", "heat", {"current_temperature": 20.1, "temperature": 21}
+            )
+            assert target.native_value is None
+            assert not enabled.available
         finally:
             await hass.async_stop()
 
@@ -380,6 +454,21 @@ def test_projection_rejects_invalid_physical_configuration(field, value):
     assert receive(document) == document
     document["devices"][0][field] = value
     with pytest.raises(ValueError):
+        receive(document)
+
+
+def test_room_projection_rejects_malformed_source():
+    """A malformed source cannot escape projection validation or publish a room command."""
+    document = coordinator(None, device(dt_util.utcnow())).thermal
+    document["applications"] = [
+        {
+            "id": "room",
+            "kind": "space_heating",
+            "climate_entity": "climate.hall",
+            "sources": [None],
+        }
+    ]
+    with pytest.raises(TypeError, match="Invalid room heat sources"):
         receive(document)
 
 

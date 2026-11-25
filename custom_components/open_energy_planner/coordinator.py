@@ -242,6 +242,7 @@ class PlanCoordinator:
                     for device in self.thermal.get("devices", [])
                     for field in ("temperature_entity", "power_entity")
                 }
+                | {row["climate_entity"] for row in self.thermal.get("climate_bindings", [])}
             )
         )
         if sources != self.thermal_watch:

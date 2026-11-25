@@ -342,6 +342,10 @@ class InstallationProblem:
             or any(not isinstance(work, ThermalWork) for work in self.thermal_work)
             or len({work.device_id for work in self.thermal_work}) != len(self.thermal_work)
             or any(len(work.demand_kwh) != len(self.intervals) for work in self.thermal_work)
+            or any(
+                work.ambient_profile_c and len(work.ambient_profile_c) != len(self.intervals)
+                for work in self.thermal_work
+            )
         ):
             raise ValueError("Invalid thermal storage work")
         if (

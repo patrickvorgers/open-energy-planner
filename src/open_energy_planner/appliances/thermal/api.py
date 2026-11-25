@@ -136,7 +136,10 @@ def register(app, service, catalogue, repository, live, lock):
                         ),
                     )
                 elif operation == "observations":
-                    function, arguments = service.receive, (body, datetime.now(UTC))
+                    function, arguments = (
+                        service.receive,
+                        (body, datetime.now(UTC), repository.state["plan"]),
+                    )
                 elif operation == "mode" and set(body) == {"meter", "application_id"}:
                     cancellation = await complete_write(
                         service.report_mode,

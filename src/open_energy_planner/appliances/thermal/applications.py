@@ -15,6 +15,7 @@ from open_energy_planner.home_assistant.names import source_name
 
 MAXIMUM_PREHEATING_C = 3
 MAXIMUM_SPACE_TEMPERATURE_C = 50
+ROOM_HEATER_POWER_BOUNDS_W = (100, 12000)
 MAX_APPLICATION_NAME_LENGTH = 160
 UNKNOWN_MODE = "Select an application linked to this heat source"
 INVALID_APPLICATION = "Invalid thermal application"
@@ -71,12 +72,18 @@ def validate_shape(applications):
         for source in sources:
             if (
                 not isinstance(source, dict)
-                or set(source) != {"energy_entity", "allow_scheduling"}
+                or source.keys() - {"full_load_power_w"} != {"energy_entity", "allow_scheduling"}
                 or not valid_entity(source["energy_entity"], "sensor")
                 or type(source["allow_scheduling"]) is not bool
                 or source["energy_entity"] in meters
             ):
                 raise ValueError(INVALID_APPLICATION)
+            if "full_load_power_w" in source:
+                if application["kind"] != ApplicationKind.SPACE_HEATING:
+                    raise ValueError(INVALID_APPLICATION)
+                power = number(source["full_load_power_w"], *ROOM_HEATER_POWER_BOUNDS_W)
+                if not power.is_integer():
+                    raise ValueError("Heater power requires whole watts")
             meters.add(source["energy_entity"])
         area, climate, preheat = (
             application[field] for field in ("area_id", "climate_entity", "maximum_preheat_c")
