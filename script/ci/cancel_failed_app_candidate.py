@@ -18,20 +18,23 @@ ACTIVE = {"queued", "requested", "pending", "waiting", "in_progress"}
 
 def linked_revision(run, repository_id, path):
     """Bind a same-repository Actions run to exactly one main PR revision."""
+    if (run.get("event"), run.get("path")) != ("pull_request", path):
+        return None
+    if (run.get("repository") or {}).get("id") != repository_id or (
+        run.get("head_repository") or {}
+    ).get("id") != repository_id:
+        return None
     links = run.get("pull_requests")
-    if (
-        run.get("event") != "pull_request"
-        or run.get("path") != path
-        or (run.get("repository") or {}).get("id") != repository_id
-        or (run.get("head_repository") or {}).get("id") != repository_id
-        or not isinstance(links, list)
-        or len(links) != 1
-    ):
+    if not isinstance(links, list) or len(links) != 1:
         return None
     link = links[0]
-    if link["base"]["ref"] != "main" or link["head"]["sha"] != run.get("head_sha"):
+    base = link["base"]
+    if base["ref"] != "main":
         return None
-    return positive_id(link["number"]), sha(link["base"]["sha"]), sha(link["head"]["sha"])
+    head_sha = link["head"]["sha"]
+    if head_sha != run.get("head_sha"):
+        return None
+    return positive_id(link["number"]), sha(base["sha"]), sha(head_sha)
 
 
 def is_current(client, revision, repository_id):
@@ -77,34 +80,37 @@ def eligible_candidate(run, revision, repository_id, failure_at):
     return started <= failure_at
 
 
-def cancel_failed_app_candidates(event, client):
-    """Cancel matching Checks candidates using GitHub metadata from trusted main."""
-    repository = event["repository"]
-    if event.get("action") != "completed" or repository.get("full_name") != REPOSITORY:
-        return ()
-    repository_id = positive_id(repository["id"])
-    observed = event["workflow_run"]
+def _verified_failure(client, observed, repository_id):
+    """Match the event to a completed run attempt and its actual failing app test."""
     revision = linked_revision(observed, repository_id, MEASUREMENT_PATH)
     if revision is None or observed.get("conclusion") != "failure":
-        return ()
+        return None
     run_id, attempt = positive_id(observed["id"]), positive_id(observed["run_attempt"])
-    path = f"{ROOT}/actions/runs/{run_id}"
-    run = client.get(path)
-    if (
-        run.get("id") != run_id
-        or linked_revision(run, repository_id, MEASUREMENT_PATH) != revision
-        or run.get("run_attempt") != attempt
-        or run.get("status") != "completed"
-        or run.get("conclusion") != "failure"
-    ):
-        return ()
+    run = client.get(f"{ROOT}/actions/runs/{run_id}")
+    if (run.get("id"), run.get("run_attempt")) != (run_id, attempt):
+        return None
+    if (run.get("status"), run.get("conclusion")) != ("completed", "failure"):
+        return None
+    if linked_revision(run, repository_id, MEASUREMENT_PATH) != revision:
+        return None
     failure_at = test_failure_at(client, run_id, attempt)
-    if failure_at is None or not is_current(client, revision, repository_id):
-        return ()
-    _, base, head = revision
-    comparison = client.get(f"{ROOT}/compare/{base}...{head}")
-    if comparison.get("behind_by") != 0 or comparison["merge_base_commit"]["sha"] != base:
-        return ()
+    return (revision, failure_at) if failure_at is not None else None
+
+
+def _cancel_candidate(client, candidate_id, candidate_path):
+    """Request cancellation once, tolerating a run that just finished."""
+    try:
+        client.cancel_workflow_run(REPOSITORY, candidate_id)
+    except VerificationError:
+        if client.get(candidate_path).get("status") != "completed":
+            raise
+        return False
+    return True
+
+
+def _cancel_matching_candidates(client, revision, repository_id, failure_at):
+    """List candidates and verify their live identities and PR state before each write."""
+    _, _, head = revision
     payload = client.get(
         f"{ROOT}/actions/workflows/checks.yaml/runs?event=pull_request&head_sha={head}&per_page=100"
     )
@@ -117,22 +123,37 @@ def cancel_failed_app_candidates(event, client):
         candidate_id = positive_id(candidate["id"])
         candidate_path = f"{ROOT}/actions/runs/{candidate_id}"
         current = client.get(candidate_path)
-        if (
-            current.get("id") != candidate_id
-            or current.get("run_attempt") != candidate["run_attempt"]
-            or not eligible_candidate(current, revision, repository_id, failure_at)
+        if (current.get("id"), current.get("run_attempt")) != (
+            candidate_id,
+            candidate["run_attempt"],
         ):
+            continue
+        if not eligible_candidate(current, revision, repository_id, failure_at):
             continue
         if not is_current(client, revision, repository_id):
             break
-        try:
-            client.cancel_workflow_run(REPOSITORY, candidate_id)
-        except VerificationError:
-            if client.get(candidate_path).get("status") != "completed":
-                raise
-        else:
+        if _cancel_candidate(client, candidate_id, candidate_path):
             cancelled.append(candidate_id)
     return tuple(cancelled)
+
+
+def cancel_failed_app_candidates(event, client):
+    """Cancel matching Checks candidates using GitHub metadata from trusted main."""
+    repository = event["repository"]
+    if event.get("action") != "completed" or repository.get("full_name") != REPOSITORY:
+        return ()
+    repository_id = positive_id(repository["id"])
+    failure = _verified_failure(client, event["workflow_run"], repository_id)
+    if failure is None:
+        return ()
+    revision, failure_at = failure
+    if not is_current(client, revision, repository_id):
+        return ()
+    _, base, head = revision
+    comparison = client.get(f"{ROOT}/compare/{base}...{head}")
+    if comparison.get("behind_by") != 0 or comparison["merge_base_commit"]["sha"] != base:
+        return ()
+    return _cancel_matching_candidates(client, revision, repository_id, failure_at)
 
 
 def main():

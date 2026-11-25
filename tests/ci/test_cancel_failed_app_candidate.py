@@ -108,14 +108,20 @@ def test_failed_app_suite_stops_only_the_overlapping_checks_candidate():
         ("test_step", "conclusion", "skipped"),
         ("measured_job", "conclusion", "success"),
         ("measure", "run_attempt", 2),
+        ("measure", "id", 72),
+        ("measure", "status", "in_progress"),
+        ("measure", "conclusion", "success"),
+        ("measure", "head_sha", OTHER),
         ("pull", "draft", True),
         ("pull", "state", "closed"),
         ("candidate", "status", "completed"),
         ("candidate", "run_attempt", 2),
+        ("candidate", "id", 72),
         ("candidate", "head_sha", OTHER),
         ("candidate", "created_at", "2026-11-25T19:54:00Z"),
         ("candidate", "path", ".github/workflows/quick-checks.yaml"),
         ("comparison", "behind_by", 1),
+        ("comparison", "merge_base_commit", {"sha": OTHER}),
     ],
 )
 def test_missing_or_stale_shared_test_failure_leaves_candidates_running(target, field, value):
@@ -133,6 +139,36 @@ def test_a_main_or_fork_measurement_event_never_lists_candidates():
     assert cancel_failed_app_candidates(actions.event, None) == ()
     actions.event["workflow_run"]["event"] = "pull_request"
     actions.event["workflow_run"]["head_repository"]["id"] = 17
+    assert cancel_failed_app_candidates(actions.event, None) == ()
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("path", ".github/workflows/checks.yaml"),
+        ("repository", {"id": 17}),
+        ("head_repository", None),
+        ("pull_requests", None),
+        ("pull_requests", {}),
+        ("pull_requests", []),
+        (
+            "pull_requests",
+            [
+                {"number": 220, "head": {"sha": HEAD}, "base": {"sha": BASE, "ref": "main"}},
+                {"number": 221, "head": {"sha": HEAD}, "base": {"sha": BASE, "ref": "main"}},
+            ],
+        ),
+        (
+            "pull_requests",
+            [{"number": 220, "head": {"sha": HEAD}, "base": {"sha": BASE, "ref": "release"}}],
+        ),
+        ("head_sha", OTHER),
+    ],
+)
+def test_unbound_measurement_event_never_reads_or_cancels_runs(field, value):
+    """Require one unambiguous PR link to the intended workflow, repositories and head."""
+    actions = Actions()
+    actions.event["workflow_run"][field] = value
     assert cancel_failed_app_candidates(actions.event, None) == ()
 
 
@@ -163,6 +199,36 @@ def test_a_candidate_completed_during_the_cancellation_request():
 
     actions.cancel_workflow_run = complete_before_cancellation
     assert cancel_failed_app_candidates(actions.event, actions) == ()
+
+
+def test_pull_request_changed_after_the_candidate_was_listed():
+    """Recheck live PR state before cancelling even when the candidate still matches."""
+    actions = Actions()
+    read = actions.get
+
+    def move_pr_on_candidate_read(path):
+        """Simulate a new PR head after the initial PR read and candidate listing."""
+        if path == f"{ROOT}/actions/runs/70":
+            actions.pull["head"]["sha"] = OTHER
+        return read(path)
+
+    actions.get = move_pr_on_candidate_read
+    assert cancel_failed_app_candidates(actions.event, actions) == ()
+    assert actions.cancelled == []
+
+
+def test_cancellation_failure_while_candidate_is_active_propagates():
+    """Keep a real cancellation failure visible instead of treating it as a completion race."""
+    actions = Actions()
+
+    def reject_cancellation(repository, run_id):
+        """Fail the POST while the candidate remains active."""
+        assert (repository, run_id) == (REPO, 70)
+        raise VerificationError("Synthetic active cancellation failure")
+
+    actions.cancel_workflow_run = reject_cancellation
+    with pytest.raises(VerificationError, match="Synthetic active cancellation failure"):
+        cancel_failed_app_candidates(actions.event, actions)
 
 
 def test_github_accepts_the_empty_202_response_to_the_cancel_post():
