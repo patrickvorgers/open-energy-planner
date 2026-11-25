@@ -132,6 +132,14 @@ automatically become notification-center problems.
 
 ## Behavior
 
+### Planning calculation timeouts
+
+A worker that returns no result within its time budget and a solver timeout while
+checking battery reserve recovery have separate explanations. Both link to Planning
+performance, where completed attempts are listed. The notice remains visible while OEP
+retries automatically and clears after the next usable plan is published.
+A worker watchdog timeout alone provides no evidence about the calculation phase.
+
 ### Household history in Home Assistant
 
 The HA coordinator distinguishes negative reconstructed energy balances from

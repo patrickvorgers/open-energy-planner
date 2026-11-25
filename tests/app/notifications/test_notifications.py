@@ -290,6 +290,39 @@ def test_bonus_rejection_is_actionable_deduplicated_and_clears_after_recovery(tm
         asyncio.run(scenario())
 
 
+@pytest.mark.parametrize(
+    ("reason", "title", "explanation"),
+    [
+        ("worker_timeout", "Planning calculation timed out", "did not return a result"),
+        (
+            "reserve_recovery_time_limit",
+            "Battery reserve calculation timed out",
+            "checking how to restore the battery reserve",
+        ),
+    ],
+)
+def test_timeout_notice_explains_failure_and_retries_until_publication(reason, title, explanation):
+    """Report the observed worker deadline and keep it visible across a recovery attempt."""
+    since = datetime(2026, 10, 30, 12, 45, tzinfo=UTC)
+    failed = notification_document("failed", reason, since)["notifications"][0]
+    assert failed["key"] == f"planning:{reason}"
+    assert failed["title"] == title
+    assert explanation in failed["message"]
+    assert "time budget" in failed["message"]
+    assert "retries automatically" in failed["message"]
+    assert failed["action_path"] == "/planning-performance"
+    assert failed["state"] == "active"
+
+    recovering = notification_document("calculating", None, since, block_reason=reason)[
+        "notifications"
+    ][0]
+    assert recovering["key"] == failed["key"]
+    assert recovering["state"] == "recovering"
+    assert recovering["action_path"] == failed["action_path"]
+    assert "A new energy plan is being calculated and checked" in recovering["message"]
+    assert notification_document("ready", "validated", None)["notifications"] == []
+
+
 def test_current_failure_and_recovery_projection_keep_unknowns_explicit():
     """Version mismatch and calculation failures remain visible until actual ready state."""
     since = datetime(2026, 10, 30, 12, 45, tzinfo=UTC)
