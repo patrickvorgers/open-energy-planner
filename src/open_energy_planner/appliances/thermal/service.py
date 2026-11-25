@@ -417,9 +417,7 @@ class ThermalService:
             if reading and allows
             else None,
             "planning_status": (
-                "Forecast only"
-                if not allows
-                else "Space heating scheduling is not available yet"
+                "Forecast only" if not allows else "Space heating scheduling is not available yet"
             ),
         }
 
