@@ -23,13 +23,15 @@ async def watch_plan_status(
     wait_for_change: Callable[[str | None], Awaitable[str]],
     reconcile: Callable[[], Awaitable[bool]],
     *,
+    has_pending_intent: Callable[[], bool],
     retry_seconds: float,
 ):
     """Reconcile on connection or change, polling only while recovery is needed.
 
     Sample the cursor before reconciling, so a publication during the read
-    wakes the next wait. A failed reconciliation discards the cursor so a
-    retry can recover even when the app does not publish again.
+    wakes the next wait. A pending local intent also retries after an
+    unchanged wake. A failed reconciliation discards the cursor so recovery
+    can continue even when the app does not publish again.
     """
     cursor = None
     while True:
@@ -37,7 +39,7 @@ async def watch_plan_status(
             observed = await wait_for_change(cursor)
         except (ClientError, TimeoutError, ValueError, TypeError, KeyError):
             observed = None
-        if observed is not None and observed == cursor:
+        if observed is not None and observed == cursor and not has_pending_intent():
             continue
         if await reconcile() and observed is not None:
             cursor = observed

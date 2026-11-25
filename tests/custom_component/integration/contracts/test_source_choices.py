@@ -77,7 +77,7 @@ def test_source_choices_survive_an_observation_upload_timeout(monkeypatch, scope
                     assert response.status == 200
                     assert (await response.json())["pending"]
                 await coordinator.sync()
-                assert upload_failed.is_set()
+                await asyncio.wait_for(upload_failed.wait(), timeout=3)
                 assert coordinator.issue is None
                 async with session.get(url + "/v1/ha/source-choices/" + scope) as response:
                     result = await response.json()
@@ -100,7 +100,11 @@ def test_source_transfer_cannot_delay_known_command_invalidation(monkeypatch, ch
         """Observe real command state at the first authenticated source page upload."""
         async with running_chain(peer_gateway=True) as (hass, entry, url, *_):
             coordinator = entry.runtime_data
+            async with asyncio.timeout(3):
+                while coordinator.schedule.plan is None:
+                    await asyncio.sleep(0.01)
             coordinator.plan_watch_task.cancel()
+            await asyncio.gather(coordinator.plan_watch_task, return_exceptions=True)
             assert coordinator.schedule.plan is not None
             hass.states.async_set("sensor.car_soc", "60", {"unit_of_measurement": "%"})
             original = coordinator.client.request

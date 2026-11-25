@@ -41,7 +41,11 @@ def test_watch_reconciles_publication_during_initial_read_but_ignores_idle():
                 await release_read.wait()
             return True
 
-        task = asyncio.create_task(watch_plan_status(wait_for_change, reconcile, retry_seconds=0))
+        task = asyncio.create_task(
+            watch_plan_status(
+                wait_for_change, reconcile, has_pending_intent=lambda: False, retry_seconds=0
+            )
+        )
         try:
             await asyncio.sleep(0)
             assert requests == [None]
@@ -85,11 +89,73 @@ def test_watch_reconciles_revocation_after_disconnect_and_unsuccessful_status_re
             installs.append({1: "plan-a", 2: "unreachable", 3: None}[len(requests)])
             return len(requests) != 2
 
-        task = asyncio.create_task(watch_plan_status(wait_for_change, reconcile, retry_seconds=0))
+        task = asyncio.create_task(
+            watch_plan_status(
+                wait_for_change, reconcile, has_pending_intent=lambda: False, retry_seconds=0
+            )
+        )
         try:
             await asyncio.wait_for(caught_up.wait(), timeout=1)
             assert requests == [None, first, None, revoked]
             assert installs == ["plan-a", "unreachable", None]
+        finally:
+            task.cancel()
+            with suppress(asyncio.CancelledError):
+                await task
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("intent", [False, True])
+def test_unchanged_watch_retries_pending_intent_until_confirmed(intent):
+    """Retry either local switch value and skip further reads once the receipt arrives."""
+
+    async def scenario():
+        """Hold an unchanged watch across a failed local write and one failed retry."""
+        position = "a" * 32
+        waiting = asyncio.Event()
+        idle_reply = asyncio.Event()
+        idle_after_confirmation = asyncio.Event()
+        requests = []
+        reconciliations = []
+        pending = None
+
+        async def wait_for_change(cursor):
+            """Leave app authority unchanged throughout the simulated transport failure."""
+            requests.append(cursor)
+            if len(requests) == 2:
+                waiting.set()
+                await idle_reply.wait()
+            if len(requests) == 5:
+                idle_after_confirmation.set()
+                await asyncio.Event().wait()
+            return position
+
+        async def reconcile():
+            """Leave the first retry pending and confirm the original intent on the next."""
+            nonlocal pending
+            reconciliations.append(pending)
+            if len(reconciliations) == 2:
+                return False
+            pending = None
+            return True
+
+        task = asyncio.create_task(
+            watch_plan_status(
+                wait_for_change,
+                reconcile,
+                has_pending_intent=lambda: pending is not None,
+                retry_seconds=0,
+            )
+        )
+        try:
+            await asyncio.wait_for(waiting.wait(), timeout=1)
+            pending = intent
+            idle_reply.set()
+            await asyncio.wait_for(idle_after_confirmation.wait(), timeout=1)
+            assert reconciliations == [None, intent, intent]
+            assert requests == [None, position, None, position, position]
+            assert pending is None
         finally:
             task.cancel()
             with suppress(asyncio.CancelledError):

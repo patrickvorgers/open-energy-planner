@@ -40,8 +40,10 @@ Changes during that read still reach the next watch. A publication or
 revocation wakes the integration, which reads current status and fetches
 and acknowledges only the plan it needs. When no plan is valid, changes to
 the readiness explanation can also signal that status should be refreshed.
-An unchanged cursor does not trigger a status read. Watch failure falls back
-to lightweight status checks while the integration tries to reconnect. An
+An unchanged cursor skips status reconciliation when no local control intent
+is pending. An unconfirmed local enable or pause retries when the wait returns.
+Watch failure falls back to lightweight status checks while the integration
+tries to reconnect. An
 app restart releases pending waits so the integration can reconnect promptly.
 
 A watch signals revocation while an archive write is pending. Home Assistant

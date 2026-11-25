@@ -1145,7 +1145,10 @@ class PlanCoordinator:
         self.hass.async_create_background_task(synchronize(self), "OEP appliance history startup")
         self.plan_watch_task = self.hass.async_create_background_task(
             watch_plan_status(
-                self._wait_for_plan_status, self.sync_plan, retry_seconds=PLAN_WATCH_RETRY_SECONDS
+                self._wait_for_plan_status,
+                self.sync_plan,
+                has_pending_intent=lambda: self.pending_enabled is not None,
+                retry_seconds=PLAN_WATCH_RETRY_SECONDS,
             ),
             "OEP plan status watch",
         )
