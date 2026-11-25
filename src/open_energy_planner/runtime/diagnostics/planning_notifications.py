@@ -43,7 +43,12 @@ def planning_notice(state: PlanningStatus, text: NoticeText) -> Notification:
     content = (
         NoticeText(
             "Calculating a new energy plan",
-            "The inputs are usable again. A new energy plan is being calculated and checked. "
+            (
+                ""
+                if state.cause in {"worker_timeout", "reserve_recovery_time_limit"}
+                else "The inputs are usable again. "
+            )
+            + "A new energy plan is being calculated and checked. "
             "This can take a few minutes. Planning has not yet completed successfully.",
             "View planning status" if text.action_path else None,
             text.action_path,
@@ -288,6 +293,24 @@ def explain_planning_problem(reason: str, _detail: str | None = None) -> NoticeT
             "Check forecast quality and source availability. Planning retries automatically.",
             "Review forecasts",
             "/quality",
+        )
+    if reason == "worker_timeout":
+        return NoticeText(
+            "Planning calculation timed out",
+            "The calculation did not return a result within its time budget. "
+            "Planning retries automatically. If this keeps happening, review the failed rounds "
+            "in Planning performance.",
+            "View calculation history",
+            "/planning-performance",
+        )
+    if reason == "reserve_recovery_time_limit":
+        return NoticeText(
+            "Battery reserve calculation timed out",
+            "The calculation reached its time budget while checking how to restore the battery reserve. "
+            "Planning retries automatically. If this keeps happening, review the failed rounds "
+            "in Planning performance.",
+            "View calculation history",
+            "/planning-performance",
         )
     if reason in {"planning_error", "infeasible", "no_usable_plan"}:
         return NoticeText(

@@ -41,6 +41,16 @@ from tests.frontend.browser.helpers import TOKEN, discover, open_primary_navigat
             "scheduled heating start passed",
         ),
         (
+            "worker_timeout",
+            "Planning calculation timed out",
+            "did not return a result within its time budget",
+        ),
+        (
+            "reserve_recovery_time_limit",
+            "Battery reserve calculation timed out",
+            "checking how to restore the battery reserve",
+        ),
+        (
             "future_unknown_condition",
             "Planning is blocked",
             "no specific explanation yet",
@@ -72,6 +82,14 @@ def test_publication_notice_explains_retry_and_only_clears_after_publication(
         expect(popup).to_contain_text("automatically")
         if reason in ("battery_dispatch_unavailable", "thermal_dispatch_window_elapsed"):
             expect(popup).to_contain_text("usually temporary")
+    if reason in ("worker_timeout", "reserve_recovery_time_limit"):
+        expect(popup).to_contain_text("Planning retries automatically.")
+        expect(popup.get_by_role("link", name=title, exact=True)).to_have_attribute(
+            "href",
+            re.compile(
+                re.escape(url) + r"/planning-performance(?:\?embedded=1)?#planning-notifications$"
+            ),
+        )
     assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
     popup.screenshot(path=f"results/ci/planning-notice-{reason}-{page.viewport_size['width']}.png")
     result.update(notification_document("calculating", None, since, block_reason=reason))
