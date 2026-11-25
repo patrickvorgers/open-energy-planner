@@ -111,8 +111,7 @@ def test_generation_change_during_capture_requires_repair_and_close_detaches(mon
     async def scenario():
         """Change a selected source at an awaited capture boundary and exercise the real event listener."""
         async with running_chain(live=True) as (hass, entry, *_):
-            entry.runtime_data.poll_cancel()
-            entry.runtime_data.poll_cancel = None
+            entry.runtime_data.plan_watch_task.cancel()
             hass.states.async_set("sensor.active", "1", {"unit_of_measurement": "W"})
             discovery = CatalogueDiscovery(hass)
             discovery.configure(["sensor.active"])
@@ -197,8 +196,7 @@ def test_device_core_and_recorder_events_update_only_their_projection(monkeypatc
     async def scenario():
         """Deliver real device-registry and bus events against a one-source active watch."""
         async with running_chain(live=True) as (hass, entry, *_):
-            entry.runtime_data.poll_cancel()
-            entry.runtime_data.poll_cancel = None
+            entry.runtime_data.plan_watch_task.cancel()
             device = dr.async_get(hass).async_get_or_create(
                 config_entry_id=entry.entry_id,
                 identifiers={("fixture", "active-meter")},
@@ -269,8 +267,7 @@ def test_close_during_capture_cannot_reopen_state_watch(monkeypatch):
     async def scenario():
         """Pause the real capture boundary, close the owner and then release its pending read."""
         async with running_chain(live=True) as (hass, entry, *_):
-            entry.runtime_data.poll_cancel()
-            entry.runtime_data.poll_cancel = None
+            entry.runtime_data.plan_watch_task.cancel()
             hass.states.async_set("sensor.active", "1", {"unit_of_measurement": "W"})
             discovery = CatalogueDiscovery(hass)
             discovery.configure(["sensor.active"])
@@ -346,8 +343,7 @@ def test_energy_selected_forecast_entry_and_planes_refresh_without_full_capture(
     async def scenario():
         """Use actual Energy preferences, config-entry events and subentry updates without provider calls."""
         async with running_chain(live=True, recorder=True) as (hass, oep_entry, *_):
-            oep_entry.runtime_data.poll_cancel()
-            oep_entry.runtime_data.poll_cancel = None
+            oep_entry.runtime_data.plan_watch_task.cancel()
             entries = []
             for identity in ("selected-roof", "unrelated-roof"):
                 configured = ConfigEntry(

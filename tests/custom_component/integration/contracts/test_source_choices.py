@@ -20,8 +20,7 @@ def test_source_choices_survive_an_observation_upload_timeout(monkeypatch, scope
         """Use real HA discovery and app admission before a failing observation transport."""
         async with running_chain(live=True, peer_gateway=True) as (hass, entry, url, *_):
             coordinator = entry.runtime_data
-            coordinator.poll_cancel()
-            coordinator.poll_cancel = None
+            coordinator.plan_watch_task.cancel()
             hass.states.async_set("sensor.car_soc", "60", {"unit_of_measurement": "%"})
             hass.states.async_set("binary_sensor.car_plug", "on")
             hass.states.async_set("sensor.grid", "0", {"unit_of_measurement": "W"})
@@ -78,7 +77,7 @@ def test_source_choices_survive_an_observation_upload_timeout(monkeypatch, scope
                     assert response.status == 200
                     assert (await response.json())["pending"]
                 await coordinator.sync()
-                assert upload_failed.is_set()
+                await asyncio.wait_for(upload_failed.wait(), timeout=3)
                 assert coordinator.issue is None
                 async with session.get(url + "/v1/ha/source-choices/" + scope) as response:
                     result = await response.json()
@@ -101,8 +100,11 @@ def test_source_transfer_cannot_delay_known_command_invalidation(monkeypatch, ch
         """Observe real command state at the first authenticated source page upload."""
         async with running_chain(peer_gateway=True) as (hass, entry, url, *_):
             coordinator = entry.runtime_data
-            coordinator.poll_cancel()
-            coordinator.poll_cancel = None
+            async with asyncio.timeout(3):
+                while coordinator.schedule.plan is None:
+                    await asyncio.sleep(0.01)
+            coordinator.plan_watch_task.cancel()
+            await asyncio.gather(coordinator.plan_watch_task, return_exceptions=True)
             assert coordinator.schedule.plan is not None
             hass.states.async_set("sensor.car_soc", "60", {"unit_of_measurement": "%"})
             original = coordinator.client.request
@@ -153,8 +155,7 @@ def test_large_scoped_queries_do_not_replace_energy_and_saved_car_becomes_active
             *_,
         ):
             coordinator = entry.runtime_data
-            coordinator.poll_cancel()
-            coordinator.poll_cancel = None
+            coordinator.plan_watch_task.cancel()
             hass.states.async_set(
                 "sensor.grid", "100", {"device_class": "power", "unit_of_measurement": "W"}
             )
@@ -311,8 +312,7 @@ def test_obsolete_installation_connection_cannot_consume_a_current_source_reques
             *_,
         ):
             current = entry.runtime_data
-            current.poll_cancel()
-            current.poll_cancel = None
+            current.plan_watch_task.cancel()
             hass.states.async_set(
                 "sensor.grid", "100", {"device_class": "power", "unit_of_measurement": "W"}
             )
@@ -371,8 +371,7 @@ def test_obsolete_installation_connection_cannot_consume_a_current_source_reques
                     assert (await response.json())["pending"]
                 assert await hass.config_entries.async_setup(obsolete.entry_id)
                 old = obsolete.runtime_data
-                old.poll_cancel()
-                old.poll_cancel = None
+                old.plan_watch_task.cancel()
                 assert old.issue == "installation_identity_changed"
                 assert old.schedule.plan is None
                 assert stale_writes == []
@@ -410,8 +409,7 @@ def test_failed_publication_retries_after_backoff_without_another_metadata_event
         """Drive real authenticated publication and confirmation at fixed backoff boundaries."""
         async with running_chain(live=True) as (_hass, entry, *_):
             coordinator = entry.runtime_data
-            coordinator.poll_cancel()
-            coordinator.poll_cancel = None
+            coordinator.plan_watch_task.cancel()
             await coordinator.sync()
             assert coordinator.catalogue_discovery.healthy
             clock = [dt_util.utcnow()]
@@ -472,8 +470,7 @@ def test_forecast_refresh_and_watch_confirmation_do_not_require_metadata_capture
         """Use real app requests while observing forecast capture and rejecting any new metadata projection."""
         async with running_chain(live=True) as (_hass, entry, *_):
             coordinator = entry.runtime_data
-            coordinator.poll_cancel()
-            coordinator.poll_cancel = None
+            coordinator.plan_watch_task.cancel()
             await coordinator.sync()
             assert coordinator.catalogue_discovery.healthy
             captures, confirmations = [], []
@@ -522,8 +519,7 @@ def test_source_identity_failure_immediately_withdraws_commands(monkeypatch, fai
         """Retain real snapshots and an active plan while one transfer stage reports the mismatch."""
         async with running_chain() as (_hass, entry, url, *_):
             coordinator = entry.runtime_data
-            coordinator.poll_cancel()
-            coordinator.poll_cancel = None
+            coordinator.plan_watch_task.cancel()
             assert coordinator.schedule.plan is not None
             original_snapshot = coordinator.client.service_requests
             original_request = coordinator.client.request

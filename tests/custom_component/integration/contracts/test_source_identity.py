@@ -24,8 +24,7 @@ def test_source_identity_uses_manifest_name_and_preserves_account_and_device(ser
     async def check():
         """Read genuine loaded manifest and registry metadata without loading a provider or controlling any device."""
         async with running_chain(live=True, fixture_devices=False) as (hass, oep_entry, *_):
-            oep_entry.runtime_data.poll_cancel()
-            oep_entry.runtime_data.poll_cancel = None
+            oep_entry.runtime_data.plan_watch_task.cancel()
             domain = "mqtt" if loaded else "synthetic_source"
             if loaded:
                 await async_get_integration(hass, "mqtt")

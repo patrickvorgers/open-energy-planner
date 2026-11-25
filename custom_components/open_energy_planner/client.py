@@ -9,6 +9,7 @@ from urllib.parse import urlencode
 from aiohttp import ClientError, ClientResponseError, ClientSession, ClientTimeout, Fingerprint
 
 from .const import BUILD_INFO
+from .plan_status_watch import WATCH_PATH, WATCH_TIMEOUT_SECONDS, plan_status_cursor
 from .wire_limits import (
     MAX_API_RESPONSE_BYTES,
     MAX_APPLIANCE_RESPONSE_BYTES,
@@ -70,8 +71,9 @@ class LocalClient:
     async def request(self, method, path, body=None):
         """Send authenticated HTTP without redirects and require a bounded object response.
 
-        Use a five-second deadline. Authentication rejection is distinguished from
-        other HTTP, transport and malformed-response failures for user-facing recovery.
+        Use a five-second deadline except for the bounded plan status watch.
+        Distinguish authentication rejection from other HTTP, transport and
+        malformed-response failures for user-facing recovery.
         Whole-plan, complete appliance and catalogue membership replies allow 4 MiB. Other endpoints
         allow 256 KiB.
 
@@ -150,6 +152,11 @@ class LocalClient:
 
     async def _exchange(self, method, path, body):
         """Perform one HTTP exchange and validate the bounded response and release."""
+        timeout = (
+            WATCH_TIMEOUT_SECONDS
+            if method == "GET" and path.startswith(WATCH_PATH + "?cursor=")
+            else HTTP_TIMEOUT_SECONDS
+        )
         async with self.session.request(
             method,
             self.url + path,
@@ -160,7 +167,7 @@ class LocalClient:
                 "X-OEP-Release": BUILD_INFO["version"],
                 "X-OEP-Build": BUILD_INFO["build"] or "",
             },
-            timeout=ClientTimeout(total=HTTP_TIMEOUT_SECONDS),
+            timeout=ClientTimeout(total=timeout),
             allow_redirects=False,
             ssl=self.fingerprint,
         ) as response:
@@ -206,6 +213,11 @@ class LocalClient:
             if not isinstance(result, dict):
                 raise ValueError("Invalid app response")  # noqa: TRY004 - Preserve the existing ValueError validation contract.
             return result
+
+    async def watch_plan_status(self, cursor):
+        """Wait for an advisory cursor on the existing paired HTTP connection."""
+        suffix = "?" + urlencode({"cursor": cursor}) if cursor is not None else ""
+        return plan_status_cursor(await self.request("GET", WATCH_PATH + suffix))
 
     async def plan_status(self):
         """Read the current app installation and authoritative command identity."""

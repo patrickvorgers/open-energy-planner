@@ -161,6 +161,25 @@ def create_app(
     savings_mutation_lock = asyncio.Lock()
     planner = None
     live = None
+    from .home_assistant.plan_api import command_mode
+    from .home_assistant.plan_status_watch import WATCH_PATH, PlanStatusWatch
+
+    plan_watch = PlanStatusWatch()
+
+    def publish_plan_status():
+        """Signal command authority changes or new diagnostics when commands are absent."""
+        state, revision, plan = command_mode(repository, live)
+        plan_watch.publish(
+            (
+                state["enabled"],
+                state["command_suspended"],
+                revision,
+                bool(live and live.configuration),
+                plan["plan_id"] if plan else None,
+                None if plan else (planner.status, planner.reason),
+            )
+        )
+
     from open_energy_planner.optimization.adapters.process.worker import ProcessSolver
 
     from .planning import PlanningCoordinator, PlanningService, PublicationSuperseded
@@ -288,6 +307,7 @@ def create_app(
         repository.state["plan"] = None
         repository.save()
         live = LiveInputs(planner, repository, basis_source, ev=ev)
+        live.command_authority_changed = publish_plan_status
         live.prepare_snapshot = lambda snapshot, now: thermal.prepare(
             snapshot,
             demand,
@@ -320,7 +340,10 @@ def create_app(
 
     async def save_state():
         """Finish state persistence under the caller-held lock before propagating cancellation."""
-        cancellation = await complete_write(repository.save)
+        try:
+            cancellation = await complete_write(repository.save)
+        finally:
+            publish_plan_status()
         if cancellation is not None:
             raise cancellation
 
@@ -342,6 +365,7 @@ def create_app(
                 "/v1/readiness",
                 "/v1/ha/plan-status",
                 "/v1/ha/measurement-config",
+                WATCH_PATH,
             }
         ):
             return await handler(request)
@@ -789,6 +813,7 @@ def create_app(
                     planner.submit(capture())
             repository.state["enabled"] = body["enabled"]
             repository.state["last_control_id"] = request_id
+            publish_plan_status()
             await save_state()
             return web.json_response(
                 {
@@ -803,8 +828,6 @@ def create_app(
         body = await request.json()
         if not isinstance(body, dict):
             raise web.HTTPBadRequest(text="Invalid acknowledgement")
-        from .home_assistant.plan_api import command_mode
-
         async with lock:
             state, _revision, current = command_mode(repository, live)
             if current is None or body.get("plan_id") != current["plan_id"]:
@@ -1015,6 +1038,14 @@ def create_app(
         }
 
     register_ha_plan_api(app, repository, planner, live, lock, command_context)
+
+    async def watch_plan_status(request):
+        """Refresh expiry and then await only an advisory change in command authority."""
+        publish_plan_status()
+        return await plan_watch.response(request)
+
+    app.router.add_get(WATCH_PATH, watch_plan_status)
+    app.on_shutdown.append(plan_watch.shutdown)
     setup_catalogue = register_setup(
         app,
         installation,

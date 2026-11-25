@@ -31,6 +31,15 @@ class ObservationBridge:
             raise ValueError("Invalid source count")
         self.source = HomeAssistantMeasurementSource(states)
 
+    def required_entity_ready(self, entity_id, now):
+        """Check only the changed entity against its current required bindings."""
+        required = tuple(
+            binding
+            for binding in self.bindings
+            if binding.required and binding.entity_id == entity_id
+        )
+        return not required or self.source.read(required, now).ready
+
     def capture(self, now, *, location=None):
         """Return required-input readiness and a report retaining timestamp provenance.
 

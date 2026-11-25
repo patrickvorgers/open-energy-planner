@@ -61,7 +61,7 @@ def test_dishwasher_history_learning_virtual_entities_and_blueprint_reject_stale
             await setup_dishwasher(hass, entry)
             entry.runtime_data.catalogue_sent = None
             await entry.runtime_data.sync()
-            await hass.async_block_till_done(wait_background_tasks=True)
+            await hass.async_block_till_done()
             entity = hass.data[DATA_KEY]["ids"]["energy"]
             async with ClientSession(headers={"Authorization": "Bearer " + TOKEN}) as session:
                 async with session.get(url + "/v1/consumers") as response:
@@ -527,13 +527,19 @@ def test_delayed_observations_or_appliance_history_sync_cannot_overwrite_newer_u
         ("kWh", 1, "empty"),
     ],
 )
-def test_recorder_history_automatically_establishes_app_bonus_counter(unit, factor, mode):
+def test_recorder_history_automatically_establishes_app_bonus_counter(
+    unit, factor, mode, monkeypatch
+):
     """Derive 2 kWh/hour per Recorder meter, or zero for a negative period difference. Missing evidence cannot be replaced with a physical manual seed."""
     from homeassistant.components.recorder import get_instance
     from homeassistant.components.recorder.models import StatisticMeanType
     from homeassistant.components.recorder.statistics import async_import_statistics
 
+    from custom_components.open_energy_planner import observation_push
     from open_energy_planner.storage.counters import CounterStore
+
+    monkeypatch.setattr(observation_push, "COALESCE_SECONDS", 0.01)
+    monkeypatch.setattr(observation_push, "MIN_PUSH_INTERVAL_SECONDS", 0.01)
 
     async def scenario():
         """Write fixtures only to isolated HA's temporary database, then exercise the real integration HTTP bridge."""
@@ -684,22 +690,47 @@ def test_recorder_history_automatically_establishes_app_bonus_counter(unit, fact
 
                     from homeassistant.components import persistent_notification
 
-                    for fault in ("missing", "unsupported_unit"):
-                        if fault == "missing":
-                            hass.states.async_remove("sensor.grid")
-                        else:
-                            hass.states.async_set("sensor.grid", "0", {"unit_of_measurement": "C"})
-                        with patch.object(
-                            persistent_notification,
-                            "async_create",
-                            wraps=persistent_notification.async_create,
-                        ) as notify:
-                            await coordinator.sync()
-                            assert coordinator.issue == "measurement_sources_unusable"
-                            assert "sensor.grid" in notify.call_args.args[1]
-                        hass.states.async_set("sensor.grid", "0", {"unit_of_measurement": "W"})
-                        await coordinator.sync()
-                        assert coordinator.issue == "bonus_history_unavailable"
+                    original_upload = coordinator.client.observations
+                    reports = asyncio.Queue()
+
+                    async def observe_upload(report):
+                        """Observe accepted current evidence independently of Recorder status."""
+                        receipt = await original_upload(report)
+                        reports.put_nowait(receipt["observations"])
+                        return receipt
+
+                    with patch.object(coordinator.client, "observations", observe_upload):
+                        for fault in ("missing_entity", "unsupported_unit"):
+                            with patch.object(
+                                persistent_notification,
+                                "async_create",
+                                wraps=persistent_notification.async_create,
+                            ) as notify:
+                                if fault == "missing_entity":
+                                    hass.states.async_remove("sensor.grid")
+                                else:
+                                    hass.states.async_set(
+                                        "sensor.grid", "0", {"unit_of_measurement": "C"}
+                                    )
+                                async with asyncio.timeout(5):
+                                    while True:
+                                        observations = await reports.get()
+                                        if any(
+                                            issue["reason"] == fault
+                                            and issue["entity_id"] == "sensor.grid"
+                                            for issue in observations["issues"]
+                                        ):
+                                            break
+                                assert coordinator.issue == "measurement_sources_unusable"
+                                assert "sensor.grid" in notify.call_args.args[1]
+                            hass.states.async_set("sensor.grid", "0", {"unit_of_measurement": "W"})
+                            async with asyncio.timeout(5):
+                                while any(
+                                    issue["entity_id"] == "sensor.grid"
+                                    for issue in (await reports.get())["issues"]
+                                ):
+                                    pass
+                            assert coordinator.issue == "bonus_history_unavailable"
                     async with session.get(url + "/v1/contracts/budgets") as response:
                         budget = (await response.json())["budgets"][0]
                         assert budget["used_kwh"] is None

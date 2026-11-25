@@ -16,8 +16,7 @@ def test_pause_confirmation_does_not_fetch_history_and_periodic_sync_still_does(
         """Gate the real archive owner rather than returning a fabricated status snapshot."""
         async with running_chain() as (hass, entry, _url, _root):
             coordinator = entry.runtime_data
-            coordinator.poll_cancel()
-            coordinator.poll_cancel = None
+            coordinator.plan_watch_task.cancel()
             entered, release = threading.Event(), threading.Event()
             readers, readers_lock = [], threading.Lock()
             original = SavingsRuntime.request
@@ -74,8 +73,7 @@ def test_local_pause_withdraws_commands_while_existing_sync_holds_its_lock(monke
         """Block a plan status read while observing the independent local pause before release."""
         async with running_chain() as (hass, entry, _url, _root):
             coordinator = entry.runtime_data
-            coordinator.poll_cancel()
-            coordinator.poll_cancel = None
+            coordinator.plan_watch_task.cancel()
             entered, release = asyncio.Event(), asyncio.Event()
             requests = []
             request = coordinator.client.request
@@ -129,11 +127,10 @@ def test_current_capture_does_not_hold_new_plan_reconciliation(monkeypatch):
     """Accept a new published plan while the independent observation upload is waiting."""
 
     async def scenario():
-        """Retain real status, command and ACK traffic while gating the observation transport."""
+        """Gate the event-driven capture while retaining real status, command and ACK traffic."""
         async with running_chain() as (hass, entry, _url, _root):
             coordinator = entry.runtime_data
-            coordinator.poll_cancel()
-            coordinator.poll_cancel = None
+            coordinator.plan_watch_task.cancel()
             hass.states.async_set("sensor.grid_fixture", "0", {"unit_of_measurement": "W"})
             original = coordinator.schedule.plan.plan_id
             revision = coordinator.schedule.config_revision
@@ -154,7 +151,7 @@ def test_current_capture_does_not_hold_new_plan_reconciliation(monkeypatch):
                 }
             )
             status = coordinator.client.plan_status
-            entered, release = asyncio.Event(), asyncio.Event()
+            entered, release, completed = asyncio.Event(), asyncio.Event(), asyncio.Event()
 
             async def measured_status():
                 """Require the installed live binding with the actual synthetic publication."""
@@ -165,11 +162,11 @@ def test_current_capture_does_not_hold_new_plan_reconciliation(monkeypatch):
                 assert report["config_revision"] == revision and report["readings"]
                 entered.set()
                 await release.wait()
+                completed.set()
                 return {"accepted": True, "config_revision": revision}
 
             monkeypatch.setattr(coordinator.client, "plan_status", measured_status)
             monkeypatch.setattr(coordinator.client, "observations", slow_upload)
-            capture = asyncio.create_task(coordinator.sync_observations())
             try:
                 await asyncio.wait_for(entered.wait(), 2)
                 await coordinator.client.enabled(True, "observation-overlap")
@@ -179,10 +176,10 @@ def test_current_capture_does_not_hold_new_plan_reconciliation(monkeypatch):
                     assert await coordinator.sync_plan()
                 assert coordinator.schedule.plan.plan_id != original
                 assert coordinator.projection.command is not None
-                assert not capture.done()
+                assert not completed.is_set()
             finally:
                 release.set()
-                assert await capture
+                await asyncio.wait_for(completed.wait(), timeout=2)
 
     asyncio.run(scenario())
 
@@ -199,8 +196,7 @@ def test_failed_app_pause_withdraws_then_restores_existing_commands(monkeypatch)
         """Hold a real archive transaction, force rollback and then commit an independent pause."""
         async with running_chain() as (hass, entry, _url, _root):
             coordinator = entry.runtime_data
-            coordinator.poll_cancel()
-            coordinator.poll_cancel = None
+            coordinator.plan_watch_task.cancel()
             old = coordinator.schedule.plan
             generation = coordinator.schedule.invalidated_generation
             save = AsyncMock(wraps=coordinator.save)
@@ -259,8 +255,7 @@ def test_candidate_requires_current_authority_after_acknowledgement(monkeypatch,
         """Use the real app publication, ACK and pause with a gate after the ACK commits."""
         async with running_chain() as (hass, entry, _url, _root):
             coordinator = entry.runtime_data
-            coordinator.poll_cancel()
-            coordinator.poll_cancel = None
+            coordinator.plan_watch_task.cancel()
             previous = coordinator.schedule.plan
             await coordinator.client.enabled(True, "replace-plan-for-receipt")
             async with asyncio.timeout(3):
@@ -323,8 +318,7 @@ def test_late_observation_result_respects_coordinator_and_identity_ownership(mon
         """Gate only the observation reply and inspect the real coordinator's command state."""
         async with running_chain() as (_hass, entry, _url, _root):
             coordinator = entry.runtime_data
-            coordinator.poll_cancel()
-            coordinator.poll_cancel = None
+            coordinator.plan_watch_task.cancel()
             original = coordinator.schedule.plan
             revision = coordinator.schedule.config_revision
             coordinator.observation_bridge = SimpleNamespace(

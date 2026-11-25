@@ -169,8 +169,7 @@ def test_module_failure_cannot_suppress_independent_market_price_work(monkeypatc
         """Run real HA synchronization and inject only the domain fault and price-start observer."""
         async with running_chain() as (_hass, entry, _url, _root):
             coordinator = entry.runtime_data
-            coordinator.poll_cancel()
-            coordinator.poll_cancel = None
+            coordinator.plan_watch_task.cancel()
             snapshot = coordinator.client.service_requests
             request = {"market_area": "NL", "currency": "EUR", "days": []}
 

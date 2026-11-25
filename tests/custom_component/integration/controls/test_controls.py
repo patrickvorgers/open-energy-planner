@@ -1014,8 +1014,7 @@ def test_pause_resume_goes_through_http_and_persists_intent():
     async def scenario():
         """Toggle the actual virtual switch and verify persisted app intent and a newly accepted plan."""
         async with running_chain() as (hass, entry, _url, _root):
-            entry.runtime_data.poll_cancel()
-            entry.runtime_data.poll_cancel = None
+            entry.runtime_data.plan_watch_task.cancel()
             old = entry.runtime_data.schedule.plan.plan_id
             await hass.services.async_call(
                 "switch",
@@ -1058,8 +1057,7 @@ def test_unchanged_plan_replacement_does_not_repeat_command_or_power_state_event
         """Replace an accepted plan with equal commands and count actual HA command and state events."""
         async with running_chain() as (hass, entry, url, _root):
             coordinator = entry.runtime_data
-            coordinator.poll_cancel()
-            coordinator.poll_cancel = None
+            coordinator.plan_watch_task.cancel()
             coordinator.service_cancel()
             coordinator.service_cancel = None
             async with coordinator.services_lock:
@@ -1233,8 +1231,7 @@ def test_user_automation_can_capture_commands_and_fallback_without_hardware():
     async def scenario():
         """Use a capture-only HA automation to observe pause and resume events without operating equipment."""
         async with running_chain() as (hass, entry, _url, _root):
-            entry.runtime_data.poll_cancel()
-            entry.runtime_data.poll_cancel = None
+            entry.runtime_data.plan_watch_task.cancel()
             old = entry.runtime_data.schedule.plan.plan_id
             captured = []
             hass.bus.async_listen(

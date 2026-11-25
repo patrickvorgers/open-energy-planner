@@ -482,7 +482,7 @@ The app supplies validity conditions. HA checks them locally during app loss. A 
 
 ## 4. Local communication: proposal
 
-Start with a small authenticated HTTP/JSON API, initiated by HA, without inbound app callbacks. One sequential delivery/receipt stream. Slow native work must not block HTTP or HA's event loop.
+The integration initiates authenticated HTTP/JSON requests without an inbound HA callback. Command delivery and receipts are independent of live measurement pushes and Recorder history transfers. Slow native work must not block HTTP or Home Assistant's event loop.
 
 | Operation | Purpose |
 |---|---|
@@ -495,7 +495,15 @@ Start with a small authenticated HTTP/JSON API, initiated by HA, without inbound
 | Activation acknowledgement | Plan/time receipt and activation, not physical execution |
 | Enable-intent synchronization | HA switch and UI share one intent |
 
-Exact routes are implementation details. Begin with periodic synchronization and relevant HA triggers, not another streaming protocol. Polling is not recalculation. HA schedules transitions itself.
+The integration follows selected measurement events and sends coherent current
+captures. Initial and quiet-period captures keep stable values current with
+their original measurement timestamps. Recorder reads run separately for
+bounded app requests. An authenticated, bounded watch wakes the integration
+when command authority changes. The integration reconciles on connection or
+reconnect, downloads only a needed plan and acknowledges it after validation.
+While the watch is unavailable, it reads status at the recovery cadence. Home
+Assistant schedules transitions and expiry locally. See the [measurement contracts](../docs/development/HA-MEASUREMENT-SOURCES.md)
+and [plan status subscription](../docs/development/LOCAL-API.md#plan-status-subscription).
 
 ### HA access without direct database access
 

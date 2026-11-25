@@ -13,8 +13,7 @@ def test_rejected_bindings_do_not_block_ack_or_confirm_old_metadata(monkeypatch,
         """Retain actual plan/ack traffic while supplying a rejected 128-character source identity."""
         async with running_chain() as (_hass, entry, *_):
             coordinator = entry.runtime_data
-            coordinator.poll_cancel()
-            coordinator.poll_cancel = None
+            coordinator.plan_watch_task.cancel()
             original = coordinator.client.request
             bindings, metadata, acknowledgements, forecasts = [], [], [], []
 

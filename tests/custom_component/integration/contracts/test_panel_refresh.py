@@ -30,8 +30,7 @@ async def _accepted_metadata(*, measurement=False, fixture_devices=True):
         _root,
     ):
         coordinator = entry.runtime_data
-        coordinator.poll_cancel()
-        coordinator.poll_cancel = None
+        coordinator.plan_watch_task.cancel()
         if measurement:
             hass.states.async_set("sensor.diagnostic_grid", "0", {"unit_of_measurement": "W"})
             await coordinator.client.request(
@@ -492,6 +491,7 @@ def test_http_validation_rejection_does_not_block_independent_metadata(monkeypat
         async with _accepted_metadata(measurement=True) as (_hass, coordinator, status):
             original = coordinator.client.request
             rejections, confirmations = [], []
+            rejected = asyncio.Event()
 
             async def request(method, path, body=None):
                 """Return a genuine app-side HTTP validation rejection with otherwise healthy transport."""
@@ -504,6 +504,7 @@ def test_http_validation_rejection_does_not_block_independent_metadata(monkeypat
                         )
                     except ClientResponseError as error:
                         rejections.append(error.status)
+                        rejected.set()
                         raise
                 if path == "/v1/ha/catalogue":
                     confirmations.append(body)
@@ -512,7 +513,12 @@ def test_http_validation_rejection_does_not_block_independent_metadata(monkeypat
             before = await status()
             coordinator.catalogue_confirmed_at = dt_util.utcnow() - timedelta(minutes=2)
             monkeypatch.setattr(coordinator.client, "request", request)
+            if failure_path == "/v1/observations":
+                coordinator.hass.states.async_set(
+                    "sensor.diagnostic_grid", "1", {"unit_of_measurement": "W"}
+                )
             await coordinator.sync()
+            await asyncio.wait_for(rejected.wait(), timeout=8)
             assert rejections == [400]
             assert coordinator.issue == (
                 "synchronization_failed" if failure_path == "/v1/ha/plan-status" else None

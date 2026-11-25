@@ -60,8 +60,7 @@ def test_large_discovery_transfers_tail_vehicle_in_bounded_complete_snapshot(mon
                 },
             )
             coordinator = entry.runtime_data
-            coordinator.poll_cancel()
-            coordinator.poll_cancel = None
+            coordinator.plan_watch_task.cancel()
             hass.auth = await auth_manager_from_config(hass, [], [])
             assert await setup_energy(hass)
             manager = await async_get_manager(hass)
@@ -180,8 +179,7 @@ def test_build_change_during_optional_catalogue_exchange_is_not_suppressed(monke
         async with running_chain(live=True) as (_hass, entry, _url, _root):
             coordinator = entry.runtime_data
             snapshot = coordinator.client.service_requests
-            coordinator.poll_cancel()
-            coordinator.poll_cancel = None
+            coordinator.plan_watch_task.cancel()
             coordinator.service_cancel()
             coordinator.service_cancel = None
             async with coordinator.services_lock:
@@ -494,6 +492,8 @@ def test_energy_two_power_sensors_require_both_and_recover(source_kind, missing_
 def test_app_source_selection_saves_only_in_app_and_forwards_real_reports():
     """Configure app-owned sources. Persist configuration only in the app and keep unavailable optional sensors nonblocking."""
 
+    from unittest.mock import patch
+
     async def scenario():
         """Configure sources through authenticated HTTP and read actual HA state without integration-owned persistence."""
         async with running_chain(live=True) as (hass, entry, url, root):
@@ -504,44 +504,58 @@ def test_app_source_selection_saves_only_in_app_and_forwards_real_reports():
                 ("sensor.input_export", "123.5", "kWh"),
             ):
                 hass.states.async_set(entity, value, {"unit_of_measurement": unit})
-            await app_write(
-                url,
-                "sources",
-                {
-                    "bindings": [
-                        {
-                            "key": "grid.power",
-                            "entity_id": "sensor.input_grid",
-                            "quantity": "power",
-                        },
-                        {
-                            "key": "grid.export_energy",
-                            "entity_id": "sensor.input_export",
-                            "quantity": "energy",
-                        },
-                        {"key": "battery.soc", "entity_id": "sensor.input_soc", "quantity": "soc"},
-                        {
-                            "key": "battery.power",
-                            "entity_id": "sensor.input_battery",
-                            "quantity": "power",
-                            "multiplier": -1,
-                        },
-                        {
-                            "key": "household.power",
-                            "entity_id": "sensor.unavailable_household",
-                            "quantity": "power",
-                            "required": False,
-                        },
-                        {
-                            "key": "pv.power",
-                            "entity_id": "sensor.unavailable_pv",
-                            "quantity": "power",
-                            "required": False,
-                        },
-                    ]
-                },
-            )
-            await entry.runtime_data.sync()
+            reports = asyncio.Queue()
+            original_upload = entry.runtime_data.client.observations
+
+            async def observe_upload(report):
+                """Retain the actual event-driven report after the app responds."""
+                receipt = await original_upload(report)
+                reports.put_nowait(report)
+                return receipt
+
+            with patch.object(entry.runtime_data.client, "observations", observe_upload):
+                await app_write(
+                    url,
+                    "sources",
+                    {
+                        "bindings": [
+                            {
+                                "key": "grid.power",
+                                "entity_id": "sensor.input_grid",
+                                "quantity": "power",
+                            },
+                            {
+                                "key": "grid.export_energy",
+                                "entity_id": "sensor.input_export",
+                                "quantity": "energy",
+                            },
+                            {
+                                "key": "battery.soc",
+                                "entity_id": "sensor.input_soc",
+                                "quantity": "soc",
+                            },
+                            {
+                                "key": "battery.power",
+                                "entity_id": "sensor.input_battery",
+                                "quantity": "power",
+                                "multiplier": -1,
+                            },
+                            {
+                                "key": "household.power",
+                                "entity_id": "sensor.unavailable_household",
+                                "quantity": "power",
+                                "required": False,
+                            },
+                            {
+                                "key": "pv.power",
+                                "entity_id": "sensor.unavailable_pv",
+                                "quantity": "power",
+                                "required": False,
+                            },
+                        ]
+                    },
+                )
+                forwarded = await asyncio.wait_for(reports.get(), timeout=5)
             assert not entry.options
             assert set(entry.data) == {"url", "token"}
             async with (
@@ -556,25 +570,13 @@ def test_app_source_selection_saves_only_in_app_and_forwards_real_reports():
             assert len(bindings) == 6
             assert bindings["grid.export_energy"]["required"] is True
             assert bindings["grid.export_energy"]["quantity"] == "energy"
-            forwarded = []
-            original_upload = entry.runtime_data.client.observations
-
-            async def observe_upload(report):
-                """Observe the actual coordinator's forwarded HA location without changing its report."""
-                forwarded.append(report)
-                return await original_upload(report)
-
-            from unittest.mock import patch
-
-            with patch.object(entry.runtime_data.client, "observations", observe_upload):
-                await entry.runtime_data.sync()
-            assert forwarded[-1]["location"] == {
+            assert forwarded["location"] == {
                 "latitude": hass.config.latitude,
                 "longitude": hass.config.longitude,
                 "timezone": hass.config.time_zone,
             }
             export = next(
-                item for item in forwarded[-1]["readings"] if item["key"] == "grid.export_energy"
+                item for item in forwarded["readings"] if item["key"] == "grid.export_energy"
             )
             assert export["value"] == 123.5
             assert export["unit"] == "kWh"
@@ -616,26 +618,41 @@ def test_missing_source_alert_depends_on_its_required_flag(required):
             ClientSession(headers={"Authorization": f"Bearer {TOKEN}"}) as session,
         ):
             hass.states.async_set("sensor.grid", "0", {"unit_of_measurement": "W"})
-            async with session.put(
-                url + "/v1/sources",
-                json={
-                    "expected_revision": None,
-                    "bindings": [
-                        {"key": "grid.power", "entity_id": "sensor.grid", "quantity": "power"},
-                        {
-                            "key": "pv.power",
-                            "entity_id": "sensor.absent_pv",
-                            "quantity": "power",
-                            "required": required,
-                        },
-                    ],
-                },
-            ) as response:
-                assert response.status == 200
-            with patch.object(
-                persistent_notification, "async_create", wraps=persistent_notification.async_create
-            ) as notify:
-                await entry.runtime_data.sync()
+            coordinator = entry.runtime_data
+            original_upload = coordinator.client.observations
+            accepted = asyncio.Event()
+
+            async def observe_upload(report):
+                """Signal completion after the app admits the source issue."""
+                receipt = await original_upload(report)
+                accepted.set()
+                return receipt
+
+            with (
+                patch.object(
+                    persistent_notification,
+                    "async_create",
+                    wraps=persistent_notification.async_create,
+                ) as notify,
+                patch.object(coordinator.client, "observations", observe_upload),
+            ):
+                async with session.put(
+                    url + "/v1/sources",
+                    json={
+                        "expected_revision": None,
+                        "bindings": [
+                            {"key": "grid.power", "entity_id": "sensor.grid", "quantity": "power"},
+                            {
+                                "key": "pv.power",
+                                "entity_id": "sensor.absent_pv",
+                                "quantity": "power",
+                                "required": required,
+                            },
+                        ],
+                    },
+                ) as response:
+                    assert response.status == 200
+                await asyncio.wait_for(accepted.wait(), timeout=5)
             assert notify.called is required
             assert entry.runtime_data.issue == (
                 "measurement_sources_unusable" if required else None

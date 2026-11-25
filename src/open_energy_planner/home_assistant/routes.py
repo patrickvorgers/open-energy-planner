@@ -1,6 +1,9 @@
 """Allow only the explicitly supported app/HA peer operations through the pinned TLS gateway."""
 
+from .plan_status_watch import WATCH_PATH
+
 PEER_ROUTES = {
+    ("GET", WATCH_PATH),
     ("GET", "/v1/version"),
     ("GET", "/v1/ha/plan-status"),
     ("GET", "/v1/ha/plan"),

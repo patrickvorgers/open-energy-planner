@@ -30,6 +30,8 @@ from .const import DOMAIN, RELEASE, projection_id
 from .history import HistoryBridge
 from .market_prices import MarketPriceBridge
 from .observation_bridge import ObservationBridge
+from .observation_push import ObservationPush
+from .plan_status_watch import watch_plan_status
 from .protocol import RevokedPlan, Schedule, identifier, timestamp, validate_device_configuration
 from .settlement import SettlementBridge
 from .snapshot_notifications import select_snapshot_notification
@@ -39,7 +41,7 @@ from .wire_limits import MAX_SNAPSHOT_RESPONSE_BYTES, validate_projection_size
 CATALOGUE_RETRY_MINUTES = 5
 CATALOGUE_CONFIRM_SECONDS = 60
 SOLAR_FORECAST_REFRESH_MINUTES = 5
-POLL_INTERVAL_SECONDS = 5
+PLAN_WATCH_RETRY_SECONDS = 5
 SERVICE_REQUEST_INTERVAL_SECONDS = 15
 PLAN_CONNECTION_ISSUES = {
     "installation_identity_changed",
@@ -65,13 +67,13 @@ class PlanCoordinator:
         self.listeners = []
         self.projection = self.schedule.project(dt_util.utcnow())
         self.boundary_cancel = None
-        self.poll_cancel = None
+        self.plan_watch_task = None
         self.startup_cancel = None
         self.lock = asyncio.Lock()
         self.services_lock = asyncio.Lock()
         self.observations_lock = asyncio.Lock()
         self.service_cancel = None
-        self.observation_cancel = None
+        self.observation_task = None
         self.pending_enabled = None
         self.issue = None
         self.notification_message = None
@@ -79,6 +81,9 @@ class PlanCoordinator:
         self.closed = False
         self.observation_bridge = None
         self.observation_generation = 0
+        self.observation_push = ObservationPush(
+            self._subscribe_observation_sources, self.sync_observations
+        )
         self.observations = None
         self.service_diagnostics = {}
         self.devices = None
@@ -380,7 +385,7 @@ class PlanCoordinator:
         async def sync_current():
             """Resolve source bindings before sending the first current capture."""
             reconciled = await self.sync_plan()
-            observed = await self.sync_observations()
+            observed = self.observation_task is None and await self.sync_observations()
             if reconciled and observed:
                 await self.sync_plan()
 
@@ -660,6 +665,23 @@ class PlanCoordinator:
         self.revoke_observation_authority()
         self.observation_bridge = bridge
         self.observations = None
+        self.observation_push.configure(bridge)
+
+    def _subscribe_observation_sources(self, entity_ids, notify):
+        """Watch only the selected HA state events and withdraw known unsafe commands immediately."""
+
+        @callback
+        def state_changed(event):
+            """Apply local source validity before queueing the independent network report."""
+            if self.closed or self.observation_bridge is None:
+                return
+            if not self.observation_bridge.required_entity_ready(
+                event.data["entity_id"], dt_util.utcnow()
+            ):
+                self.revoke_observation_authority()
+            notify()
+
+        return async_track_state_change_event(self.hass, entity_ids, state_changed)
 
     @callback
     def revoke_observation_authority(self):
@@ -1094,14 +1116,18 @@ class PlanCoordinator:
             self.notification_message = message
         self.issue = reason
 
+    async def _wait_for_plan_status(self, cursor):
+        """Follow the currently configured authenticated connection through reconnects."""
+        return await self.client.watch_plan_status(cursor)
+
     def start(self):
-        """Start polling and refresh startup metadata once entities are loaded. Boundaries keep their own timer."""
+        """Start the plan watch, source reports and independent service timers."""
 
         async def started(_event):
             """Replace early placeholder metadata without waiting for the normal catalogue refresh period."""
             self.startup_cancel = None
             self.catalogue_sent = None
-            await self.sync()
+            await self.sync_services()
 
         if not self.hass.is_running:
             self.startup_cancel = self.hass.bus.async_listen_once(
@@ -1117,19 +1143,32 @@ class PlanCoordinator:
             self.hass, refresh_history, timedelta(seconds=RETRY_SECONDS)
         )
         self.hass.async_create_background_task(synchronize(self), "OEP appliance history startup")
-        self.poll_cancel = async_track_time_interval(
-            self.hass, self.sync_plan, timedelta(seconds=POLL_INTERVAL_SECONDS)
+        self.plan_watch_task = self.hass.async_create_background_task(
+            watch_plan_status(
+                self._wait_for_plan_status,
+                self.sync_plan,
+                has_pending_intent=lambda: self.pending_enabled is not None,
+                retry_seconds=PLAN_WATCH_RETRY_SECONDS,
+            ),
+            "OEP plan status watch",
         )
         self.service_cancel = async_track_time_interval(
             self.hass, self.sync_services, timedelta(seconds=SERVICE_REQUEST_INTERVAL_SECONDS)
         )
-        self.observation_cancel = async_track_time_interval(
-            self.hass, self.sync_observations, timedelta(seconds=POLL_INTERVAL_SECONDS)
+        self.observation_task = self.hass.async_create_background_task(
+            self.observation_push.run(), "OEP current observation reports"
         )
 
     async def close(self):
         """Reject new exchanges, drain active synchronization and release listeners before HA unload."""
         self.closed = True
+        self.observation_push.close()
+        exchange_tasks = tuple(
+            task for task in (self.plan_watch_task, self.observation_task) if task is not None
+        )
+        for task in exchange_tasks:
+            task.cancel()
+        await asyncio.gather(*exchange_tasks, return_exceptions=True)
         self.catalogue_discovery.close()
         await self.market_prices.close()
         if self.solar_feedback_task:
@@ -1166,12 +1205,8 @@ class PlanCoordinator:
                 pass
         if self.boundary_cancel:
             self.boundary_cancel()
-        if self.poll_cancel:
-            self.poll_cancel()
         if self.service_cancel:
             self.service_cancel()
-        if self.observation_cancel:
-            self.observation_cancel()
         if self.startup_cancel:
             self.startup_cancel()
         if self.ev_cancel:

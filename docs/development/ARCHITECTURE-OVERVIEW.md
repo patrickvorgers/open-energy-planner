@@ -77,13 +77,13 @@ App paths are relative to `src/open_energy_planner/`.
 ```mermaid
 flowchart TD
     accTitle: Home Assistant source and measurement flow
-    accDescr: The HA integration sends source membership, live observations and bounded historical batches to separate app owners. Installation configuration binds sources and gives them a planning role.
-    ENERGY["HA Energy and entity registry<br/>Membership, meter identities and location"] --> HA["HA coordinator.py<br/>Synchronize the catalogue, observations and history"]
-    STATES["HA entity states<br/>Power, battery SoC and equipment state"] --> HA
+    accDescr: Home Assistant pushes coalesced, timestamped captures of selected sources and independently responds to app requests for bounded Recorder history. App services own admission and planning roles.
+    ENERGY["HA Energy and entity registry<br/>Membership, meter identities and location"] --> HA["HA coordinator.py<br/>Manage catalogue and requested history"]
+    STATES["Selected HA entity states<br/>Power and battery SoC"] --> PUSH["HA observation sender<br/>Initial capture, changes and freshness heartbeat"]
     RECORDER["HA Recorder<br/>Statistics and supported raw histories"] --> HA
     HA -->|Catalogue| CATALOGUE["home_assistant/setup_catalogue.py<br/>Admit and expose available sources"]
-    HA -->|Current timestamped observations| OBS["home_assistant/observations.py and live_inputs.py<br/>Validate observations against the configured sources"]
-    HA -->|History batches| HIST["Domain importers<br/>Normalize and store measured series by source"]
+    PUSH -->|Current timestamped observations| OBS["home_assistant/observations.py and live_inputs.py<br/>Validate observations against the configured sources"]
+    HA -->|Requested history batches| HIST["Domain importers<br/>Normalize and store measured series by source"]
     CATALOGUE --> CONFIG["installation/<br/>Bind meters and configure topology and limits"]
     CONFIG --> OBS
     OBS --> LIVE["Live planning inputs"]
@@ -211,15 +211,17 @@ publish never extends a previous command's validity. See
 ```mermaid
 flowchart TD
     accTitle: Plan synchronization and feedback in Home Assistant
-    accDescr: The HA integration checks received plans locally and exposes current virtual commands. User automations control equipment, and execution feedback returns over synchronization.
-    PLAN["Published plan<br/>App plan status and command API"] --> SYNC["HA command reconciliation<br/>Read status and fetch changed commands"]
-    SYNC -->|"Receipt of current plan ID"| PLAN
+    accDescr: An authenticated app wake signal prompts Home Assistant to reconcile authoritative plan status. The integration fetches and acknowledges a needed plan and checks local command validity.
+    PLAN["Authoritative app plan status"] -->|Publication or revocation| WATCH["Authenticated plan status watch<br/>Advisory wake cursor"]
+    WATCH --> SYNC["HA command reconciliation<br/>Read status and fetch changed commands"]
+    PLAN -->|Status and version-specific commands| SYNC
+    SYNC -->|Receipt for the accepted plan| PLAN
     SYNC --> SCHEDULE["HA local schedule and validity<br/>Select the applicable interval or withdraw commands"]
     SCHEDULE --> ENTITIES["Virtual devices and entities<br/>Expose current proposals and status"]
     ENTITIES --> AUTOMATION["User-owned HA automations<br/>Translate proposals into device actions"]
     AUTOMATION --> EQUIPMENT["Physical equipment<br/>Apply local control and safeguards"]
     EQUIPMENT --> EVIDENCE["HA states, Recorder and execution feedback"]
-    EVIDENCE --> SEPARATE["HA observations and Recorder transfers"]
+    EVIDENCE --> SEPARATE["HA integration data exchange<br/>Selected captures and requested Recorder evidence"]
     SEPARATE -->|Measurements and execution state| LIVE["App admission and live planning inputs"]
 ```
 
@@ -315,9 +317,11 @@ confirmed current intent, never an intent superseded during the exchange or
 after shutdown. Local pause withdraws commands before waiting for the HA
 synchronization lock. Its confirmation can wait for an in-flight synchronization
 to finish, but the control receipt does not start another historical read.
-Periodic reconciliation reads commit-aware plan status and fetches commands
-only for a different active identity. Catalogue, measurements and history
-use independent exchanges. Resume still requires a plan generated
+An authenticated watch wakes the coordinator on publication or revocation.
+Reconciliation reads commit-aware plan status and fetches commands only for a
+different active identity. A broken watch uses lightweight status checks while
+reconnecting. Catalogue, current measurements and requested history use
+independent exchanges. Resume still requires a plan generated
 after the local resume boundary, so a receipt cannot revive older commands.
 
 The shared PostgreSQL engine also bounds each native driver I/O wait to thirty
