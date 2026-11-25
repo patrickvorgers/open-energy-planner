@@ -2,7 +2,10 @@
 
 PEER_ROUTES = {
     ("GET", "/v1/version"),
-    ("GET", "/v1/snapshot"),
+    ("GET", "/v1/ha/plan-status"),
+    ("GET", "/v1/ha/plan"),
+    ("GET", "/v1/ha/measurement-config"),
+    ("GET", "/v1/ha/requests"),
     ("POST", "/v1/observations"),
     ("POST", "/v1/history"),
     ("POST", "/v1/demand/history"),

@@ -327,7 +327,6 @@ def test_snapshot_projection_does_not_block_and_discards_stale_controls(
                 session.get(
                     url + "/v1/snapshot",
                     headers={
-                        "X-OEP-View": "commands",
                         "X-OEP-Release": BUILD_INFO["version"],
                         "X-OEP-Build": BUILD_INFO["build"] or "",
                     },

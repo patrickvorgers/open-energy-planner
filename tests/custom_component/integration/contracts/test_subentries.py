@@ -227,16 +227,23 @@ def test_native_group_deletion_automatically_restores_app_membership(monkeypatch
             removed_id = next(iter(entry.subentries))
             from custom_components.open_energy_planner.client import LocalClient
 
-            original_snapshot = LocalClient.snapshot
+            original_requests = LocalClient.service_requests
+            original_status = LocalClient.plan_status
             if app_unavailable:
-                monkeypatch.setattr(LocalClient, "snapshot", AsyncMock(side_effect=ClientError()))
+                monkeypatch.setattr(
+                    LocalClient, "service_requests", AsyncMock(side_effect=ClientError())
+                )
+                monkeypatch.setattr(
+                    LocalClient, "plan_status", AsyncMock(side_effect=ClientError())
+                )
             hass.config_entries.async_remove_subentry(entry, removed_id)
             await hass.async_block_till_done()
             assert entry.runtime_data is not old_coordinator
             assert old_coordinator.closed
             if app_unavailable:
                 assert entry.runtime_data.issue == "synchronization_failed"
-                monkeypatch.setattr(LocalClient, "snapshot", original_snapshot)
+                monkeypatch.setattr(LocalClient, "service_requests", original_requests)
+                monkeypatch.setattr(LocalClient, "plan_status", original_status)
                 await entry.runtime_data.sync()
                 await hass.async_block_till_done()
             assert {item.title for item in entry.subentries.values()} == {"Batteries"}
@@ -269,7 +276,7 @@ def test_withdrawal_retires_empty_groups_but_outage_keeps_them(monkeypatch):
             devices, entities = registrations(hass, entry)
             before = ({item.id for item in devices}, {item.entity_id for item in entities})
             monkeypatch.setattr(
-                coordinator.client, "snapshot", AsyncMock(side_effect=ClientError())
+                coordinator.client, "service_requests", AsyncMock(side_effect=ClientError())
             )
             await coordinator.sync()
             await hass.async_block_till_done()

@@ -171,21 +171,30 @@ def test_module_failure_cannot_suppress_independent_market_price_work(monkeypatc
             coordinator = entry.runtime_data
             coordinator.poll_cancel()
             coordinator.poll_cancel = None
-            snapshot = coordinator.client.snapshot
+            snapshot = coordinator.client.service_requests
             request = {"market_area": "NL", "currency": "EUR", "days": []}
 
             async def with_price_request():
                 """Add provider work to the real authenticated app snapshot."""
-                data = {**await snapshot(), "market_price_request": request}
-                if failed_module == "measurements":
-                    data["measurement_config"] = {}
-                return data
+                return {**await snapshot(), "market_price_request": request}
 
-            monkeypatch.setattr(coordinator.client, "snapshot", with_price_request)
+            monkeypatch.setattr(coordinator.client, "service_requests", with_price_request)
             broken = Mock(side_effect=ValueError("Invalid fixture module projection"))
             if failed_module == "ev":
                 monkeypatch.setattr(ev, "receive", broken)
             else:
+                read_status = coordinator.client.plan_status
+
+                async def needs_measurements():
+                    """Advertise an app measurement revision without changing price requests."""
+                    return {**await read_status(), "measurements_required": True}
+
+                monkeypatch.setattr(coordinator.client, "plan_status", needs_measurements)
+                monkeypatch.setattr(
+                    coordinator.client,
+                    "measurement_config",
+                    AsyncMock(return_value={"measurement_config": {"revision": "demo-1"}}),
+                )
                 monkeypatch.setattr(coordinator_module, "ObservationBridge", broken)
             started = Mock()
             monkeypatch.setattr(coordinator.market_prices, "start", started)

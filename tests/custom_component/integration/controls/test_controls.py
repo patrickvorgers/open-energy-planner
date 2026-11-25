@@ -309,18 +309,22 @@ def test_ev_native_controls_explicit_identity_blueprint_and_local_withdrawal(
             from aiohttp import ClientConnectionError
 
             original_snapshot, original_request = (
-                coordinator.client.snapshot,
+                coordinator.client.service_requests,
                 coordinator.client.request,
             )
+            original_status = coordinator.client.plan_status
             older = await original_snapshot()
             older.update(
-                plan=deepcopy(plan),
                 ev=deepcopy(coordinator.ev),
-                measurement_config=None,
-                config_revision=coordinator.schedule.config_revision,
                 source="demo",
                 installation={},
             )
+            earlier_status = {
+                **await original_status(),
+                "enabled": True,
+                "plan_id": plan["plan_id"],
+                "acknowledged_plan": plan["plan_id"],
+            }
             snapshot_started, release_snapshot, accepted_cancel = (
                 asyncio.Event(),
                 asyncio.Event(),
@@ -334,6 +338,12 @@ def test_ev_native_controls_explicit_identity_blueprint_and_local_withdrawal(
                     await release_snapshot.wait()
                     return older
                 raise ClientConnectionError("Synthetic app outage after accepted cancel")
+
+            async def status_then_disconnected():
+                """Keep the fixture plan authoritative until the same simulated app outage."""
+                if accepted_cancel.is_set():
+                    raise ClientConnectionError("Synthetic command outage after accepted cancel")
+                return earlier_status
 
             pending_write_permissions = []
 
@@ -351,7 +361,8 @@ def test_ev_native_controls_explicit_identity_blueprint_and_local_withdrawal(
                         raise ClientConnectionError("Synthetic committed cancellation reply loss")
                 return result
 
-            monkeypatch.setattr(coordinator.client, "snapshot", delayed_then_disconnected)
+            monkeypatch.setattr(coordinator.client, "service_requests", delayed_then_disconnected)
+            monkeypatch.setattr(coordinator.client, "plan_status", status_then_disconnected)
             monkeypatch.setattr(coordinator.client, "request", confirmed_request)
             from homeassistant.core import callback
             from homeassistant.exceptions import HomeAssistantError
@@ -442,7 +453,8 @@ def test_ev_native_controls_explicit_identity_blueprint_and_local_withdrawal(
             assert hass.states.get(permission).state == "off"
             assert fixture["data"]["points"][0]["power_w"] == 0
             assert retained_battery in coordinator.projection.command.devices
-            monkeypatch.setattr(coordinator.client, "snapshot", original_snapshot)
+            monkeypatch.setattr(coordinator.client, "service_requests", original_snapshot)
+            monkeypatch.setattr(coordinator.client, "plan_status", original_status)
             monkeypatch.setattr(coordinator.client, "request", original_request)
             await coordinator.sync()
             assert (
@@ -543,7 +555,7 @@ def test_known_local_fault_during_outage_requires_a_new_plan_after_sensor_recove
             coordinator = entry.runtime_data
             assert coordinator.schedule.plan is not None
             original_id = coordinator.schedule.plan.plan_id
-            snapshot = coordinator.client.snapshot
+            snapshot = coordinator.client.plan_status
             config = {
                 "revision": "selected-1",
                 "bindings": [
@@ -572,20 +584,23 @@ def test_known_local_fault_during_outage_requires_a_new_plan_after_sensor_recove
                 """Simulate an unavailable app transport while the coordinator handles a locally known source fault."""
                 raise ClientConnectionError("Test connection loss")
 
-            monkeypatch.setattr(coordinator.client, "snapshot", disconnected)
+            monkeypatch.setattr(coordinator.client, "plan_status", disconnected)
             await coordinator.sync()
             assert coordinator.schedule.plan is None
             assert find(hass, "battery_power_target").state == "unavailable"
             # Recovery before reconnect must not reactivate the app's unchanged old plan.
             hass.states.async_set("sensor.soc", "50", {"unit_of_measurement": "%"})
-            monkeypatch.setattr(coordinator.client, "snapshot", snapshot)
-            assert (await snapshot())["plan"]["plan_id"] == original_id
+            monkeypatch.setattr(coordinator.client, "plan_status", snapshot)
+            assert (await snapshot())["plan_id"] == original_id
             await coordinator.sync()
             assert coordinator.schedule.plan is None
             assert coordinator.issue is None
             assert find(hass, "battery_power_target").state == "unavailable"
             await coordinator.client.enabled(True, str(uuid4()))
-            await coordinator.sync()
+            async with asyncio.timeout(2):
+                while (await coordinator.client.plan_status())["plan_id"] in (None, original_id):
+                    await asyncio.sleep(0.01)
+            assert await coordinator.sync_plan()
             assert coordinator.schedule.plan.plan_id != original_id
             assert find(hass, "battery_power_target").state == "-1000"
 
@@ -620,8 +635,8 @@ def test_real_ha_unchanged_state_report_updates_freshness():
     asyncio.run(scenario())
 
 
-def test_large_snapshot_and_ordinary_response_size_limits():
-    """A full snapshot accepts a >256 KiB plan. Control receipts and ordinary settings retain the smaller bound."""
+def test_large_command_and_ordinary_response_size_limits():
+    """The command endpoint accepts a >256 KiB plan. Control receipts and ordinary settings retain the smaller bound."""
     import json
 
     from custom_components.open_energy_planner.client import LocalClient
@@ -649,7 +664,7 @@ def test_large_snapshot_and_ordinary_response_size_limits():
             )
 
         app = web.Application()
-        app.router.add_get("/v1/snapshot", respond)
+        app.router.add_get("/v1/ha/plan", respond)
         app.router.add_put("/v1/enabled", respond)
         app.router.add_get("/v1/solar", respond)
         runner = web.AppRunner(app)
@@ -660,7 +675,7 @@ def test_large_snapshot_and_ordinary_response_size_limits():
         try:
             async with ClientSession() as session:
                 client = LocalClient(session, url, TOKEN)
-                result = await client.snapshot()
+                result = await client.plan(plan["plan_id"])
                 assert Plan.parse(result["plan"], plan["config_revision"]).steps
                 with pytest.raises(ValueError, match="size limit"):
                     await client.enabled(True, "resume-large")
@@ -682,7 +697,7 @@ def test_fixed_pv_export_warning_is_actionable_in_actual_ha(monkeypatch):
         """Add the app-owned configuration warning to an otherwise valid real snapshot."""
         async with running_chain() as (_hass, entry, _url, _root):
             coordinator = entry.runtime_data
-            snapshot = coordinator.client.snapshot
+            snapshot = coordinator.client.service_requests
 
             async def warned():
                 """Retain the genuine response and add only the declared warning code."""
@@ -690,7 +705,7 @@ def test_fixed_pv_export_warning_is_actionable_in_actual_ha(monkeypatch):
                 data["installation"]["warnings"] = ["fixed_pv_export_limit"]
                 return data
 
-            monkeypatch.setattr(coordinator.client, "snapshot", warned)
+            monkeypatch.setattr(coordinator.client, "service_requests", warned)
             with patch.object(
                 persistent_notification, "async_create", wraps=persistent_notification.async_create
             ) as notify:
@@ -1023,7 +1038,10 @@ def test_pause_resume_goes_through_http_and_persists_intent():
             )
             assert entry.runtime_data.pending_enabled is None
             assert find(hass, "battery_power_target").state == "unavailable"
-            await entry.runtime_data.sync()
+            async with asyncio.timeout(2):
+                while (await entry.runtime_data.client.plan_status())["plan_id"] in (None, old):
+                    await asyncio.sleep(0.01)
+            assert await entry.runtime_data.sync_plan()
             assert entry.runtime_data.schedule.plan.plan_id != old
             assert find(hass, "battery_power_target").state == "-1000"
             assert dt_util.parse_datetime(
@@ -1033,12 +1051,32 @@ def test_pause_resume_goes_through_http_and_persists_intent():
     asyncio.run(scenario())
 
 
-def test_unchanged_plan_replacement_does_not_repeat_command_or_power_state_event():
+def test_unchanged_plan_replacement_does_not_repeat_command_or_power_state_event(monkeypatch):
     """Replace a plan without changing current commands. Require no duplicate command or power-state event."""
 
     async def scenario():
         """Replace an accepted plan with equal commands and count actual HA command and state events."""
         async with running_chain() as (hass, entry, url, _root):
+            coordinator = entry.runtime_data
+            coordinator.poll_cancel()
+            coordinator.poll_cancel = None
+            coordinator.service_cancel()
+            coordinator.service_cancel = None
+            async with coordinator.services_lock:
+                pass
+            request = coordinator.client.request
+            exchanges = []
+
+            async def observed_request(method, path, body=None):
+                """Count actual HTTP requests while keeping the real plan authority."""
+                exchanges.append((method, path.partition("?")[0]))
+                return await request(method, path, body)
+
+            monkeypatch.setattr(coordinator.client, "request", observed_request)
+            for _ in range(3):
+                assert await coordinator.sync_plan()
+            assert exchanges == [("GET", "/v1/ha/plan-status")] * 3
+            exchanges.clear()
             command_events, power_events = [], []
             power_id = find(hass, "battery_power_target").entity_id
             hass.bus.async_listen(
@@ -1065,7 +1103,16 @@ def test_unchanged_plan_replacement_does_not_repeat_command_or_power_state_event
                 ) as response,
             ):
                 assert response.status == 200
-            await entry.runtime_data.sync()
+            async with asyncio.timeout(2):
+                while (await request("GET", "/v1/ha/plan-status"))["plan_id"] == old:
+                    await asyncio.sleep(0.01)
+            assert await coordinator.sync_plan()
+            assert exchanges == [
+                ("GET", "/v1/ha/plan-status"),
+                ("GET", "/v1/ha/plan"),
+                ("POST", "/v1/ack"),
+                ("GET", "/v1/ha/plan-status"),
+            ]
             await hass.async_block_till_done()
             assert entry.runtime_data.schedule.plan.plan_id != old
             assert command_events == [] and power_events == []
@@ -1188,6 +1235,7 @@ def test_user_automation_can_capture_commands_and_fallback_without_hardware():
         async with running_chain() as (hass, entry, _url, _root):
             entry.runtime_data.poll_cancel()
             entry.runtime_data.poll_cancel = None
+            old = entry.runtime_data.schedule.plan.plan_id
             captured = []
             hass.bus.async_listen(
                 "oep_test_capture", lambda event_item: captured.append(event_item.data)
@@ -1223,7 +1271,10 @@ def test_user_automation_can_capture_commands_and_fallback_without_hardware():
             await entry.runtime_data.set_enabled(True)
             await hass.async_block_till_done()
             assert captured[-1]["status"] != "active"
-            await entry.runtime_data.sync()
+            async with asyncio.timeout(2):
+                while (await entry.runtime_data.client.plan_status())["plan_id"] in (None, old):
+                    await asyncio.sleep(0.01)
+            assert await entry.runtime_data.sync_plan()
             await hass.async_block_till_done()
             assert captured[-1]["status"] == "active"
             assert captured[-1]["mode"] == "fixed_power"
@@ -1413,7 +1464,7 @@ def test_invalid_optional_consumer_projection_keeps_valid_plan(monkeypatch):
         """Corrupt only the optional extension of a real synchronized local app response."""
         async with running_chain() as (_hass, entry, _url, _root):
             coordinator = entry.runtime_data
-            original = coordinator.client.snapshot
+            original = coordinator.client.service_requests
             plan_id = coordinator.schedule.plan.plan_id
 
             async def malformed():
@@ -1422,7 +1473,7 @@ def test_invalid_optional_consumer_projection_keeps_valid_plan(monkeypatch):
                 data["consumers"] = {"result": {"status": True}}
                 return data
 
-            monkeypatch.setattr(coordinator.client, "snapshot", malformed)
+            monkeypatch.setattr(coordinator.client, "service_requests", malformed)
             await coordinator.sync()
             assert coordinator.consumer_forecasts == {}
             assert coordinator.schedule.plan.plan_id == plan_id
@@ -1462,7 +1513,7 @@ def test_removed_appliance_is_isolated_and_malformed_projection_withdraws_only_t
                 {"entity_id": "sensor.healthy", "shiftable": False, "task": None}
             ]
             assert coordinator.consumer_forecasts["options"][0]["entity_id"] == "sensor.healthy"
-            original = coordinator.client.snapshot
+            original = coordinator.client.service_requests
             plan_id = coordinator.schedule.plan.plan_id
 
             async def malformed():
@@ -1476,7 +1527,7 @@ def test_removed_appliance_is_isolated_and_malformed_projection_withdraws_only_t
                 data["appliances"] = {"devices": [None]}
                 return data
 
-            monkeypatch.setattr(coordinator.client, "snapshot", malformed)
+            monkeypatch.setattr(coordinator.client, "service_requests", malformed)
             await coordinator.sync()
             assert coordinator.appliances == {}
             assert coordinator.consumer_forecasts["options"][0]["entity_id"] == "sensor.healthy"

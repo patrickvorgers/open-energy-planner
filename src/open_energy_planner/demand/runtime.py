@@ -687,6 +687,24 @@ class DemandRuntime:
             self.forecast = self.baseline
         self.learned_preferred = enabled
 
+    def history_diagnostics(self):
+        """Expose only actionable source and training issues needed by Home Assistant."""
+        issue = self.issue or self.store.issue
+        return {
+            "configuration": configuration_document(self.configuration)
+            if issue == "demand_boundary_inconsistent"
+            else None,
+            "issue": issue,
+            "history_issues": dict(self.history_issues),
+        }
+
+    def ha_history(self, now):
+        """Expose requested historical data and actionable issues without projecting forecasts."""
+        return {
+            **self.history_diagnostics(),
+            "request": self.request(now) or self.consumers.request(self.configuration, now),
+        }
+
     def capture_document(self, now, *, include_consumer_request=False):
         """Capture history requests on their owner and defer forecast projection."""
         pending = self.request(now)

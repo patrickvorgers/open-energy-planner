@@ -4,6 +4,7 @@ import asyncio
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
+from functools import partial
 
 from aiohttp import web
 
@@ -19,11 +20,41 @@ from open_energy_planner.home_assistant.observation_wire import (
 from open_energy_planner.home_assistant.source_choices import configured_sources
 from open_energy_planner.installation.api import catalogue as installation_catalogue
 from open_energy_planner.installation.api import warnings as installation_warnings
-from open_energy_planner.installation.commands import execution_document
 from open_energy_planner.installation.storage import document as installation_document
 from open_energy_planner.runtime.diagnostics.http import phase, timed_lock
 from open_energy_planner.solar.runtime import learning_document
 from open_energy_planner.storage.writes import complete_write
+
+HA_GRID_FIELDS = (
+    "grid_power_entity",
+    "grid_power_inverted",
+    "grid_export_entity",
+    "import_limit_w",
+    "export_limit_w",
+)
+
+
+def device_catalogue(installation, solar, setup, installation_basis, synthetic_batteries, live):
+    """Resolve configuration, Energy membership and synthetic capabilities consistently."""
+    devices = installation_catalogue(installation, solar, live.current_snapshot if live else None)
+    if installation_basis or installation.current is not None:
+        devices = setup.devices(devices)
+    if devices is not None:
+        return devices
+    return (
+        []
+        if live
+        else [
+            {
+                "id": unit.device_id,
+                "kind": "battery",
+                "name": "Battery",
+                "configured": True,
+                "can_follow_grid": unit.can_follow_grid,
+            }
+            for unit in synthetic_batteries
+        ]
+    )
 
 
 @dataclass(frozen=True, eq=False)
@@ -37,18 +68,24 @@ class SnapshotProjection:
     solar_learning: dict
     plan: dict | None
     enabled: bool
-    execution_only: bool
+    ha_requests: bool
     captured_at: datetime
 
     def project(self):
         """Render forecast series, appliance evidence and plan commands off the event loop."""
-        plan = self.plan
-        if self.execution_only:
-            plan = execution_document(plan) if self.valid_plan_at(self.captured_at) else None
-        elif plan:
-            plan = {
+        document = {
+            **self.document,
+            "demand": self.demand_document(),
+            "appliances": self.appliances.document(self.captured_at, self.enabled, self.plan),
+        }
+        if self.ha_requests:
+            document["consumers"] = self.consumers.ha_projection(self.captured_at)
+            return document
+        return {
+            **document,
+            "plan": {
                 key: value
-                for key, value in plan.items()
+                for key, value in self.plan.items()
                 if key
                 not in {
                     "reference_forecast",
@@ -57,15 +94,10 @@ class SnapshotProjection:
                     "comparison_names",
                 }
             }
-        return {
-            **self.document,
-            "plan": plan,
-            "plan_invalidated": self.document["plan_invalidated"]
-            or (self.execution_only and self.plan is not None and plan is None),
-            "demand": self.demand_document(),
+            if self.plan
+            else None,
             "consumers": self.consumers.document(now=self.captured_at),
             "solar": {**self.document["solar"], "learning": learning_document(self.solar_learning)},
-            "appliances": self.appliances.document(self.captured_at, self.enabled, plan),
         }
 
     def valid_plan_at(self, now):
@@ -75,12 +107,6 @@ class SnapshotProjection:
     def can_respond(self, current_state, current_appliances, state_locked, now, document):
         """Reject superseded plans or start requests after asynchronous preparation."""
         if self.plan is not current_state["plan"] or self.enabled != current_state["enabled"]:
-            return False
-        if (
-            self.execution_only
-            and self.valid_plan_at(self.captured_at)
-            and not self.valid_plan_at(now)
-        ):
             return False
         return all(
             not state_locked
@@ -122,7 +148,7 @@ def create_snapshot_handler(
     outside the app lock. Refresh and capture state under it before projecting and encoding.
     """
 
-    async def snapshot(request):
+    async def snapshot(request, *, ha_requests=False):
         """Capture settlement inputs under the state lock and await their archive read outside it.
 
         Reacquire the lock to refresh live validity and assemble current state, so
@@ -133,19 +159,20 @@ def create_snapshot_handler(
         with phase(request, "snapshot_settlement"):
             settlement = await pending_settlement
         async with timed_lock(request, "snapshot_state_wait", lock):
-            with phase(request, "snapshot_appliance_tick"):
-                cancellation = await complete_write(
-                    appliances.tick,
-                    now(),
-                    repository.state["enabled"],
-                    repository.state["plan"],
-                )
-                if cancellation is not None:
-                    raise cancellation
-            if live:
-                with phase(request, "snapshot_live_refresh"):
-                    await live.refresh_async()
-            projection = capture_projection(request, settlement, now())
+            if not ha_requests:
+                with phase(request, "snapshot_appliance_tick"):
+                    cancellation = await complete_write(
+                        appliances.tick,
+                        now(),
+                        repository.state["enabled"],
+                        repository.state["plan"],
+                    )
+                    if cancellation is not None:
+                        raise cancellation
+                if live:
+                    with phase(request, "snapshot_live_refresh"):
+                        await live.refresh_async()
+            projection = capture_projection(request, settlement, now(), ha_requests=ha_requests)
         while True:
             with phase(request, "snapshot_document"):
                 document = await asyncio.to_thread(projection.project)
@@ -156,37 +183,24 @@ def create_snapshot_handler(
             ):
                 return response
             async with timed_lock(request, "snapshot_state_wait", lock):
-                projection = capture_projection(request, settlement, now())
+                projection = capture_projection(request, settlement, now(), ha_requests=ha_requests)
 
-    def capture_projection(request, settlement, now):
+    def capture_projection(request, settlement, now, *, ha_requests):
         """Capture bounded state on its owner and borrow only immutable/replaced values."""
         with phase(request, "snapshot_bonus_history"):
             pending_history = contract_api.history_request()
         with phase(request, "snapshot_forecast_history"):
             quality_request = forecast_history_request(now) if source == "home_assistant" else None
         with phase(request, "snapshot_demand"):
-            demand_document = demand.capture_document(now, include_consumer_request=True)
-        with phase(request, "snapshot_projection_capture"):
-            devices = installation_catalogue(
-                installation, solar, live.current_snapshot if live else None
+            demand_document = (
+                partial(dict, demand.ha_history(now))
+                if ha_requests
+                else demand.capture_document(now, include_consumer_request=True)
             )
-            if installation_basis or installation.current is not None:
-                devices = setup_catalogue.devices(devices)
-            if devices is None:
-                devices = (
-                    []
-                    if live
-                    else [
-                        {
-                            "id": unit.device_id,
-                            "kind": "battery",
-                            "name": "Battery",
-                            "configured": True,
-                            "can_follow_grid": unit.can_follow_grid,
-                        }
-                        for unit in synthetic_batteries
-                    ]
-                )
+        with phase(request, "snapshot_projection_capture"):
+            devices = device_catalogue(
+                installation, solar, setup_catalogue, installation_basis, synthetic_batteries, live
+            )
             document = {
                 "release": RELEASE,
                 "settlement_request": settlement,
@@ -194,7 +208,7 @@ def create_snapshot_handler(
                     "issue": savings_runtime.issue,
                     "action_required": savings_runtime.attention,
                 },
-                **repository.state,
+                "instance_id": repository.state["instance_id"],
                 "source": source,
                 "market_price_request": price_request(current_prices(), now)
                 if source == "home_assistant"
@@ -206,10 +220,16 @@ def create_snapshot_handler(
                     setup_catalogue.value,
                     repository.state["plan"],
                 ),
-                "solar": solar.document(now, include_learning=False),
+                "solar": solar.ha_history(now)
+                if ha_requests
+                else solar.document(now, include_learning=False),
                 "thermal": thermal.document(now, setup_catalogue.value, repository.state["plan"]),
                 "installation": {
-                    "configuration": installation_document(installation.current),
+                    "configuration": {
+                        name: getattr(installation.current, name) for name in HA_GRID_FIELDS
+                    }
+                    if ha_requests and installation.current is not None
+                    else installation_document(installation.current),
                     "issue": installation.issue,
                     "devices": devices,
                     "warnings": installation_warnings(installation, solar),
@@ -229,31 +249,38 @@ def create_snapshot_handler(
                     "issue": bonus_counters.issue
                     or (contract_api.history_issue if pending_history else None),
                 },
-                "config_revision": live.configuration.revision
-                if live and live.configuration
-                else "demo-1",
-                "measurement_config": configuration_document(live.configuration)
-                if live and live.configuration
-                else None,
-                "observations": observation_status(live.configuration, live.report)
-                if live
-                else None,
-                "plan_invalidated": bool(live and repository.state["plan"] is None),
-                "planning": {
-                    "status": planner.status,
-                    "reason": planner.reason,
-                    "requested_snapshot_id": planner.latest.snapshot_id if planner.latest else None,
-                },
             }
+            if not ha_requests:
+                document = {
+                    **repository.state,
+                    **document,
+                    "config_revision": live.configuration.revision
+                    if live and live.configuration
+                    else "demo-1",
+                    "measurement_config": configuration_document(live.configuration)
+                    if live and live.configuration
+                    else None,
+                    "observations": observation_status(live.configuration, live.report)
+                    if live
+                    else None,
+                    "plan_invalidated": bool(live and repository.state["plan"] is None),
+                    "planning": {
+                        "status": planner.status,
+                        "reason": planner.reason,
+                        "requested_snapshot_id": planner.latest.snapshot_id
+                        if planner.latest
+                        else None,
+                    },
+                }
         return SnapshotProjection(
             document,
             demand_document,
             demand.consumers.read_view(),
             appliances.read_view(),
-            dict(solar.learning),
+            {} if ha_requests else dict(solar.learning),
             repository.state["plan"],
             repository.state["enabled"],
-            request.headers.get("X-OEP-View") == "commands",
+            ha_requests,
             now,
         )
 

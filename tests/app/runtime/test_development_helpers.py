@@ -17,15 +17,21 @@ ROOT = Path(__file__).resolve().parents[3]
 def test_live_container_is_healthy_while_waiting_for_first_source_configuration(monkeypatch):
     """Start live setup without sources. Accept container health while scripted demo mode still requires a plan."""
     monkeypatch.setenv("OEP_API_TOKEN", "isolated-health-fixture-token")
-    state = {"source": "home_assistant", "plan": None, "planning": {"status": "not_ready"}}
-    monkeypatch.setattr(
-        "urllib.request.urlopen", lambda *_args, **_kwargs: io.BytesIO(json.dumps(state).encode())
-    )
+    state = {"source": "home_assistant", "plan_available": False, "planning_status": "not_ready"}
+
+    def respond(request, **_kwargs):
+        """Keep container health isolated from the broad administration view."""
+        assert request.full_url.endswith("/v1/readiness")
+        return io.BytesIO(json.dumps(state).encode())
+
+    monkeypatch.setattr("urllib.request.urlopen", respond)
     runpy.run_path(str(ROOT / "script/runtime/healthcheck.py"), run_name="__main__")
     # The demo still waits for a validated plan before provisioning its synthetic chain.
     state["source"] = "synthetic"
     with pytest.raises(SystemExit, match="No validated plan"):
         runpy.run_path(str(ROOT / "script/runtime/healthcheck.py"), run_name="__main__")
+    state["plan_available"] = True
+    runpy.run_path(str(ROOT / "script/runtime/healthcheck.py"), run_name="__main__")
 
 
 def test_notice_header_is_a_string_not_a_tuple(tmp_path, monkeypatch):

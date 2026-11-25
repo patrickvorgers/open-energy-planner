@@ -635,4 +635,12 @@ class ContractAPI:
                             None,
                         )
                     )
+            if request.headers.get("X-OEP-View") == "commands":
+                return web.json_response(
+                    {
+                        "accepted": True,
+                        "issue": self.bonus_counters.issue
+                        or (None if is_preview else self.history_issue),
+                    }
+                )
         return await self.snapshot(request)

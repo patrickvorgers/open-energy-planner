@@ -463,6 +463,17 @@ def update():
     version = wait_for(matched, "matched updated app/integration")
     assert version["app"] == identity
     assert version["integration"] == {"version": LOCAL_UPDATE_VERSION, "build": None}
+
+    def catalogue_confirmed():
+        """Wait for the catalogue and its timezone before reading retained EV settings."""
+        status = app_request("ha/catalogue/refresh")
+        return status["revision"] and status["confirmed_at"]
+
+    wait_for(
+        catalogue_confirmed,
+        "confirmed updated Home Assistant catalogue",
+        timeout=APP_READY_TIMEOUT_SECONDS,
+    )
     verify_retained()
     browser_ingress()
 

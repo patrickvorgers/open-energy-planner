@@ -4,6 +4,7 @@ import json
 import logging
 from http import HTTPStatus
 from time import monotonic
+from urllib.parse import urlencode
 
 from aiohttp import ClientError, ClientResponseError, ClientSession, ClientTimeout, Fingerprint
 
@@ -41,6 +42,10 @@ class InstallationMismatchError(ValueError):
     """The connected app is not the installation recorded by this HA config entry."""
 
 
+class SupersededInstallationExchangeError(ValueError):
+    """A response arrived after the confirmed installation epoch changed."""
+
+
 class LocalClient:
     """Exchange bounded JSON with the local app using the existing HA HTTP session."""
 
@@ -73,24 +78,50 @@ class LocalClient:
         Raises:
             ReleaseMismatchError: If a marked 409 response rejects this build or a
                 /v1/ response reports a different or missing version/build identity.
-            InstallationMismatchError: If a snapshot identifies a different
+            InstallationMismatchError: If plan status identifies a different
                 installation than the config entry. Further exchanges are blocked
-                until a fresh snapshot identifies the original installation again.
+                until fresh plan status identifies the original installation again.
+            SupersededInstallationExchangeError: If a newer exchange already
+                changed installation authority. Discard the obsolete response.
         """
-        identity_snapshot = (method, path) == ("GET", "/v1/snapshot")
-        if self.instance_mismatch and not identity_snapshot:
+        identity_status = (method, path) == ("GET", "/v1/ha/plan-status")
+        if self.instance_mismatch and not identity_status:
             raise InstallationMismatchError("App installation identity changed")
         if (
             self.expected_instance_id is not None
             and not self.instance_confirmed
-            and not identity_snapshot
+            and not identity_status
         ):
-            await self.snapshot()
+            await self.plan_status()
         operation = (method, path.partition("?")[0])
         started_at = monotonic()
+        generation = self.instance_generation
         try:
-            result = await self._exchange(method, path, body, identity_snapshot)
+            result = await self._exchange(method, path, body)
+            if generation != self.instance_generation:
+                raise SupersededInstallationExchangeError("Installation exchange was superseded")
+            if self.expected_instance_id is not None:
+                if (identity_status or "instance_id" in result) and result.get(
+                    "instance_id"
+                ) != self.expected_instance_id:
+                    self.instance_generation += 1
+                    self.instance_mismatch = True
+                    self.instance_confirmed = False
+                    raise InstallationMismatchError("App installation identity changed")
+                if identity_status:
+                    if self.instance_mismatch:
+                        self.instance_generation += 1
+                    self.instance_mismatch = False
+                    self.instance_confirmed = True
+        except SupersededInstallationExchangeError:
+            raise
         except (ClientError, TimeoutError, ValueError, TypeError, KeyError) as error:
+            if generation != self.instance_generation and not isinstance(
+                error, InstallationMismatchError
+            ):
+                raise SupersededInstallationExchangeError(
+                    "Installation exchange was superseded"
+                ) from None
             failure = type(error).__name__
             if (
                 isinstance(error, (ClientResponseError, _HTTPRejection))
@@ -117,9 +148,8 @@ class LocalClient:
             )
         return result
 
-    async def _exchange(self, method, path, body, identity_snapshot):
-        """Perform one HTTP exchange and validate the response and installation identity."""
-        generation = self.instance_generation
+    async def _exchange(self, method, path, body):
+        """Perform one HTTP exchange and validate the bounded response and release."""
         async with self.session.request(
             method,
             self.url + path,
@@ -154,17 +184,12 @@ class LocalClient:
                 raise ReleaseMismatchError(
                     "App and integration release builds differ", status=response.status
                 )
-            # Settings may return a complete snapshot too. Bound by the response contract.
-            snapshot_response = path in (
-                "/v1/snapshot",
-                "/v1/observations",
-                "/v1/history",
-                "/v1/demand/history",
-                "/v1/solar/history",
-                "/v1/sources",
-                "/v1/replan",
+            # Bound complete command and metadata projections independently of ordinary receipts.
+            snapshot_response = path.partition("?")[0] in (
+                "/v1/ha/plan",
+                "/v1/ha/requests",
                 "/v1/ha/catalogue",
-            ) or (method == "PUT" and path == "/v1/installation")
+            )
             limit = (
                 MAX_APPLIANCE_RESPONSE_BYTES
                 if path == "/v1/appliances" or path.startswith("/v1/appliances/")
@@ -180,23 +205,25 @@ class LocalClient:
             result = json.loads(data)
             if not isinstance(result, dict):
                 raise ValueError("Invalid app response")  # noqa: TRY004 - Preserve the existing ValueError validation contract.
-            if self.expected_instance_id is not None:
-                if (identity_snapshot or "instance_id" in result) and result.get(
-                    "instance_id"
-                ) != self.expected_instance_id:
-                    self.instance_generation += 1
-                    self.instance_mismatch = True
-                    self.instance_confirmed = False
-                if generation != self.instance_generation:
-                    raise InstallationMismatchError("App installation identity changed")
-                if identity_snapshot:
-                    self.instance_mismatch = False
-                    self.instance_confirmed = True
             return result
 
-    async def snapshot(self):
-        """Fetch installation status and the complete current plan from the app."""
-        return await self.request("GET", "/v1/snapshot")
+    async def plan_status(self):
+        """Read the current app installation and authoritative command identity."""
+        return await self.request("GET", "/v1/ha/plan-status")
+
+    async def plan(self, plan_id):
+        """Fetch commands only for the still-current plan identity."""
+        return await self.request("GET", "/v1/ha/plan?" + urlencode({"plan_id": plan_id}))
+
+    async def measurement_config(self, revision):
+        """Fetch measurement bindings only for the current app configuration revision."""
+        return await self.request(
+            "GET", "/v1/ha/measurement-config?" + urlencode({"revision": revision})
+        )
+
+    async def service_requests(self):
+        """Refresh HA configuration and data requests without transferring a plan."""
+        return await self.request("GET", "/v1/ha/requests")
 
     async def configure_sources(self, bindings, revision):
         """Replace selected sources with compare-and-set revision protection."""

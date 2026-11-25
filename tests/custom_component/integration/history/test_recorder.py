@@ -441,7 +441,8 @@ def test_delayed_observations_or_appliance_history_sync_cannot_overwrite_newer_u
                 "release": RELEASE,
                 "enabled": False,
                 "config_revision": "selected-1",
-                "plan": None,
+                "plan_id": None,
+                "measurements_required": True,
                 "measurement_config": {
                     "revision": "selected-1",
                     "bindings": [
@@ -467,9 +468,12 @@ def test_delayed_observations_or_appliance_history_sync_cannot_overwrite_newer_u
                 """Hold synchronization open until explicit resume, then return its stale intent."""
                 started.set()
                 await finish.wait()
-                return data
+                return {"accepted": True, "config_revision": "stale-observation-revision"}
 
-            monkeypatch.setattr(coordinator.client, "snapshot", snapshot)
+            monkeypatch.setattr(coordinator.client, "plan_status", snapshot)
+            monkeypatch.setattr(
+                coordinator.client, "measurement_config", lambda _revision: snapshot()
+            )
             if upload_stage == "observations":
                 monkeypatch.setattr(coordinator.client, "observations", upload)
             else:
@@ -755,7 +759,7 @@ def test_demand_history_fault_notifies_sensor_names_and_clears_after_recovery(re
         """Inject app diagnostics into real HA synchronization without using production sensors or Recorder credentials."""
         async with running_chain() as (hass, entry, _url, _root):
             coordinator = entry.runtime_data
-            snapshot = coordinator.client.snapshot
+            snapshot = coordinator.client.service_requests
             demand = {"history_issues": {"sensor.z_home": reason, "sensor.a_home": reason}}
 
             async def with_diagnostics():
@@ -765,7 +769,7 @@ def test_demand_history_fault_notifies_sensor_names_and_clears_after_recovery(re
                 return data
 
             with (
-                patch.object(coordinator.client, "snapshot", with_diagnostics),
+                patch.object(coordinator.client, "service_requests", with_diagnostics),
                 patch.object(
                     persistent_notification,
                     "async_create",
@@ -1275,11 +1279,11 @@ def test_optional_history_failure_does_not_interrupt_command_synchronization(
 
         async with running_chain() as (_hass, entry, _url, _root):
             coordinator = entry.runtime_data
-            snapshot = coordinator.client.snapshot
+            snapshot = coordinator.client.service_requests
             original = coordinator.schedule.plan.plan_id
             attempted = asyncio.Event()
-            accepted = Mock(wraps=coordinator.schedule.accept)
-            monkeypatch.setattr(coordinator.schedule, "accept", accepted)
+            install = Mock(wraps=coordinator.schedule.install_candidate)
+            monkeypatch.setattr(coordinator.schedule, "install_candidate", install)
 
             async def pending_snapshot():
                 """Keep the real plan response while requesting a faulty optional settlement transfer."""
@@ -1290,13 +1294,14 @@ def test_optional_history_failure_does_not_interrupt_command_synchronization(
             async def failed_capture(_request):
                 """Emulate an independent history-read problem, not a planner or authentication failure."""
                 attempted.set()
-                accepted.assert_called_once()
+                assert coordinator.schedule.plan.plan_id == original
                 raise failure("Settlement fixture failure")
 
-            monkeypatch.setattr(coordinator.client, "snapshot", pending_snapshot)
+            monkeypatch.setattr(coordinator.client, "service_requests", pending_snapshot)
             monkeypatch.setattr(getattr(coordinator, bridge_attribute), "capture", failed_capture)
             await coordinator.sync()
             assert attempted.is_set()
+            install.assert_not_called()
             assert coordinator.issue is None
             assert coordinator.schedule.plan.plan_id == original
 
@@ -1322,7 +1327,7 @@ def test_optional_history_wait_cannot_override_newer_resume_intent(
         async with running_chain() as (_hass, entry, _url, _root):
             coordinator = entry.runtime_data
             coordinator.schedule.pause(dt_util.utcnow())
-            snapshot = coordinator.client.snapshot
+            snapshot = coordinator.client.service_requests
             started, finish = asyncio.Event(), asyncio.Event()
 
             async def pending_snapshot():
@@ -1336,13 +1341,13 @@ def test_optional_history_wait_cannot_override_newer_resume_intent(
                 started.set()
                 await finish.wait()
 
-            monkeypatch.setattr(coordinator.client, "snapshot", pending_snapshot)
+            monkeypatch.setattr(coordinator.client, "service_requests", pending_snapshot)
             monkeypatch.setattr(getattr(coordinator, bridge_attribute), "capture", capture)
             task = asyncio.create_task(coordinator.sync())
             await asyncio.wait_for(started.wait(), 5)
-            accepted = Mock(wraps=coordinator.schedule.accept)
+            installed = Mock(wraps=coordinator.schedule.install_candidate)
             acknowledged = AsyncMock(wraps=coordinator.client.acknowledge)
-            monkeypatch.setattr(coordinator.schedule, "accept", accepted)
+            monkeypatch.setattr(coordinator.schedule, "install_candidate", installed)
             monkeypatch.setattr(coordinator.client, "acknowledge", acknowledged)
             requested = dt_util.utcnow()
             coordinator.schedule.resume(requested)
@@ -1351,8 +1356,82 @@ def test_optional_history_wait_cannot_override_newer_resume_intent(
             await task
             assert coordinator.schedule.resume_after == requested
             assert coordinator.pending_enabled is True
-            accepted.assert_not_called()
+            installed.assert_not_called()
             acknowledged.assert_not_awaited()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize(
+    "domain,endpoint",
+    [
+        ("forecast_quality_request", "/v1/forecast-quality/history"),
+        ("bonus_history", "/v1/history"),
+    ],
+)
+def test_unload_prevents_post_after_recorder_history_capture(monkeypatch, domain, endpoint):
+    """Unload drains the Recorder read without starting a history upload in either loop."""
+
+    async def scenario():
+        """Hold a real capture result until the entry has begun to unload."""
+        async with running_chain(recorder=True) as (hass, entry, _url, _root):
+            coordinator = entry.runtime_data
+            request = coordinator.client.request
+            bridge = (
+                coordinator.forecast_history_bridge
+                if domain == "forecast_quality_request"
+                else coordinator.history_bridge
+            )
+            capture = bridge.capture
+            captured, release = asyncio.Event(), asyncio.Event()
+            uploads = []
+            end = dt_util.utcnow().replace(minute=0, second=0, microsecond=0)
+            history = {
+                "version": "unload-recorder-history",
+                "entity_id": "sensor.unload_history_missing_statistics",
+                "start": (end - timedelta(hours=2)).isoformat(),
+                "end": end.isoformat(),
+            }
+
+            async def pending(method, path, body=None):
+                """Request a real Recorder read and record any attempted history upload."""
+                if path == endpoint:
+                    uploads.append(body)
+                response = await request(method, path, body)
+                if path == "/v1/ha/requests":
+                    response[domain] = (
+                        history if domain == "forecast_quality_request" else {"request": history}
+                    )
+                return response
+
+            async def gated_capture(body):
+                """Keep the upload caller waiting after Recorder returns a sendable report."""
+                report = await capture(body)
+                assert report == {
+                    "request_version": history["version"],
+                    "error": "unsupported_statistics",
+                }
+                captured.set()
+                await release.wait()
+                return report
+
+            monkeypatch.setattr(coordinator.client, "request", pending)
+            monkeypatch.setattr(bridge, "capture", gated_capture)
+            synchronizing = asyncio.create_task(coordinator.sync_services())
+            unloading = None
+            try:
+                await asyncio.wait_for(captured.wait(), timeout=10)
+                unloading = asyncio.create_task(hass.config_entries.async_unload(entry.entry_id))
+                async with asyncio.timeout(10):
+                    while not coordinator.closed:
+                        await asyncio.sleep(0)
+                assert not unloading.done()
+            finally:
+                release.set()
+                await synchronizing
+                if unloading is not None:
+                    assert await unloading
+            assert uploads == []
 
     asyncio.run(scenario())
 
@@ -1713,7 +1792,7 @@ def test_appliance_history_timer_runs_when_command_synchronization_fails(monkeyp
                 raise AuthenticationError("Synthetic command exchange failure")
 
             monkeypatch.setattr(appliance_history, "process", read_history)
-            monkeypatch.setattr(coordinator.client, "snapshot", failed_snapshot)
+            monkeypatch.setattr(coordinator.client, "plan_status", failed_snapshot)
             await coordinator.sync()
             assert not entered.is_set()
             ticks = [action for action, interval in callbacks if interval == timedelta(seconds=60)]

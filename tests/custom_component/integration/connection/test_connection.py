@@ -29,7 +29,7 @@ def test_savings_warning_has_an_explanation_and_clears_after_recovery(explanatio
         """Exercise the authenticated snapshot and actual persistent-notification lifecycle."""
         async with running_chain() as (hass, entry, _url, _root):
             coordinator = entry.runtime_data
-            snapshot = coordinator.client.snapshot
+            snapshot = coordinator.client.service_requests
             status = {"action_required": True}
             if explanation != "missing":
                 status["issue"] = explanation
@@ -41,7 +41,7 @@ def test_savings_warning_has_an_explanation_and_clears_after_recovery(explanatio
                 return data
 
             with (
-                patch.object(coordinator.client, "snapshot", with_savings_status),
+                patch.object(coordinator.client, "service_requests", with_savings_status),
                 patch.object(
                     persistent_notification,
                     "async_create",
@@ -82,7 +82,7 @@ def test_snapshot_notification_falls_through_in_priority_order():
         """Exercise competing app diagnostics through the real HA notification service."""
         async with running_chain() as (hass, entry, _url, _root):
             coordinator = entry.runtime_data
-            snapshot = coordinator.client.snapshot
+            snapshot = coordinator.client.service_requests
             diagnostics = {
                 "installation": {"issue": "broken", "warnings": ["fixed_pv_export_limit"]},
                 "bonus_history": {"issue": "bonus_counter_cache_unreadable"},
@@ -100,7 +100,7 @@ def test_snapshot_notification_falls_through_in_priority_order():
 
             notification_id = f"{DOMAIN}.{entry.entry_id}"
             with (
-                patch.object(coordinator.client, "snapshot", with_diagnostics),
+                patch.object(coordinator.client, "service_requests", with_diagnostics),
                 patch.object(
                     persistent_notification,
                     "async_create",
@@ -372,7 +372,7 @@ def test_changed_certificate_requests_attention_without_replacing_the_trusted_id
                 """Represent a server presenting a different certificate, without connecting to external hosts."""
                 raise ServerFingerprintMismatch(b"x" * 32, b"y" * 32, "127.0.0.1", 8098)
 
-            monkeypatch.setattr(entry.runtime_data.client, "snapshot", mismatch)
+            monkeypatch.setattr(entry.runtime_data.client, "plan_status", mismatch)
             await entry.runtime_data.sync()
             assert entry.runtime_data.issue == "identity_changed"
             assert find(hass, "battery_power_target").state == "-1000"

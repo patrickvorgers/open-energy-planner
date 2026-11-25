@@ -222,7 +222,10 @@ def test_forty_fine_cycle_profiles_use_the_bounded_complete_projection_budget():
     "path,byte_limit",
     [
         ("/v1/ev", 262144),
-        ("/v1/snapshot", 4194304),
+        ("/v1/ha/requests", 4194304),
+        ("/v1/ha/plan", 4194304),
+        ("/v1/ha/plan-status", 262144),
+        ("/v1/ha/measurement-config", 262144),
         ("/v1/ha/catalogue", 4194304),
         ("/v1/appliances", 4194304),
         ("/v1/appliances/history", 4194304),

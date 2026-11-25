@@ -460,10 +460,21 @@ def test_update_observes_stopped_state_before_both_database_snapshots(
 
     monkeypatch.setattr(supervisor_smoke, "ha", supervisor)
     monkeypatch.setattr(supervisor_smoke, "database_rows", snapshot)
-    monkeypatch.setattr(
-        supervisor_smoke,
-        "app_request",
-        lambda _route: {
+    catalogue_statuses = iter(
+        [
+            {"revision": None, "confirmed_at": None},
+            {"revision": "new-catalogue", "confirmed_at": "2026-11-25T18:00:00+00:00"},
+        ]
+    )
+    checks = []
+
+    def app_request(route):
+        """A matching build can respond before its integration publishes the catalogue."""
+        checks.append(route)
+        if route == "ha/catalogue/refresh":
+            return next(catalogue_statuses)
+        assert route == "version"
+        return {
             "status": "matched",
             "app": {
                 "version": "0.0.0.dev1",
@@ -472,20 +483,26 @@ def test_update_observes_stopped_state_before_both_database_snapshots(
                 "release_tag": None,
             },
             "integration": {"version": "0.0.0.dev1", "build": None},
-        },
-    )
-    verified = []
-    monkeypatch.setattr(supervisor_smoke, "verify_retained", lambda: verified.append("retained"))
-    monkeypatch.setattr(supervisor_smoke, "browser_ingress", lambda: verified.append("ingress"))
+        }
+
+    monkeypatch.setattr(supervisor_smoke, "app_request", app_request)
+    monkeypatch.setattr(supervisor_smoke, "verify_retained", lambda: checks.append("retained"))
+    monkeypatch.setattr(supervisor_smoke, "browser_ingress", lambda: checks.append("ingress"))
     if update_stops:
         supervisor_smoke.update()
         assert snapshots == ["stopped", "updated_stopped"]
-        assert verified == ["retained", "ingress"]
+        assert checks == [
+            "version",
+            "ha/catalogue/refresh",
+            "ha/catalogue/refresh",
+            "retained",
+            "ingress",
+        ]
     else:
         with pytest.raises(RuntimeError, match="stopped updated app before database comparison"):
             supervisor_smoke.update()
         assert snapshots == ["stopped"]
-        assert verified == [] and phase == "updating"
+        assert checks == [] and phase == "updating"
 
 
 def test_update_stop_timeout_prevents_snapshot_and_source_changes(tmp_path, monkeypatch):

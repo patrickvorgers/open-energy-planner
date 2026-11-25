@@ -163,7 +163,8 @@ flowchart LR
         HS["Current entities and Recorder history"]
         subgraph INT["Custom Open Energy Planner integration"]
             BR["Source bridge: selection, measurements, history"]
-            SY["API client: synchronization and reception"]
+            SY["API client: plan status, commands and receipt"]
+            DS["API client: observations and data requests"]
             EX["Local schedule and validity"]
             VE["Virtual devices, commands and EMS status"]
         end
@@ -171,7 +172,7 @@ flowchart LR
         HW["Physical integrations, devices and protection"]
         HC --> BR
         HS --> BR
-        BR --> SY
+        BR --> DS
         SY -->|"Validated complete plan"| EX
         EX -->|"Current command or unavailable"| VE
         VE -->|"State changes"| AU
@@ -216,15 +217,17 @@ flowchart LR
     W --> WEATHER
     M --> SRC
     F --> SRC
-    SY -->|"Sources, measurements, history, requests, receipts"| API
-    API -->|"Configuration, history requests, plan, status in responses"| SY
+    SY -->|"Plan status, conditional command fetch, receipts"| API
+    API -->|"Committed plan identity, commands and capability proof"| SY
+    DS -->|"Current observations and requested history"| API
+    API -->|"Setup, source configuration and history requests"| DS
     style APP fill:#eaf2ff,stroke:#2563eb,stroke-width:2px,color:#182a3a
     style HA fill:#e9f7f3,stroke:#147d64,stroke-width:2px,color:#182a3a
     style INT fill:#fff1dc,stroke:#c46b08,stroke-width:2px,color:#182a3a
     style EXT fill:#f1f5f9,stroke:#64748b,stroke-width:2px,color:#182a3a
 ```
 
-Return arrows are responses, not inbound app callbacks. Internal arrows are data flows, not separate network services. The solver receives plain snapshots/results, not database connections/sessions. UI uses HA OS ingress or a tested Container sidebar route. Only the app accesses its archive. Neither component directly queries HA SQL.
+Return arrows show replies to authenticated integration requests. Internal arrows are data flows, not separate network services. The solver receives plain snapshots/results, not database connections/sessions. UI uses HA OS ingress or a tested Container sidebar route. Only the app accesses its archive. Neither component directly queries HA SQL.
 
 ### 1.3 Implemented history boundary
 
@@ -1056,8 +1059,8 @@ Assistant entry ID, which stays the same across a verified replacement.
 | Event | Home Assistant behavior |
 | --- | --- |
 | Ordinary update, reconnect or app configuration change | Keep the entry, device identities and local control intent. Reconcile additions and withdrawals against the current app catalogue. |
-| Existing duplicate entries | After trusted pairing and an authenticated snapshot, keep the entry that matches the current app and unload and remove the obsolete entries through Home Assistant. |
-| Clean app with a different UUID | Verify the new app by trusted pairing and authenticated snapshot. Stop the old coordinator, clear the previous OEP registry projection, planning groups and local intent, then bind and rebuild within the same entry. A new projection namespace prevents old registry metadata from being restored for a reused device key. |
+| Existing duplicate entries | After trusted pairing and an authenticated plan status response, keep the entry that matches the current app and unload and remove the obsolete entries through Home Assistant. |
+| Clean app with a different UUID | Verify the new app by trusted pairing and authenticated plan status. Stop the old coordinator, clear the previous OEP registry projection, planning groups and local intent, then bind and rebuild within the same entry. A new projection namespace prevents old registry metadata from being restored for a reused device key. |
 | Connection or setup interrupted | Withdraw unusable commands. Keep the existing installation binding until a replacement is verified. A repeated authenticated handshake resumes incomplete setup without creating another entry. |
 
 The same Supervisor app slot can replace its previous installation
@@ -1365,7 +1368,7 @@ The contract editor hides the bidding-area input when the Home Assistant country
 
 After a 600 ms typing pause, the editor validates the complete draft through the existing authenticated preview endpoint. Examples appear directly below the formulas and optional bonus inside their shared price rule. Saving remains explicit and is allowed only for the validated current revision. New edits immediately clear examples and disable save. Delayed responses cannot validate newer edits. Manual Preview rates runs the same check immediately. Validation failures do not schedule retry loops or create contract revisions.
 
-Each unsaved bonus rule also previews its current reset-period budget: maximum, actual export, remaining kWh, reset date and measurement time. This sums all required Energy Dashboard export counters, excluding import and battery counters. The existing authenticated snapshot/history protocol fetches missing annual history for the latest draft after saved-rule evidence takes priority. Draft rules and derived baselines remain in a bounded in-memory preview cache, expire after five idle minutes and never activate planning or write contract/counter revisions. The browser refreshes a pending history preview every three seconds. Changed drafts invalidate old requests and incomplete history remains explicitly unknown. Stored confirmations remain authoritative. Current-period figures do not predict future exports. Future-rule displays identify the measured period. Actual saving still initiates the ordinary durable baseline flow.
+Each unsaved bonus rule also previews its current reset-period budget: maximum, actual export, remaining kWh, reset date and measurement time. This sums all required Energy Dashboard export counters, excluding import and battery counters. The authenticated HA requests and history endpoints fetches missing annual history for the latest draft after saved-rule evidence takes priority. Draft rules and derived baselines remain in a bounded in-memory preview cache, expire after five idle minutes and never activate planning or write contract/counter revisions. The browser refreshes a pending history preview every three seconds. Changed drafts invalidate old requests and incomplete history remains explicitly unknown. Stored confirmations remain authoritative. Current-period figures do not predict future exports. Future-rule displays identify the measured period. Actual saving still initiates the ordinary durable baseline flow.
 
 
 The Contract page has one list of complete **Price rules**. Each effective date activates the import formula, export formula and optional bonus together. A replacement copies the preceding rule and supersedes it without resetting bonus usage. Disabling an existing bonus emits a zero-rate continuation with its existing internal counter identity. Re-enabling it retains that identity and annual period. The user never names a Bonus rule ID. Existing source identities remain internal evidence rather than being rewritten.

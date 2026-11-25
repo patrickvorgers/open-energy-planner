@@ -421,7 +421,12 @@ def test_coordinator_outage_and_local_unavailability_emit_guarded_stop_without_r
         hass = HomeAssistant(str(tmp_path))
         entry = SimpleNamespace(entry_id="thermal-outage", data={"url": "http://app"})
         peer = PlanCoordinator(
-            hass, entry, SimpleNamespace(snapshot=AsyncMock(side_effect=ClientError("offline")))
+            hass,
+            entry,
+            SimpleNamespace(
+                plan_status=AsyncMock(side_effect=ClientError("offline")),
+                service_requests=AsyncMock(side_effect=ClientError("offline")),
+            ),
         )
         events = []
 
@@ -507,7 +512,7 @@ def test_thermal_observation_identity_failure_uses_connection_attention(
         """Reject the actual observation transfer after a valid thermal snapshot has been received."""
         async with running_chain() as (hass, entry, _url, _root):
             peer = entry.runtime_data
-            snapshot, request = peer.client.snapshot, peer.client.request
+            snapshot, request = peer.client.service_requests, peer.client.request
             projection = coordinator(hass, device(dt_util.utcnow())).thermal
             accepted_plan = peer.schedule.plan
             error = (
@@ -526,7 +531,7 @@ def test_thermal_observation_identity_failure_uses_connection_attention(
                     raise error("peer identity rejected")
                 return await request(method, path, *args, **kwargs)
 
-            monkeypatch.setattr(peer.client, "snapshot", configured_snapshot)
+            monkeypatch.setattr(peer.client, "service_requests", configured_snapshot)
             monkeypatch.setattr(peer.client, "request", rejected_observation)
             log_start = len(caplog.records)
             await peer.sync()
@@ -593,7 +598,7 @@ def test_malformed_projection_retains_virtual_registry_and_user_name(monkeypatch
         """Publish a valid device first, then corrupt only its next optional thermal projection."""
         async with running_chain() as (hass, entry, _url, _root):
             peer = entry.runtime_data
-            snapshot, request = peer.client.snapshot, peer.client.request
+            snapshot, request = peer.client.service_requests, peer.client.request
             row = device(dt_util.utcnow())
             projection = coordinator(hass, row).thermal
             corrupt = False
@@ -615,7 +620,7 @@ def test_malformed_projection_retains_virtual_registry_and_user_name(monkeypatch
                     return deepcopy(projection)
                 return await request(method, path, *args, **kwargs)
 
-            monkeypatch.setattr(peer.client, "snapshot", thermal_snapshot)
+            monkeypatch.setattr(peer.client, "service_requests", thermal_snapshot)
             monkeypatch.setattr(peer.client, "request", thermal_request)
             await peer.sync()
             await hass.async_block_till_done()
@@ -744,8 +749,30 @@ def test_optional_thermal_projection_fault_keeps_real_mixed_plan_and_guards_only
             assert path == "/v1/thermal/observations"
             return deepcopy(snapshot["thermal"])
 
+        async def status():
+            """Return plan identity independently of thermal metadata."""
+            return {
+                "release": RELEASE,
+                "config_revision": snapshot["config_revision"],
+                "enabled": True,
+                "plan_id": snapshot["plan"]["plan_id"],
+                "acknowledged_plan": snapshot["plan"]["plan_id"],
+                "measurements_required": False,
+            }
+
+        async def commands(plan_id):
+            """Return the matching commands and mounted capabilities."""
+            assert plan_id == snapshot["plan"]["plan_id"]
+            return {
+                "plan": deepcopy(snapshot["plan"]),
+                "devices": [{"id": "battery", "kind": "battery"}],
+                "ev_points": [{"id": "wallbox", "control": "variable"}],
+            }
+
         client = SimpleNamespace(
-            snapshot=AsyncMock(side_effect=read_snapshot),
+            plan_status=AsyncMock(side_effect=status),
+            plan=AsyncMock(side_effect=commands),
+            service_requests=AsyncMock(side_effect=read_snapshot),
             request=AsyncMock(side_effect=observations),
             acknowledge=AsyncMock(),
         )

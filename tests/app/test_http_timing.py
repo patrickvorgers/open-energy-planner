@@ -98,7 +98,6 @@ def test_ha_command_snapshot_attributes_waiting_settlement_to_its_own_phase(tmp_
                     "/v1/snapshot?source=PRIVATE-QUERY-SENTINEL",
                     headers={
                         "Authorization": "Bearer " + token,
-                        "X-OEP-View": "commands",
                         "X-OEP-Release": BUILD_INFO["version"],
                         "X-OEP-Build": BUILD_INFO["build"] or "",
                     },

@@ -172,13 +172,31 @@ def test_large_discovery_transfers_tail_vehicle_in_bounded_complete_snapshot(mon
 
 def test_build_change_during_optional_catalogue_exchange_is_not_suppressed(monkeypatch):
     """A build mismatch after a matching snapshot still reaches the HA action-required policy."""
+    from custom_components.open_energy_planner.client import ReleaseMismatchError
     from open_energy_planner import build_info
 
     async def scenario():
         """Swap app identity between real HTTP requests rather than injecting a validation exception."""
         async with running_chain(live=True) as (_hass, entry, _url, _root):
             coordinator = entry.runtime_data
-            snapshot = coordinator.client.snapshot
+            snapshot = coordinator.client.service_requests
+            coordinator.poll_cancel()
+            coordinator.poll_cancel = None
+            coordinator.service_cancel()
+            coordinator.service_cancel = None
+            async with coordinator.services_lock:
+                pass
+            request = coordinator.client.request
+            catalogue_rejections = []
+
+            async def inspect_rejection(method, path, body=None):
+                """Record the actual build rejection from the catalogue endpoint."""
+                try:
+                    return await request(method, path, body)
+                except ReleaseMismatchError as error:
+                    if path == "/v1/ha/catalogue":
+                        catalogue_rejections.append(error.status)
+                    raise
 
             async def snapshot_then_change_build():
                 """Return a matching snapshot, then emulate a different app build before catalogue refresh."""
@@ -188,9 +206,11 @@ def test_build_change_during_optional_catalogue_exchange_is_not_suppressed(monke
                 )
                 return data
 
-            monkeypatch.setattr(coordinator.client, "snapshot", snapshot_then_change_build)
+            monkeypatch.setattr(coordinator.client, "service_requests", snapshot_then_change_build)
+            monkeypatch.setattr(coordinator.client, "request", inspect_rejection)
             coordinator.catalogue_sent = None
-            await coordinator.sync()
+            await coordinator.sync_services()
+            assert catalogue_rejections == [409]
             assert coordinator.issue == "release_mismatch"
 
     asyncio.run(scenario())
@@ -536,20 +556,17 @@ def test_app_source_selection_saves_only_in_app_and_forwards_real_reports():
             assert len(bindings) == 6
             assert bindings["grid.export_energy"]["required"] is True
             assert bindings["grid.export_energy"]["quantity"] == "energy"
-            from custom_components.open_energy_planner.observation_bridge import ObservationBridge
-
             forwarded = []
-            original_capture = ObservationBridge.capture
+            original_upload = entry.runtime_data.client.observations
 
-            def observe_capture(bridge, *args, **kwargs):
+            async def observe_upload(report):
                 """Observe the actual coordinator's forwarded HA location without changing its report."""
-                ready, report = original_capture(bridge, *args, **kwargs)
                 forwarded.append(report)
-                return ready, report
+                return await original_upload(report)
 
             from unittest.mock import patch
 
-            with patch.object(ObservationBridge, "capture", observe_capture):
+            with patch.object(entry.runtime_data.client, "observations", observe_upload):
                 await entry.runtime_data.sync()
             assert forwarded[-1]["location"] == {
                 "latitude": hass.config.latitude,
@@ -908,7 +925,7 @@ def test_optional_setup_catalogue_failure_does_not_block_current_plan(monkeypatc
                         attempts += 1
                     raise ClientError("Discovery temporarily unavailable")
                 data = await request(method, path, body)
-                if path == "/v1/snapshot":
+                if path == "/v1/ha/requests":
                     data["source"] = "home_assistant"
                     data["installation"]["setup_discovery_requested"] = refresh
                 return data
