@@ -61,6 +61,12 @@ def test_ev_publication_checks_only_charge_before_command_expiry(
     coordinator = PlanningCoordinator(service(), None)
     coordinator.active = original
     assert coordinator.publication_rejection(document, current.measured_at, current) == reason
+    assert (
+        coordinator.publication_rejection(
+            document, current.measured_at, replace(current, ev_revision="changed-ev-intent")
+        )
+        == "planning_work_changed"
+    )
     assert original.problem.ev_work[0].initial_soc == 50
     assert document["expected_flows"][1]["ev"][0]["stored_kwh"] == 5 - first_charge
     disconnected = replace(current, problem=replace(current.problem, ev_work=()))
@@ -70,13 +76,24 @@ def test_ev_publication_checks_only_charge_before_command_expiry(
     )
 
 
+def test_publication_ignores_ev_revision_for_a_plan_without_ev_work():
+    """Keep a checked plan usable when an already excluded EV request expires."""
+    original = replace(capture(NOW, 0.5), ev_revision="before-request-expiry")
+    current = replace(original, ev_revision="after-request-expiry")
+    outcome = asyncio.run(service().calculate(original))
+    assert outcome.document is not None
+    assert outcome.document["ev_context"]["work"] == []
+    coordinator = PlanningCoordinator(service(), None)
+    coordinator.active = original
+    assert coordinator.publication_rejection(outcome.document, NOW, current) is None
+
+
 @pytest.mark.parametrize(
     ("field", "reason"),
     [
         ("config_revision", "configuration_changed"),
         ("strategy", "configuration_changed"),
         ("appliance_revision", "planning_work_changed"),
-        ("ev_revision", "planning_work_changed"),
         ("thermal_revision", "planning_work_changed"),
     ],
 )

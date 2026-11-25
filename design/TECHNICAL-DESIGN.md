@@ -1134,7 +1134,10 @@ using validated internal-energy changes (including losses) through command expir
 Do not require the entire 48-hour forecast to remain exact or invent a SoC percentage
 threshold. EV capacity checks likewise integrate only remaining useful charge from
 the latest measurement through command expiry. A rising SoC must not be compared
-with the entire original charging horizon. Missing EV sessions still block publication.
+with the entire original charging horizon. Missing sessions used by the candidate
+still block publication. If the candidate contains no EV work, an EV revision
+change is coalesced into the next eligible round. This includes a request that
+expires after the planning cut-off for its departure has already passed.
 Material sensor deviations latch one pending request until submission with the latest
 snapshot. Ordinary source updates, readiness recovery and publication retries
 wait for a clock boundary. A busy coordinator keeps the request pending and

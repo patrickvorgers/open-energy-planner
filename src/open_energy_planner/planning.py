@@ -499,9 +499,10 @@ class PlanningCoordinator:
             or original.strategy != current.strategy
         ):
             return "configuration_changed"
+        original_ev = getattr(original.problem, "ev_work", ())
         if (
             original.appliance_revision != current.appliance_revision
-            or original.ev_revision != current.ev_revision
+            or (original_ev and original.ev_revision != current.ev_revision)
             or original.thermal_revision != current.thermal_revision
             or type(original.problem) is not type(current.problem)
         ):
@@ -517,7 +518,6 @@ class PlanningCoordinator:
             for work in getattr(original.problem, "thermal_work", ())
         ):
             return "thermal_dispatch_window_elapsed"
-        original_ev = getattr(original.problem, "ev_work", ())
         current_ev = {work.session_id: work for work in getattr(current.problem, "ev_work", ())}
         until = datetime.fromisoformat(document["valid_until"])
         for work in original_ev:
