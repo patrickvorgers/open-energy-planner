@@ -42,6 +42,18 @@ def test_shared_legends_use_full_plot_width_and_keep_controls(app_page):
     plan = page.locator("#plan-chart")
     price = page.locator("#price-chart")
     assert price.bounding_box()["y"] > plan.bounding_box()["y"] + plan.bounding_box()["height"]
+    spacing = plan.evaluate("""canvas => {
+        const tick = Chart.getChart(canvas).scales.x.getLabelItems()[0];
+        const center = canvas.getBoundingClientRect().top + tick.options.translation[1] + tick.textOffset;
+        const stripBottom = canvas.parentElement.querySelector(".grid-mode-track").getBoundingClientRect().bottom;
+        const priceTop = document.getElementById("linked-price-heading").getBoundingClientRect().top;
+        return {
+            stripGap: center - tick.font.lineHeight / 2 - stripBottom,
+            headingGap: priceTop - center - tick.font.lineHeight / 2
+        };
+    }""")
+    assert spacing["stripGap"] >= 0, spacing
+    assert 0 < spacing["headingGap"] <= 36, spacing
     scales = page.evaluate("""() => ["plan-chart", "price-chart"].map(id => {
         const chart = Chart.getChart(id);
         return [chart.scales.x.min, chart.scales.x.max, chart.chartArea.left, chart.chartArea.right];

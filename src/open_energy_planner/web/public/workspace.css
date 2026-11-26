@@ -14,7 +14,7 @@
 .compact-planning-legend summary { padding:6px 0; }
 .workspace .planning-series-options { position:absolute; inset-inline-end:0; z-index:4; width:min(28rem, calc(100vw - 4.5rem)); max-height:55vh; overflow:auto; padding:12px; background:white; border:1px solid var(--oep-line); border-radius:10px; box-shadow:0 4px 16px #1c334026; }
 .planning-series-options .chart-legend { display:grid; grid-template-columns:repeat(auto-fit,minmax(min(175px,100%),1fr)); gap:4px 12px; padding-top:6px; }
-.linked-price { min-width:0; border-top:1px solid var(--oep-line); margin-top:10px; padding-top:12px; }
+.linked-price { min-width:0; border-top:1px solid var(--oep-line); margin-top:4px; padding-top:4px; }
 .linked-price h4 { margin:0; font-size:16px; }
 .linked-price header p { margin:4px 0; }
 .linked-price .chart-legend { display:flex; flex-wrap:wrap; gap:2px 16px; padding-top:4px; }
