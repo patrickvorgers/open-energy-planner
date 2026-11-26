@@ -84,6 +84,7 @@ class BusPV:
     """Own source availability and permitted on/off commands, distinct from physical clipping."""
 
     source: PVUnit
+    keep_idle_enabled: bool = True
 
     def declare_variables(self, context):
         """Declare one source's used DC energy and proposed enabled state."""
@@ -95,10 +96,18 @@ class BusPV:
         add_constraint = context.native.addConstr
         variables = binding.variables
         clipping = context.binding("inv:" + self.source.inverter_id).variables["clip"]
-        for interval_index, (step, first) in enumerate(
-            zip(context.intervals, controls(context.intervals), strict=True)
+        control_starts = controls(context.intervals)
+        availability = tuple(
+            dict(step.pv_sources)[self.source.source_id] for step in context.intervals
+        )
+        producing_groups = {
+            first
+            for first, available in zip(control_starts, availability, strict=True)
+            if available > 0
+        }
+        for interval_index, (available, first) in enumerate(
+            zip(availability, control_starts, strict=True)
         ):
-            available = dict(step.pv_sources)[self.source.source_id]
             add_constraint(
                 variables["used"][interval_index] <= available * variables["on"][interval_index]
             )
@@ -106,10 +115,12 @@ class BusPV:
                 variables["used"][interval_index]
                 >= available * (variables["on"][interval_index] - clipping[interval_index])
             )
-            if not self.source.can_curtail:
-                add_constraint(variables["on"][interval_index] == 1)
             if first != interval_index:
                 add_constraint(variables["on"][interval_index] == variables["on"][first])
+            elif not self.source.can_curtail or (
+                self.keep_idle_enabled and first not in producing_groups
+            ):
+                add_constraint(variables["on"][interval_index] == 1)
 
 
 @dataclass(frozen=True)

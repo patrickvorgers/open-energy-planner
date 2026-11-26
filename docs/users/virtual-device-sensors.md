@@ -87,6 +87,8 @@ the Grid and battery signals together.
 `on`: the plan permits production. `off`: the plan proposes curtailment by switching production off. Unavailable without a usable current device command. **Use:** Map the proposal to your inverter's supported enable/disable action. This sensor is not a writable switch and does not confirm actual production.
 
 
+If OEP forecasts zero production for the entire control interval, the plan permits production. A 0 kW graph value by itself can also mean that OEP planned curtailment during a period with available solar.
+
 This sensor exists only for a configured solar source with on/off curtailment
 permission. A fixed-production source has no command sensor. `on` does not imply
 sunlight, a production level or a measured output in watts. No variable-power
