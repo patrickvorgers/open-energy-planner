@@ -214,7 +214,7 @@ function applicationFacts(app, projected, metadata, hasScheduling) {
 }
 
 /** Render the saved application facts and the draft editor with shared OEP controls. */
-export function renderApplication({app, current, draft, editor, summary, dialog, editing, rerender, changed}) {
+export function renderApplication({app, current, draft, editor, summary, dialog, sourceActions, editing, rerender, changed}) {
     const catalogue = current.catalogue || {};
     const metadata = new Map((catalogue.entities || []).map(source => [source.entity_id, source]));
     const options = current.energy_consumers || [];
@@ -232,8 +232,9 @@ export function renderApplication({app, current, draft, editor, summary, dialog,
     if (!editing) return;
 
     const fields = applicationFields(app, catalogue, metadata, draft, hasScheduling, rerender, changed);
-    editor.append(fields, node("h3", "Heat sources"));
-    if (!app.sources.length) editor.append(node("p", "No heat sources linked."));
+    heatSources.className = "thermal-heat-source-editor";
+    heatSources.prepend(node("h3", "Heat sources"));
+    editor.append(fields, heatSources);
     const updateSources = () => {
         if (space && !app.sources.some(source => source.allow_scheduling) && !validMargin(app.maximum_preheat_c)) {
             app.maximum_preheat_c = null;
@@ -280,11 +281,13 @@ export function renderApplication({app, current, draft, editor, summary, dialog,
             app.sources = app.sources.filter(row => row !== source);
             updateSources();
         }));
-        editor.append(section);
+        heatSources.append(section);
     }
     const occupiedMeters = new Set(current.occupied_meters || []);
     const add = action("Add heat source", () => chooseSource(dialog, app,
         options.filter(option => !occupiedMeters.has(option.entity_id)), metadata, rerender));
+    add.id = "add-thermal-source";
+    add.classList.remove("secondary");
     if (space && !app.area_id) add.dataset.requiresArea = "";
-    editor.append(add);
+    sourceActions.prepend(add);
 }
