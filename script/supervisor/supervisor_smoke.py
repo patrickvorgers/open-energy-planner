@@ -174,6 +174,71 @@ def pending_model_forecasts():
     return [json.loads(decode_payload(row[0]))["capture"]["forecasts"] for row in rows]
 
 
+def _forecast_ready(forecast, model, *, archived=False):
+    """Require trained evidence covering the planning window, or the exact live projection."""
+    duration_hours = sum(step["duration_h"] for step in forecast.get("steps", ()))
+    return (
+        forecast.get("model") == model
+        and bool(forecast.get("training_version"))
+        and datetime.fromisoformat(forecast["issued_at"]) <= datetime.now(UTC)
+        and bool(forecast.get("steps"))
+        and (duration_hours >= 48 if archived else duration_hours == 48)
+    )
+
+
+def _trained_device(entity, record, archives, observed):
+    """Check one component's live choice and archived training alternatives."""
+    forecast = record.get("forecast") or {}
+    baseline = record.get("baseline_forecast") or {}
+    selection = record.get("model_selection") or {}
+    alternatives = next(
+        (
+            row
+            for row in archives
+            if row.get("baseline", {}).get("configuration_version")
+            == baseline.get("configuration_version")
+            and row.get("baseline", {}).get("version") == baseline.get("version")
+        ),
+        {},
+    )
+    weather = alternatives.get("weather") or {}
+    selected = selection.get("selected")
+    active = alternatives.get(selected) or {}
+    windows = selection.get("windows") or []
+    status = record.get("status")
+    observed[entity] = {
+        "model": forecast.get("model"),
+        "trained": bool(forecast.get("training_version")),
+        "weather": _forecast_ready(weather, "xgboost-weather-v1", archived=True),
+        "ridge": _forecast_ready(alternatives.get("ridge") or {}, "ridge-v2", archived=True),
+    }
+    ready = (
+        (
+            status == "collecting_forward_accuracy"
+            and selected == "baseline"
+            and not windows
+            or status == "accuracy_validated"
+            and bool(windows)
+        )
+        and selection.get("completed_windows") == len(windows)
+        and (selected != "baseline" or record.get("weather_features_used") is False)
+        and bool(active)
+        and _forecast_ready(forecast, active["model"])
+        and forecast.get("version") == active.get("version")
+        and _forecast_ready(baseline, "weekday-hour-v2")
+        and observed[entity]["ridge"]
+    )
+    if entity == "sensor.oep_test_heat_pump_energy":
+        quality = selection.get("training_quality") or {}
+        if not (
+            observed[entity]["weather"]
+            and quality.get("source_hours", 0) >= MIN_MODEL_TRAINING_HOURS
+            and quality.get("used_hours", 0) >= MIN_MODEL_TRAINING_HOURS
+        ):
+            ready = False
+    return ready
+
+
 def model_history():
     """Require real fitted candidates and confirm that compared days support model selection.
 
@@ -188,17 +253,6 @@ def model_history():
     required = {"sensor.oep_test_heat_pump_energy", "sensor.oep_test_dishwasher_energy"}
     observed = {}
 
-    def forecast_ready(forecast, model, *, archived=False):
-        """Require trained evidence covering the planning window, or the exact live projection."""
-        duration_hours = sum(step["duration_h"] for step in forecast.get("steps", ()))
-        return (
-            forecast.get("model") == model
-            and bool(forecast.get("training_version"))
-            and datetime.fromisoformat(forecast["issued_at"]) <= datetime.now(UTC)
-            and bool(forecast.get("steps"))
-            and (duration_hours >= 48 if archived else duration_hours == 48)
-        )
-
     def trained():
         """Check fitted alternatives, the selected forecast and the partial household composition."""
         result = app_request("consumers").get("result") or {}
@@ -207,55 +261,8 @@ def model_history():
         ready = True
         for entity in sorted(required):
             record = records.get(entity, {})
-            forecast = record.get("forecast") or {}
-            baseline = record.get("baseline_forecast") or {}
-            selection = record.get("model_selection") or {}
-            alternatives = next(
-                (
-                    row
-                    for row in archives
-                    if row.get("baseline", {}).get("configuration_version")
-                    == baseline.get("configuration_version")
-                    and row.get("baseline", {}).get("version") == baseline.get("version")
-                ),
-                {},
-            )
-            weather = alternatives.get("weather") or {}
-            selected = selection.get("selected")
-            active = alternatives.get(selected) or {}
-            windows = selection.get("windows") or []
-            status = record.get("status")
-            observed[entity] = {
-                "model": forecast.get("model"),
-                "trained": bool(forecast.get("training_version")),
-                "weather": forecast_ready(weather, "xgboost-weather-v1", archived=True),
-                "ridge": forecast_ready(alternatives.get("ridge") or {}, "ridge-v2", archived=True),
-            }
-            if not (
-                (
-                    status == "collecting_forward_accuracy"
-                    and selected == "baseline"
-                    and not windows
-                    or status == "accuracy_validated"
-                    and bool(windows)
-                )
-                and selection.get("completed_windows") == len(windows)
-                and (selected != "baseline" or record.get("weather_features_used") is False)
-                and bool(active)
-                and forecast_ready(forecast, active["model"])
-                and forecast.get("version") == active.get("version")
-                and forecast_ready(baseline, "weekday-hour-v2")
-                and observed[entity]["ridge"]
-            ):
+            if not _trained_device(entity, record, archives, observed):
                 ready = False
-            if entity == "sensor.oep_test_heat_pump_energy":
-                quality = selection.get("training_quality") or {}
-                if not (
-                    observed[entity]["weather"]
-                    and quality.get("source_hours", 0) >= MIN_MODEL_TRAINING_HOURS
-                    and quality.get("used_hours", 0) >= MIN_MODEL_TRAINING_HOURS
-                ):
-                    ready = False
         if not ready:
             return None
         if not (
@@ -271,8 +278,8 @@ def model_history():
         demand = app_request("demand")
         if not (
             demand.get("ridge_status") == "partial_history"
-            and forecast_ready(demand.get("forecast") or {}, "consumer-composite-v1")
-            and forecast_ready(demand.get("candidate") or {}, "consumer-composite-v1")
+            and _forecast_ready(demand.get("forecast") or {}, "consumer-composite-v1")
+            and _forecast_ready(demand.get("candidate") or {}, "consumer-composite-v1")
         ):
             return None
         return result

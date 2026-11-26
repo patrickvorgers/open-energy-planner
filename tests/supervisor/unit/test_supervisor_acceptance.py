@@ -146,6 +146,7 @@ def test_supervisor_cli_failure_response_is_bounded(monkeypatch):
         "missing_training",
         "pending_weather",
         "ridge_missing",
+        "short_ridge_archive",
         "missing_composite",
         "private_detail",
         "additional_ready",
@@ -254,6 +255,8 @@ def test_example_model_acceptance_retains_baseline_and_fitted_candidates(
         records[0]["forecast"] = {**records[0]["forecast"], "training_version": None}
     elif invalid == "ridge_missing":
         del archives[1]["ridge"]
+    elif invalid == "short_ridge_archive":
+        archives[1]["ridge"]["steps"] = [{"duration_h": 47.75}]
     elif invalid == "missing_composite":
         responses["demand"]["candidate"] = None
     elif invalid == "private_detail":
