@@ -45,6 +45,13 @@
 .thermal-heat-source h5 { margin:12px 0 4px; font-size:14px; }
 .thermal-heat-source > code { display:block; overflow-wrap:anywhere; }
 .thermal-heat-source:last-child { margin-bottom:12px; }
+.thermal-heat-source-editor { margin-top:24px; padding-top:20px; border-top:1px solid var(--oep-line); }
+.thermal-heat-source-editor > h3 { margin:0 0 12px; }
+.settings-workspace .thermal-heat-source-editor .settings-switch { margin-bottom:8px; }
+.workspace .thermal-heat-source-editor .thermal-heat-source > button { margin-top:4px; }
+.thermal-source-actions:has(#add-thermal-source) { display:flex; flex-wrap:wrap; gap:8px; margin:20px 0 8px; padding-top:16px; border-top:1px solid var(--oep-line); }
+.workspace .thermal-source-actions:has(#add-thermal-source) > button { margin:0; }
+@media(max-width:520px) { .thermal-source-actions:has(#add-thermal-source) { display:grid; grid-template-columns:minmax(0,1fr); } }
 .settings-layout aside { position:sticky; top:170px; }
 .settings-layout fieldset { min-width:0; }
 .settings-readonly input:not([type=hidden]),.settings-readonly select { background:#f4f7fa; opacity:1; color:var(--oep-ink); }

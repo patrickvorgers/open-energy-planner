@@ -42,7 +42,7 @@ function validDraft() {
 /** Keep edit mode and the shared save state synchronized after rendering or an asynchronous operation. */
 function syncEditor() {
     find("thermal-editor").classList.toggle("settings-readonly", !editing);
-    for (const control of find("thermal-editor").querySelectorAll("input, select, button")) control.disabled = !editing || saveState.busy || "requiresArea" in control.dataset;
+    for (const control of document.querySelectorAll("#thermal-editor :is(input, select, button), #add-thermal-source")) control.disabled = !editing || saveState.busy || "requiresArea" in control.dataset;
     find("thermal-store-select").disabled = saveState.busy || editing || !selected();
     find("edit-thermal").disabled = saveState.busy || editing || !selected();
     find("add-thermal").disabled = saveState.busy;
@@ -94,6 +94,7 @@ function renderEditor() {
     if (!selected()) selectedId = entries[0]?.id || null;
     selector.value = selectedId || "";
     const store = selected(), editor = find("thermal-editor"); editor.replaceChildren();
+    find("add-thermal-source")?.remove();
     find("thermal-empty").hidden = Boolean(store); find("thermal-detail").hidden = !store;
     if (!store) { syncEditor(); return; }
     find("thermal-title").textContent = displayName(store);
@@ -102,7 +103,7 @@ function renderEditor() {
     find("thermal-detail").classList.toggle("thermal-application-layout", Boolean(store.kind));
     if (store.kind) {
         renderApplication({app: store, current, draft, editor, summary: find("thermal-summary"),
-            dialog: find("thermal-heat-source-dialog"), editing,
+            dialog: find("thermal-heat-source-dialog"), sourceActions: find("thermal-source-actions"), editing,
             rerender: () => retainInputs(renderEditor), changed: () => saveState.update()});
         syncEditor();
         return;
