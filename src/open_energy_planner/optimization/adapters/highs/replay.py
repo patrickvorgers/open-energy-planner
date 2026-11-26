@@ -35,7 +35,8 @@ def dispatch(problem, step, stored, commands):
         export_bonuses=(),
         terminal_valuations=(),
     )
-    model = InstallationModelFactory().build(physical)
+    # A previously published command can still be off when realized output is zero.
+    model = InstallationModelFactory().build(physical, keep_idle_pv_enabled=False)
     native = model.context.native
     for name, value in NATIVE_OPTIONS.items():
         if native.setOptionValue(name, value) != highspy.HighsStatus.kOk:

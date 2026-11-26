@@ -6,6 +6,7 @@ from fractions import Fraction
 import pytest
 
 from open_energy_planner.installation.validation import validate
+from open_energy_planner.optimization.adapters.highs.replay import dispatch
 from open_energy_planner.optimization.domain import Battery, Status
 from open_energy_planner.optimization.export_bonus import ExportBonus
 from tests.app.solver_regression.cases import CORE, installation, intervals
@@ -84,6 +85,50 @@ def test_negative_export_price_respects_pv_capability(solver, buy, can_curtail, 
     assert result.status == Status.OPTIMAL
     assert validate(problem, result.plan).cash_cost == pytest.approx(float(Fraction(cash)))
     assert result.plan.flows[0].grid_export == pytest.approx(exports)
+
+
+@pytest.mark.planner_scenario
+def test_curtailment_requires_forecast_production_in_the_control_interval(solver):
+    """Keep dark intervals enabled while allowing profitable daytime curtailment."""
+    steps = intervals((0.2,) * 4, (-0.08, -0.08, -0.08, 0.1), pv=1)
+    steps = (
+        replace(steps[0], pv_kwh=0),
+        replace(steps[1], pv_kwh=0, control_group="split"),
+        replace(steps[2], control_group="split"),
+        steps[3],
+    )
+    problem = installation(steps, battery=Battery(1, 1, minimum_kwh=1), can_curtail=True)
+    result = solver.solve(problem)
+
+    assert result.status == Status.OPTIMAL
+    validate(problem, result.plan)
+    assert [flow.solar[0].enabled for flow in result.plan.flows] == [True, False, False, True]
+    assert [flow.grid_export for flow in result.plan.flows] == pytest.approx([0, 0, 0, 1])
+
+
+@pytest.mark.planner_scenario
+def test_negative_export_price_keeps_pv_available_for_useful_storage(solver):
+    """Use available storage to avoid paying for export and later import."""
+    steps = intervals((0.2, 0.3), (-0.08, -0.08), pv=1)
+    steps = (steps[0], replace(steps[1], load_kwh=1, pv_kwh=0))
+    problem = installation(steps, battery=Battery(1, 0), can_curtail=True)
+    result = solver.solve(problem)
+
+    assert result.status == Status.OPTIMAL
+    assert validate(problem, result.plan).cash_cost == pytest.approx(0)
+    first, second = result.plan.flows
+    assert first.solar[0].enabled
+    assert first.batteries[0].charge_kwh == pytest.approx(1)
+    assert second.grid_import == pytest.approx(0)
+
+
+def test_replay_keeps_a_frozen_off_command_when_realized_production_is_zero():
+    """A published shutdown remains replayable even if no sun was realized."""
+    problem = installation(intervals((0.2,), (-0.08,)), can_curtail=True)
+    flow, _wear = dispatch(problem, problem.intervals[0], {}, {"pv": {"enabled": False}})
+
+    assert flow.solar[0].enabled is False
+    assert flow.solar[0].used_kwh == 0
 
 
 @pytest.mark.planner_scenario
