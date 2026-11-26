@@ -43,6 +43,32 @@ def solve_in_child(problem, sender, solver_time_limit, strategy=Strategy.COST):
         sender.close()
 
 
+def solve_with_ev_fallback_in_child(problem, sender, solver_time_limit, strategy, fallback):
+    """Reserve time in the EV stage and keep both attempts within one worker deadline."""
+    configure_worker_threads()
+    from open_energy_planner.appliances.ev.fallback import (
+        EV_FALLBACK_BUDGET_SECONDS,
+        EV_FALLBACK_REASONS,
+    )
+    from open_energy_planner.optimization.adapters.highs import HighsSolver
+
+    try:
+        deadline = monotonic() + solver_time_limit
+        reserve = min(EV_FALLBACK_BUDGET_SECONDS, solver_time_limit / 2)
+        solver = HighsSolver()
+        primary = solver.solve(problem, SolveOptions(solver_time_limit, strategy, reserve))
+        if primary.stop_reason in EV_FALLBACK_REASONS:
+            remaining = deadline - monotonic()
+            if remaining > 0:
+                alternative = solver.solve(fallback, SolveOptions(remaining, strategy))
+                if alternative.plan is not None:
+                    sender.send((alternative, True))
+                    return
+        sender.send((primary, False))
+    finally:
+        sender.close()
+
+
 class ProcessSolver:
     """Isolate native optimization behind a timed child process and asynchronous solver port."""
 
@@ -59,6 +85,26 @@ class ProcessSolver:
     async def solve(self, problem, *, strategy=Strategy.COST):
         """Offload child-process orchestration to a thread instead of blocking the event loop."""
         return await asyncio.to_thread(self._run, problem, strategy)
+
+    async def solve_with_ev_fallback(self, problem, fallback, *, strategy=Strategy.COST):
+        """Return the chosen solver result and whether the conservative input was used."""
+        try:
+            result, deferred = await asyncio.to_thread(
+                run_child,
+                solve_with_ev_fallback_in_child,
+                problem,
+                self.timeout_s,
+                self.solver_time_limit_s,
+                strategy,
+                fallback,
+            )
+            if not isinstance(result, SolveResult) or type(deferred) is not bool:
+                raise ValueError("Invalid worker result")
+            return result, deferred
+        except TimeoutError:
+            return SolveResult(Status.ERROR, None, "worker_timeout", 0, 0, None), False
+        except (OSError, RuntimeError, TypeError, ValueError):
+            return SolveResult(Status.ERROR, None, "worker_failed", 0, 0, None), False
 
     def _run(self, problem, strategy=Strategy.COST):
         """Use the shared bounded child lifecycle and retain the existing solver failure contract."""

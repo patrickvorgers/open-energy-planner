@@ -367,14 +367,34 @@ SoC availability, target completion and control capability. Only eligible live
 `EVWork` contributes scheduled charging. There is no historical EV fallback or
 inferred future arrival. Original component forecasts and actual meter histories
 remain immutable evidence. The existing separation proof is still required.
+
+If HiGHS returns `ev_service_unproven` or reaches the reserved EV service
+deadline (`ev_service_time_limit`) after the charging forecasts were
+separated successfully, OEP can publish a checked energy plan without EV
+commands. The worker reserves up to 20 seconds of the shared native budget
+for this retry when there is a usable alternative. The fallback restores
+each original charge-point forecast exactly once within its original
+intervals. It keeps heating, appliance work and contract rules. The grid
+limits use the largest required headroom over the horizon in each direction
+to allow charging between zero and the configured maximum of every point.
+Battery commands use fixed power in this mode. If an input is missing,
+the headroom cannot fit, or the alternative fails normal validation or
+publication checks, OEP keeps the failed status and retries on a later
+planning boundary. A valid replacement supersedes previous EV permissions.
+
+While this alternative is active, the notification says that expected
+charging is included, EV control is deferred, and the next planning round
+tries automatically. A failed round without an active alternative has a
+separate waiting notification.
+
 `LiveInputs` blocks publication when the EV service cannot establish the forecast
 boundary. If the discovered Home Assistant Energy catalogue lacks a configured
 charge-point meter, `ev_energy_meter_missing` points to EV settings and asks the
 user to restore the meter link. Only the authenticated settings view names the
 missing meter. Otherwise, `ev_forecast_boundary_unavailable` explains that OEP
 will retry and points to consumption forecasts if the problem persists. Both
-log messages use fixed text. Thermal fallback may retain a boiler forecast but
-cannot silently restore an EV forecast.
+log messages use fixed text. Thermal fallback may retain a boiler forecast
+while preserving the independent EV admission check.
 
 `EVService.execution_deviated` compares fresh point power with the active
 published command, including zero when no EV command exists. A difference of at
