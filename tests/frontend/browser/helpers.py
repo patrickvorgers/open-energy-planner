@@ -43,9 +43,17 @@ def discover_boiler_sources(page, url):
     return body
 
 
+def start_electric_boiler_setup(page):
+    """Choose Electric boiler from the common Thermal application picker."""
+    page.get_by_role("button", name="Add application", exact=True).click()
+    dialog = page.get_by_role("dialog", name="Add thermal application", exact=True)
+    dialog.get_by_label("Application type", exact=True).select_option(label="Electric boiler")
+    dialog.get_by_role("button", name="Continue", exact=True).click()
+
+
 def add_thermal_appliance(page):
     """Select an available Energy device before editing its boiler-specific physical configuration."""
-    page.get_by_role("button", name="Add electric boiler", exact=True).click()
+    start_electric_boiler_setup(page)
     page.get_by_role("dialog", name="Add electric boiler", exact=True).locator(
         "button.source-choice:enabled"
     ).first.click()
