@@ -152,6 +152,7 @@ def read_climate(hass, application, now):
 
 
 def _validate_projection_header(document):
+    """Require the known projection fields and a revision, with a nullable configuration version."""
     required = {"configuration_version", "revision", "devices"}
     if (
         not isinstance(document, dict)
@@ -176,6 +177,7 @@ def _validate_projection_header(document):
 
 
 def _validate_revision(value):
+    """Reject values other than a lowercase, 64-character hexadecimal revision."""
     if not isinstance(value, str) or not HASH_PATTERN.fullmatch(value):
         raise ValueError("Invalid thermal revision")
 
@@ -384,6 +386,7 @@ def _receive_shared_source(meter, source, modes):
 
 
 def _receive_reported_mode(mode, options):
+    """Accept no report or a timestamped report naming an available mode."""
     if mode is not None:
         if not isinstance(mode, dict) or set(mode) != {"application_id", "observed_at"}:
             raise ValueError("Invalid reported thermal mode")

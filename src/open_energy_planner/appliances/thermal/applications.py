@@ -70,6 +70,7 @@ def validate_shape(applications):
 
 
 def _valid_label(value):
+    """Accept nonblank text within the application label length limit."""
     return (
         isinstance(value, str)
         and 0 < len(value) <= MAX_APPLICATION_NAME_LENGTH
@@ -222,6 +223,7 @@ def shared_sources(applications):
 
 
 def _ordered_mode_reports(samples):
+    """Sort valid timezone-aware mode reports by time, skipping malformed reports."""
     reports = []
     for sample in samples:
         try:
