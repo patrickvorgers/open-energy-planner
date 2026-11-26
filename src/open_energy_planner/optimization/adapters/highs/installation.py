@@ -127,7 +127,9 @@ class BuiltInstallationModel:
 class InstallationModelFactory:
     """Compose independent converters, storage and PV around one bounded AC grid connection."""
 
-    def build(self, problem: "InstallationProblem") -> BuiltInstallationModel:
+    def build(
+        self, problem: "InstallationProblem", *, keep_idle_pv_enabled: bool = True
+    ) -> BuiltInstallationModel:
         """Declare model-local variables, then add bus conservation, saturation, command and cost constraints."""
         context = HighsModelContext(problem.intervals)
         from .appliances import declare
@@ -159,7 +161,10 @@ class InstallationModelFactory:
             for inverter in problem.inverters
         )
         components.extend(BusBattery(battery_item) for battery_item in problem.batteries)
-        components.extend(BusPV(pv_source) for pv_source in problem.pv_sources)
+        components.extend(
+            BusPV(pv_source, keep_idle_enabled=keep_idle_pv_enabled)
+            for pv_source in problem.pv_sources
+        )
         bindings = [(component, component.declare_variables(context)) for component in components]
         for component, binding in bindings:
             component.add_constraints(context, binding)
