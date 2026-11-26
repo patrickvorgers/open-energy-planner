@@ -15,6 +15,7 @@ from script.ci.check_ci_candidate import (
     require_included_base,
     require_prerequisites,
     require_repowise_disposition,
+    review_comments,
 )
 from script.ci.check_commit_signatures import GitHub, VerificationError, sha
 from script.ci.pr_readiness import require_clear_formal_reviews, require_resolved_threads
@@ -46,7 +47,7 @@ def check(repository, number, head, base, client):
     require_prerequisites(checks)
     if current.get("user", {}).get("login") != "dependabot[bot]":
         require_automated_review(checks, repository, number, head, client)
-        require_repowise_disposition(checks, repository, number, current, client)
+        require_repowise_disposition(checks, review_comments(repository, number, client), current)
     require_resolved_threads(repository, number, client)
     require_clear_formal_reviews(repository, number, head, base, client)
 

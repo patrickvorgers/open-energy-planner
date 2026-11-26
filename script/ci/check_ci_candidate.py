@@ -248,13 +248,11 @@ def recorded_repowise_disposition(comment, marker, author_ids):
     return first.rstrip("\r") == marker and bool(explanation.strip())
 
 
-def require_repowise_disposition(checks, repository, number, current, client):
-    """Require an actual current scan and a matching disposition from the PR author or repo owner."""
+def require_repowise_scan(checks, comments, head, base):
+    """Return the latest successful, authentically published RepoWise check for this revision."""
     latest = latest_check(checks, "Repowise review", REPOWISE_APP_ID)
     if not latest or (latest.get("status"), latest.get("conclusion")) != ("completed", "success"):
         raise VerificationError("Wait for the current-head RepoWise scan to finish successfully")
-    head, base = current["head"]["sha"], current["base"]["sha"]
-    comments = review_comments(repository, number, client)
     summaries = [
         comment
         for comment in comments
@@ -262,14 +260,26 @@ def require_repowise_disposition(checks, repository, number, current, client):
     ]
     if len(summaries) != 1:
         raise VerificationError("Missing or ambiguous RepoWise publication for this head and base")
+    return latest["id"]
+
+
+def repowise_disposition_author_ids(current):
+    """Read numeric identities from current GitHub PR metadata."""
     repo = current["base"].get("repo")
     owner = repo.get("owner") if isinstance(repo, dict) else None
-    author_ids = [
+    return [
         actor.get("id")
         for actor in (current.get("user"), owner)
         if isinstance(actor, dict) and type(actor.get("id")) is int
     ]
-    marker = f"<!-- oep-repowise-disposition:{head}:{base}:{latest['id']} -->"
+
+
+def require_repowise_disposition(checks, comments, current):
+    """Require the PR author or repo owner to account for findings on the exact current scan."""
+    head, base = current["head"]["sha"], current["base"]["sha"]
+    check_id = require_repowise_scan(checks, comments, head, base)
+    author_ids = repowise_disposition_author_ids(current)
+    marker = f"<!-- oep-repowise-disposition:{head}:{base}:{check_id} -->"
     if not any(recorded_repowise_disposition(comment, marker, author_ids) for comment in comments):
         raise VerificationError(
             "Record the RepoWise disposition for the current head, base and scan"
@@ -422,7 +432,7 @@ def check(event, repository, client):
     require_prerequisites(checks)
     if current.get("user", {}).get("login") != "dependabot[bot]":
         require_automated_review(checks, repository, number, head, client)
-        require_repowise_disposition(checks, repository, number, current, client)
+        require_repowise_disposition(checks, review_comments(repository, number, client), current)
     require_resolved_threads(repository, number, client)
     require_clear_formal_reviews(repository, number, head, base, client)
     final_count = current_pr().get("changed_files")

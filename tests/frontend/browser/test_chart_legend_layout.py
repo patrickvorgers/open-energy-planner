@@ -42,6 +42,31 @@ def test_shared_legends_use_full_plot_width_and_keep_controls(app_page):
         page.locator("#plan-chart-legend").get_by_role("button", name="Deselect all", exact=True)
     ).to_be_hidden()
     _assert_linked_plot_layout_and_inspection(page, optimizer)
+    _assert_each_chart_has_series_controls(page)
+    legend = page.locator("#plan-chart-legend")
+    series.click()
+    expect(legend.get_by_role("checkbox", name=LONG_NAME, exact=True)).to_be_visible()
+    expect(legend.get_by_role("checkbox", name="Unused appliance", exact=True)).not_to_be_visible()
+    if page.viewport_size["width"] > 640:
+        assert (
+            legend.evaluate(
+                "legend => new Set([...legend.querySelectorAll('label:not([hidden])')].map(label=>Math.round(label.getBoundingClientRect().left))).size"
+            )
+            > 1
+        )
+    bulk = legend.get_by_role("button", name="Deselect all", exact=True)
+    bulk.focus()
+    page.keyboard.press("Space")
+    expect(legend.get_by_role("button", name="Select all", exact=True)).to_be_focused()
+    page.keyboard.press("Space")
+    expect(legend.get_by_role("checkbox", name="Grid import: AC", exact=True)).to_be_checked()
+    assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+    page.keyboard.press("Escape")
+    expect(series).to_be_focused()
+
+
+def _assert_each_chart_has_series_controls(page):
+    """Individual toggles share the collapsed interaction and preserve source series."""
     page.locator("#battery-plan-panel > summary").click()
     for identity in (
         "self-consumption-chart",
@@ -79,26 +104,6 @@ def test_shared_legends_use_full_plot_width_and_keep_controls(app_page):
             )
             == original
         )
-    legend = page.locator("#plan-chart-legend")
-    series.click()
-    expect(legend.get_by_role("checkbox", name=LONG_NAME, exact=True)).to_be_visible()
-    expect(legend.get_by_role("checkbox", name="Unused appliance", exact=True)).not_to_be_visible()
-    if page.viewport_size["width"] > 640:
-        assert (
-            legend.evaluate(
-                "legend => new Set([...legend.querySelectorAll('label:not([hidden])')].map(label=>Math.round(label.getBoundingClientRect().left))).size"
-            )
-            > 1
-        )
-    bulk = legend.get_by_role("button", name="Deselect all", exact=True)
-    bulk.focus()
-    page.keyboard.press("Space")
-    expect(legend.get_by_role("button", name="Select all", exact=True)).to_be_focused()
-    page.keyboard.press("Space")
-    expect(legend.get_by_role("checkbox", name="Grid import: AC", exact=True)).to_be_checked()
-    assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
-    page.keyboard.press("Escape")
-    expect(series).to_be_focused()
 
 
 def _assert_linked_plot_layout_and_inspection(page, optimizer):
