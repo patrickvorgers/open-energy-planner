@@ -189,6 +189,8 @@ def test_poll_updates_active_and_completed_cycles_without_replacing_profile(revi
     page, devices, _ = review_evidence
     first = page.locator("#detected-cycles > li").first
     chart_identity = page.locator("#cycle-chart").evaluate("canvas => Chart.getChart(canvas).id")
+    energy_chart = page.locator("#cycle-energy-chart")
+    energy_chart_identity = energy_chart.evaluate("canvas => Chart.getChart(canvas).id")
     devices[0]["observed_run"] = {
         "status": "observed",
         "started_at": "2026-07-20T10:00:00Z",
@@ -210,6 +212,7 @@ def test_poll_updates_active_and_completed_cycles_without_replacing_profile(revi
         page.locator("#cycle-chart").evaluate("canvas => Chart.getChart(canvas).id")
         == chart_identity
     )
+    assert energy_chart.evaluate("canvas => Chart.getChart(canvas).id") == energy_chart_identity
     devices[0]["observed_run"]["status"] = "uncertain"
     page.clock.fast_forward(300000)
     expect(active).to_contain_text("Cycle detected")
