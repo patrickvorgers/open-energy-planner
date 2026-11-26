@@ -119,67 +119,45 @@ function chooseSource(dialog, app, options, metadata, add) {
     dialog.showModal();
 }
 
-/** Render the saved application facts and the draft editor with shared OEP controls. */
-export function renderApplication({app, current, draft, editor, summary, dialog, editing, rerender, changed}) {
-    const catalogue = current.catalogue || {};
-    const metadata = new Map((catalogue.entities || []).map(source => [source.entity_id, source]));
-    const options = current.energy_consumers || [];
-    const optionById = new Map(options.map(option => [option.entity_id, option]));
-    const projected = current.applications?.find(application => application.id === app.id);
+function renderHeatSource(source, option, {app, current, draft, editing}) {
+    const meter = source.energy_entity;
+    const power = option?.power_entity;
     const space = app.kind === SPACE_HEATING;
-    const sourceName = source => optionById.get(source.energy_entity)?.name || source.energy_entity;
-    const boilerFor = source => draft.stores.find(store => store.energy_entity === source.energy_entity);
-    const renderSource = source => {
-        const meter = source.energy_entity;
-        const power = optionById.get(meter)?.power_entity;
-        const section = node("section");
-        section.className = "thermal-heat-source settings-facts-group";
-        section.append(node("h4", sourceName(source)), node("h5", "Energy source"), node("code", meter));
-        if (power) section.append(node("h5", "Power source"), node("code", power));
-        const facts = editing ? [] : [["Planning permission", source.allow_scheduling ? "Allowed" : "Forecast only"]];
-        if (!editing && space && source.allow_scheduling && source.full_load_power_w !== undefined) {
-            facts.push(["Electrical input at full load", `${source.full_load_power_w.toLocaleString()} W`]);
+    const section = node("section");
+    section.className = "thermal-heat-source settings-facts-group";
+    section.append(node("h4", option?.name || meter), node("h5", "Energy source"), node("code", meter));
+    if (power) section.append(node("h5", "Power source"), node("code", power));
+    const facts = editing ? [] : [["Planning permission", source.allow_scheduling ? "Allowed" : "Forecast only"]];
+    if (!editing && space && source.allow_scheduling && source.full_load_power_w !== undefined) {
+        facts.push(["Electrical input at full load", `${source.full_load_power_w.toLocaleString()} W`]);
+    }
+    if (!space) facts.push(["Scheduling model", draft.stores.some(store => store.energy_entity === meter) ? "Electric boiler" : "Forecast only"]);
+    const mode = current.source_modes?.[meter]?.application_id;
+    const uses = draft.applications.filter(application => application.sources.some(link => link.energy_entity === meter));
+    if (uses.length > 1) {
+        const modeApplication = uses.find(application => application.id === mode);
+        facts.push(["Reported operating mode", current.applications?.find(row => row.id === mode)?.name || modeApplication?.name || "Not reported"]);
+        const attribution = current.mode_attribution?.[meter];
+        if (attribution) {
+            const energy = value => value.toLocaleString(undefined, {maximumFractionDigits: 2}) + " kWh";
+            const period = attribution.retained_from ? `Since ${when(attribution.retained_from)}` : "Last 30 days";
+            facts.push(["Attribution period", period],
+                ["Attributed electricity", energy(attribution.applications_kwh[app.id] ?? 0)],
+                ["Unattributed electricity at source", energy(attribution.unknown_kwh)]);
         }
-        if (!space) facts.push(["Scheduling model", boilerFor(source) ? "Electric boiler" : "Forecast only"]);
-        const mode = current.source_modes?.[meter]?.application_id;
-        const uses = draft.applications.filter(application => application.sources.some(link => link.energy_entity === meter));
-        if (uses.length > 1) {
-            const modeApplication = uses.find(application => application.id === mode);
-            facts.push(["Reported operating mode", current.applications?.find(row => row.id === mode)?.name || modeApplication?.name || "Not reported"]);
-            const attribution = current.mode_attribution?.[meter];
-            if (attribution) {
-                const energy = value => value.toLocaleString(undefined, {maximumFractionDigits: 2}) + " kWh";
-                const period = attribution.retained_from ? `Since ${when(attribution.retained_from)}` : "Last 30 days";
-                facts.push(["Attribution period", period],
-                    ["Attributed electricity", energy(attribution.applications_kwh[app.id] ?? 0)],
-                    ["Unattributed electricity at source", energy(attribution.unknown_kwh)]);
-            }
-        }
-        if (facts.length) {
-            const detail = node("div");
-            settingsSummary(detail, [["", facts]]);
-            section.append(detail);
-        }
-        return section;
-    };
-    const hasScheduling = space && app.sources.some(source => source.allow_scheduling);
-    const facts = space ? [["Heating area", projected?.name || app.name],
-        ["Temperature and target", metadata.get(app.climate_entity)?.name || app.climate_entity || "No thermostat linked"],
-        ["Outdoor temperature", "Automatic from weather data"]] : [];
-    if (hasScheduling) facts.push(["Maximum preheating", `+${app.maximum_preheat_c} °C`]);
-    if (projected?.actual) facts.push(["Current thermostat target", `${projected.actual.target_c} °C`]);
-    if (projected?.preheat_limit_c != null) facts.push(["Current preheating limit", `${projected.preheat_limit_c} °C`]);
-    if (projected?.planning_status) facts.push(["Planning status", projected.planning_status]);
-    settingsSummary(summary, space ? [["Home Assistant sources", facts]] : []);
-    const heatSources = node("div");
-    if (!editing) heatSources.append(...app.sources.map(renderSource));
-    summary.append(node("h3", "Heat sources"), heatSources);
-    if (!app.sources.length) heatSources.append(node("p", "No heat sources linked."));
-    if (!editing) return;
+    }
+    if (facts.length) {
+        const detail = node("div");
+        settingsSummary(detail, [["", facts]]);
+        section.append(detail);
+    }
+    return section;
+}
 
+function applicationFields(app, catalogue, metadata, draft, hasScheduling, rerender, changed) {
     const fields = node("div");
     fields.className = "settings-fields";
-    if (space) {
+    if (app.kind === SPACE_HEATING) {
         const area = node("select"), climate = node("select");
         area.dataset.field = "heating-area";
         climate.dataset.field = "climate-source";
@@ -220,6 +198,40 @@ export function renderApplication({app, current, draft, editor, summary, dialog,
         name.oninput = () => { app.name = name.value; changed(); };
         fields.append(field("Application name", name));
     }
+    return fields;
+}
+
+function applicationFacts(app, projected, metadata, hasScheduling) {
+    if (app.kind !== SPACE_HEATING) return [];
+    const facts = [["Heating area", projected?.name || app.name],
+        ["Temperature and target", metadata.get(app.climate_entity)?.name || app.climate_entity || "No thermostat linked"],
+        ["Outdoor temperature", "Automatic from weather data"]];
+    if (hasScheduling) facts.push(["Maximum preheating", `+${app.maximum_preheat_c} °C`]);
+    if (projected?.actual) facts.push(["Current thermostat target", `${projected.actual.target_c} °C`]);
+    if (projected?.preheat_limit_c != null) facts.push(["Current preheating limit", `${projected.preheat_limit_c} °C`]);
+    if (projected?.planning_status) facts.push(["Planning status", projected.planning_status]);
+    return [["Home Assistant sources", facts]];
+}
+
+/** Render the saved application facts and the draft editor with shared OEP controls. */
+export function renderApplication({app, current, draft, editor, summary, dialog, editing, rerender, changed}) {
+    const catalogue = current.catalogue || {};
+    const metadata = new Map((catalogue.entities || []).map(source => [source.entity_id, source]));
+    const options = current.energy_consumers || [];
+    const optionById = new Map(options.map(option => [option.entity_id, option]));
+    const projected = current.applications?.find(application => application.id === app.id);
+    const space = app.kind === SPACE_HEATING;
+    const sourceName = source => optionById.get(source.energy_entity)?.name || source.energy_entity;
+    const renderSource = source => renderHeatSource(source, optionById.get(source.energy_entity), {app, current, draft, editing});
+    const hasScheduling = space && app.sources.some(source => source.allow_scheduling);
+    settingsSummary(summary, applicationFacts(app, projected, metadata, hasScheduling));
+    const heatSources = node("div");
+    if (!editing) heatSources.append(...app.sources.map(renderSource));
+    summary.append(node("h3", "Heat sources"), heatSources);
+    if (!app.sources.length) heatSources.append(node("p", "No heat sources linked."));
+    if (!editing) return;
+
+    const fields = applicationFields(app, catalogue, metadata, draft, hasScheduling, rerender, changed);
     editor.append(fields, node("h3", "Heat sources"));
     if (!app.sources.length) editor.append(node("p", "No heat sources linked."));
     const updateSources = () => {

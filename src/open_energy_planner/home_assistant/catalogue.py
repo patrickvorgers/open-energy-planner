@@ -53,6 +53,18 @@ COUNTRY_BIDDING_AREA_OPTIONS = {
 BATTERY_ENERGY_FIELDS = ("soc_entity", "power_entity", "capacity_kwh", "charge_energy_entity")
 
 
+def _valid_area(area):
+    """Recognize one bounded area identity and display name."""
+    return (
+        isinstance(area, dict)
+        and set(area) == {"id", "name"}
+        and all(
+            isinstance(value, str) and value.strip() and len(value) <= MAX_CATALOGUE_FIELD_LENGTH
+            for value in area.values()
+        )
+    )
+
+
 class HACatalogue:
     """Keep bounded metadata and compact setup statistics in memory, separate from forecast training evidence."""
 
@@ -82,21 +94,9 @@ class HACatalogue:
         }:
             raise ValueError("Invalid HA catalogue")
         areas = body.get("areas", [])
-        if (
-            not isinstance(areas, list)
-            or any(
-                not isinstance(area, dict)
-                or set(area) != {"id", "name"}
-                or any(
-                    not isinstance(value, str)
-                    or not value.strip()
-                    or len(value) > MAX_CATALOGUE_FIELD_LENGTH
-                    for value in area.values()
-                )
-                for area in areas
-            )
-            or len({area["id"] for area in areas}) != len(areas)
-        ):
+        if not isinstance(areas, list) or not all(_valid_area(area) for area in areas):
+            raise ValueError("Invalid Home Assistant areas")
+        if len({area["id"] for area in areas}) != len(areas):
             raise ValueError("Invalid Home Assistant areas")
         country = body.get("country")
         if country is not None and (

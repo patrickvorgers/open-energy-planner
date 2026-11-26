@@ -69,6 +69,79 @@ CONFIGURATION_FIELDS = {
 }
 
 
+def _admit_boiler_readings(rows, allowed, reported, captured_at):
+    """Validate one complete capture of configured boiler readings."""
+    if not isinstance(rows, list):
+        raise TypeError("Invalid thermal readings")
+    admitted = {}
+    for row in rows:
+        if (
+            not isinstance(row, dict)
+            or set(row) != {"id", "temperature_c", "power_w", "observed_at"}
+            or row["id"] not in allowed
+            or row["id"] in admitted
+        ):
+            raise ValueError("Invalid thermal reading identity")
+        number(row["temperature_c"], *THERMAL_CONFIGURATION_BOUNDS["minimum_c"])
+        number(row["power_w"], 0, THERMAL_CONFIGURATION_BOUNDS["heater_w"][1])
+        observed = instant(row["observed_at"])
+        if observed > reported + timedelta(seconds=MAX_THERMAL_CLOCK_SKEW_SECONDS):
+            raise ValueError("Thermal observation expired")
+        admitted[row["id"]] = {**deepcopy(row), "captured_at": captured_at}
+    return admitted
+
+
+def _validate_climate_observation(row, captured):
+    """Admit bounded temperatures and reject observations ahead of the capture."""
+    for field in ("temperature_c", "target_c"):
+        number(row[field], 0, MAXIMUM_SPACE_TEMPERATURE_C)
+    observed = instant(row["observed_at"])
+    if observed > captured + timedelta(seconds=MAX_THERMAL_CLOCK_SKEW_SECONDS):
+        raise ValueError("Thermal observation expired")
+
+
+def _stored_boiler_plan(plan, revision, identity):
+    """Project planned boiler intervals from the plan with the matching Thermal revision."""
+    planned = []
+    unmet_draw = None
+    work = None
+    if plan and plan.get("thermal_context", {}).get("revision") == revision:
+        unmet_draws = [
+            result.get("unmet_draw_kwh", 0)
+            for flow in plan.get("expected_flows", [])
+            for result in flow.get("thermal", [])
+            if result["device_id"] == identity
+        ]
+        unmet_draw = sum(unmet_draws) if unmet_draws else None
+        work = next(
+            (
+                work
+                for work in plan.get("input_snapshot", {})
+                .get("problem", {})
+                .get("thermal_work", [])
+                if work["device_id"] == identity
+            ),
+            None,
+        )
+        for step, flow in zip(
+            plan.get("input_snapshot", {}).get("problem", {}).get("intervals", []),
+            plan.get("expected_flows", []),
+            strict=True,
+        ):
+            for result in flow.get("thermal", []):
+                if result["device_id"] == identity:
+                    planned.append(
+                        {
+                            "start": step["start"],
+                            "end": (
+                                instant(step["start"]) + timedelta(hours=step["duration_h"])
+                            ).isoformat(),
+                            **{key: result[key] for key in ("power_w", "end_c", "shortfall_kwh")},
+                        }
+                    )
+    return planned, unmet_draw, work
+
+
 def instant(value):
     """Parse only aware ISO timestamps and normalize comparison to UTC."""
     parsed = datetime.fromisoformat(value)
@@ -443,25 +516,9 @@ class ThermalService:
             raise ValueError("Thermal report expired")
         if self.captured_at is not None and reported < self.captured_at:
             raise ValueError("Thermal capture went backwards")
-        rows = body["readings"]
-        if not isinstance(rows, list):
-            raise TypeError("Invalid thermal readings")
-        allowed = {row["id"] for row in self.state["stores"]}
-        admitted = {}
-        for row in rows:
-            if (
-                not isinstance(row, dict)
-                or set(row) != {"id", "temperature_c", "power_w", "observed_at"}
-                or row["id"] not in allowed
-                or row["id"] in admitted
-            ):
-                raise ValueError("Invalid thermal reading identity")
-            number(row["temperature_c"], *THERMAL_CONFIGURATION_BOUNDS["minimum_c"])
-            number(row["power_w"], 0, THERMAL_CONFIGURATION_BOUNDS["heater_w"][1])
-            observed = instant(row["observed_at"])
-            if observed > reported + timedelta(seconds=MAX_THERMAL_CLOCK_SKEW_SECONDS):
-                raise ValueError("Thermal observation expired")
-            admitted[row["id"]] = {**deepcopy(row), "captured_at": body["at"]}
+        admitted = _admit_boiler_readings(
+            body["readings"], {row["id"] for row in self.state["stores"]}, reported, body["at"]
+        )
         climate = self.receive_climate(body.get("climate", []), reported)
         self.record_room_history(climate, reported)
         self.discard_echoed_targets(climate, plan)
@@ -478,7 +535,7 @@ class ThermalService:
             if application["kind"] == ApplicationKind.SPACE_HEATING
             and application["climate_entity"]
         }
-        admitted, seen = {}, set()
+        admitted = {}
         for row in rows:
             if (
                 not isinstance(row, dict)
@@ -486,16 +543,11 @@ class ThermalService:
                 != {"id", "entity_id", "temperature_c", "target_c", "observed_at"}
                 or type(row.get("heat_mode", False)) is not bool
                 or row["id"] not in allowed
-                or row["id"] in seen
+                or row["id"] in admitted
                 or row["entity_id"] != allowed[row["id"]]
             ):
                 raise ValueError("Invalid thermal reading identity")
-            seen.add(row["id"])
-            for field in ("temperature_c", "target_c"):
-                number(row[field], 0, MAXIMUM_SPACE_TEMPERATURE_C)
-            observed = instant(row["observed_at"])
-            if observed > captured + timedelta(seconds=MAX_THERMAL_CLOCK_SKEW_SECONDS):
-                raise ValueError("Thermal observation expired")
+            _validate_climate_observation(row, captured)
             admitted[row["id"]] = {**row, "captured_at": captured.isoformat()}
         return admitted
 
@@ -646,6 +698,15 @@ class ThermalService:
             if row["enabled"] and self.readiness_issue(row, now) is None
         ]
 
+    def _exclusive_room_meters(self, applications):
+        """Select Energy meters with a single Thermal binding and no other owner."""
+        options = {row["entity_id"] for row in self.consumers.options}
+        bindings = Counter(
+            source["energy_entity"] for app in applications for source in app["sources"]
+        )
+        reserved = self.occupied_meters | {row["energy_entity"] for row in self.state["stores"]}
+        return {meter for meter in options - reserved if bindings[meter] == 1}
+
     def room_candidates(self, problem, demand, now, ready):
         """Admit a single identified heater per room, with an exclusive physical meter."""
         if (
@@ -655,12 +716,7 @@ class ThermalService:
         ):
             return (), {}
         applications = self.state.get("applications", [])
-        options = {row["entity_id"] for row in self.consumers.options}
-        bindings = Counter(
-            source["energy_entity"] for app in applications for source in app["sources"]
-        )
-        reserved = self.occupied_meters | {row["energy_entity"] for row in self.state["stores"]}
-        exclusive_meters = {meter for meter in options - reserved if bindings[meter] == 1}
+        exclusive_meters = self._exclusive_room_meters(applications)
         outdoor = {row.start: row.celsius for row in demand.live_temperatures}
         intervals = refine(problem, ready).intervals
         candidates = []
@@ -778,46 +834,7 @@ class ThermalService:
                 <= (now - instant(reading["captured_at"])).total_seconds()
                 < TEMPERATURE_MAX_AGE_SECONDS
             )
-            planned = []
-            unmet_draw = None
-            work = None
-            if plan and plan.get("thermal_context", {}).get("revision") == self.revision:
-                unmet_draws = [
-                    result.get("unmet_draw_kwh", 0)
-                    for flow in plan.get("expected_flows", [])
-                    for result in flow.get("thermal", [])
-                    if result["device_id"] == row["id"]
-                ]
-                unmet_draw = sum(unmet_draws) if unmet_draws else None
-                work = next(
-                    (
-                        work
-                        for work in plan.get("input_snapshot", {})
-                        .get("problem", {})
-                        .get("thermal_work", [])
-                        if work["device_id"] == row["id"]
-                    ),
-                    None,
-                )
-                for step, flow in zip(
-                    plan.get("input_snapshot", {}).get("problem", {}).get("intervals", []),
-                    plan.get("expected_flows", []),
-                    strict=True,
-                ):
-                    for result in flow.get("thermal", []):
-                        if result["device_id"] == row["id"]:
-                            planned.append(
-                                {
-                                    "start": step["start"],
-                                    "end": (
-                                        instant(step["start"]) + timedelta(hours=step["duration_h"])
-                                    ).isoformat(),
-                                    **{
-                                        key: result[key]
-                                        for key in ("power_w", "end_c", "shortfall_kwh")
-                                    },
-                                }
-                            )
+            planned, unmet_draw, work = _stored_boiler_plan(plan, self.revision, row["id"])
             source = metadata.get(row["energy_entity"], {})
             devices.append(
                 {

@@ -1,6 +1,6 @@
 """Validate thermal applications and derive one forecast membership per physical Energy meter."""
 
-from bisect import bisect_right
+from bisect import bisect_left, bisect_right
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 from itertools import pairwise
@@ -17,6 +17,7 @@ MAXIMUM_PREHEATING_C = 3
 MAXIMUM_SPACE_TEMPERATURE_C = 50
 ROOM_HEATER_POWER_BOUNDS_W = (100, 12000)
 MAX_APPLICATION_NAME_LENGTH = 160
+METERED_HOUR = timedelta(hours=1)
 UNKNOWN_MODE = "Select an application linked to this heat source"
 INVALID_APPLICATION = "Invalid thermal application"
 DUPLICATE_AREA = "Configure only one space heating application per Home Assistant area"
@@ -62,52 +63,64 @@ def validate_shape(applications):
         identities.add(identity)
         if application["kind"] not in (ApplicationKind.SPACE_HEATING, ApplicationKind.HOT_WATER):
             raise ValueError(INVALID_APPLICATION)
-        name = application["name"]
-        if not isinstance(name, str) or not name.strip() or len(name) > MAX_APPLICATION_NAME_LENGTH:
+        if not _valid_label(application["name"]):
             raise ValueError(INVALID_APPLICATION)
-        sources = application["sources"]
-        if not isinstance(sources, list):
-            raise TypeError(INVALID_APPLICATION)
-        meters = set()
-        for source in sources:
-            if (
-                not isinstance(source, dict)
-                or source.keys() - {"full_load_power_w"} != {"energy_entity", "allow_scheduling"}
-                or not valid_entity(source["energy_entity"], "sensor")
-                or type(source["allow_scheduling"]) is not bool
-                or source["energy_entity"] in meters
-            ):
+        _validate_sources(application["sources"], application["kind"])
+        _validate_application_binding(application, areas)
+
+
+def _valid_label(value):
+    """Accept nonblank text within the application label length limit."""
+    return (
+        isinstance(value, str)
+        and 0 < len(value) <= MAX_APPLICATION_NAME_LENGTH
+        and bool(value.strip())
+    )
+
+
+def _validate_sources(sources, kind):
+    """Check unique meters, scheduling flags and optional full-load power."""
+    if not isinstance(sources, list):
+        raise TypeError(INVALID_APPLICATION)
+    meters = set()
+    for source in sources:
+        if (
+            not isinstance(source, dict)
+            or source.keys() - {"full_load_power_w"} != {"energy_entity", "allow_scheduling"}
+            or not valid_entity(source["energy_entity"], "sensor")
+            or type(source["allow_scheduling"]) is not bool
+            or source["energy_entity"] in meters
+        ):
+            raise ValueError(INVALID_APPLICATION)
+        if "full_load_power_w" in source:
+            if kind != ApplicationKind.SPACE_HEATING:
                 raise ValueError(INVALID_APPLICATION)
-            if "full_load_power_w" in source:
-                if application["kind"] != ApplicationKind.SPACE_HEATING:
-                    raise ValueError(INVALID_APPLICATION)
-                power = number(source["full_load_power_w"], *ROOM_HEATER_POWER_BOUNDS_W)
-                if not power.is_integer():
-                    raise ValueError("Heater power requires whole watts")
-            meters.add(source["energy_entity"])
-        area, climate, preheat = (
-            application[field] for field in ("area_id", "climate_entity", "maximum_preheat_c")
-        )
-        if application["kind"] == ApplicationKind.SPACE_HEATING:
-            if (
-                not isinstance(area, str)
-                or not area.strip()
-                or len(area) > MAX_APPLICATION_NAME_LENGTH
-            ):
-                raise ValueError(UNKNOWN_AREA)
-            if area in areas:
-                raise ValueError(DUPLICATE_AREA)
-            areas.add(area)
-            if climate is not None and not valid_entity(climate, "climate"):
-                raise ValueError(UNKNOWN_CLIMATE)
-            if any(source["allow_scheduling"] for source in sources):
-                if not climate:
-                    raise ValueError(THERMOSTAT_REQUIRED)
-                number(preheat, 0, MAXIMUM_PREHEATING_C)
-            elif preheat is not None:
-                number(preheat, 0, MAXIMUM_PREHEATING_C)
-        elif any(value is not None for value in (area, climate, preheat)):
-            raise ValueError(INVALID_APPLICATION)
+            power = number(source["full_load_power_w"], *ROOM_HEATER_POWER_BOUNDS_W)
+            if not power.is_integer():
+                raise ValueError("Heater power requires whole watts")
+        meters.add(source["energy_entity"])
+
+
+def _validate_application_binding(application, areas):
+    """Validate area and thermostat bindings for the application's kind."""
+    area, climate, preheat = (
+        application[field] for field in ("area_id", "climate_entity", "maximum_preheat_c")
+    )
+    if application["kind"] == ApplicationKind.SPACE_HEATING:
+        if not _valid_label(area):
+            raise ValueError(UNKNOWN_AREA)
+        if area in areas:
+            raise ValueError(DUPLICATE_AREA)
+        areas.add(area)
+        if climate is not None and not valid_entity(climate, "climate"):
+            raise ValueError(UNKNOWN_CLIMATE)
+        scheduled = any(source["allow_scheduling"] for source in application["sources"])
+        if scheduled and not climate:
+            raise ValueError(THERMOSTAT_REQUIRED)
+        if scheduled or preheat is not None:
+            number(preheat, 0, MAXIMUM_PREHEATING_C)
+    elif any(value is not None for value in (area, climate, preheat)):
+        raise ValueError(INVALID_APPLICATION)
 
 
 def valid_entity(identity, domain):
@@ -209,8 +222,8 @@ def shared_sources(applications):
     return {meter: row for meter, row in by_meter.items() if len(row["options"]) > 1}
 
 
-def attribute_history(history, samples, linked_ids, start, validity, *, limit_to_retained=False):
-    """Allocate a complete metered hour only when fresh reports agree throughout it."""
+def _ordered_mode_reports(samples):
+    """Sort valid timezone-aware mode reports by time, skipping malformed reports."""
     reports = []
     for sample in samples:
         try:
@@ -220,40 +233,30 @@ def attribute_history(history, samples, linked_ids, start, validity, *, limit_to
         except (KeyError, TypeError, ValueError):
             continue
     reports.sort(key=lambda report: report[0])
+    return reports
+
+
+def attribute_history(history, samples, linked_ids, start, validity, *, limit_to_retained=False):
+    """Allocate a complete metered hour only when fresh reports agree throughout it."""
+    reports = _ordered_mode_reports(samples)
     times = [reported for reported, _application in reports]
     totals = {identity: 0.0 for identity in linked_ids}
     unknown = 0.0
-    hour = timedelta(hours=1)
     retained_from = None
     if limit_to_retained and times and times[0] > start:
         oldest = times[0].astimezone(UTC)
         start = oldest.replace(minute=0, second=0, microsecond=0)
         if start < oldest:
-            start += hour
+            start += METERED_HOUR
         retained_from = start.isoformat()
     for before, after in pairwise(history.hours):
-        if before.start + hour != after.start or after.start < start:
+        if before.start + METERED_HOUR != after.start or after.start < start:
             continue
         # HA's hourly cumulative sum is the endpoint of the labelled hour.
         usage = after.total_kwh - before.total_kwh
         if usage < 0:
             continue
-        beginning, ending = after.start, after.start + hour
-        index = bisect_right(times, beginning) - 1
-        assigned = None
-        if index >= 0:
-            observation, mode = reports[index]
-            if mode in totals and observation + validity >= beginning:
-                assigned = mode
-                for reported, observed_mode in reports[index + 1 : bisect_right(times, ending)]:
-                    if reported == ending:
-                        break
-                    if reported > observation + validity or observed_mode != mode:
-                        assigned = None
-                        break
-                    observation = reported
-                if observation + validity < ending:
-                    assigned = None
+        assigned = _complete_hour_mode(reports, times, totals, after.start, validity)
         if assigned is None:
             unknown += usage
         else:
@@ -262,3 +265,19 @@ def attribute_history(history, samples, linked_ids, start, validity, *, limit_to
     if retained_from is not None:
         result["retained_from"] = retained_from
     return result
+
+
+def _complete_hour_mode(reports, times, linked_ids, beginning, validity):
+    """Find the one linked mode that continuously covers a metered hour."""
+    ending = beginning + METERED_HOUR
+    index = bisect_right(times, beginning) - 1
+    if index < 0:
+        return None
+    observation, mode = reports[index]
+    if mode not in linked_ids or observation + validity < beginning:
+        return None
+    for reported, observed_mode in reports[index + 1 : bisect_left(times, ending)]:
+        if reported > observation + validity or observed_mode != mode:
+            return None
+        observation = reported
+    return mode if observation + validity >= ending else None
