@@ -61,20 +61,31 @@ export function renderCurrentModel(parent, row, expanded = false) {
         section.className = "quality-comparison"; section.setAttribute("aria-label", title);
         heading.textContent = title; section.append(heading); details.append(section); return section;
     };
-    const errors = (parent, rows) => {
-        const table = document.createElement("table"), head = document.createElement("thead"), header = document.createElement("tr"), body = document.createElement("tbody");
-        table.className = "quality-model-errors";
-        for (const label of ["Prediction", "MAE (kWh/hour)"]) { const cell = document.createElement("th"); cell.scope = "col"; cell.textContent = label; header.append(cell); }
-        head.append(header); table.append(head);
-        for (const [label, error] of rows) {
-            const line = document.createElement("tr"), name = document.createElement("th"), value = document.createElement("td");
-            name.scope = "row"; name.textContent = label;
-            value.textContent = error == null ? "Not yet available" : error.toLocaleString(undefined, {minimumFractionDigits: 3, maximumFractionDigits: 3});
-            line.append(name, value); body.append(line);
-        }
-        table.append(body); parent.append(table);
-    };
     paragraph("Current status observed now. The graph retains the original model and forecast fixed at the selected day's midnight.");
+    appendModelOverview(details, row, paragraph);
+    appendCurrentWeather(row, paragraph, comparison);
+    appendDailySelection(row, paragraph);
+    appendSolarSelection(row, paragraph, comparison);
+    appendSolarTraining(row, paragraph, comparison);
+    appendModelWindows(row, paragraph);
+    parent.append(details);
+}
+
+function appendModelErrors(parent, rows) {
+    const table = document.createElement("table"), head = document.createElement("thead"), header = document.createElement("tr"), body = document.createElement("tbody");
+    table.className = "quality-model-errors";
+    for (const label of ["Prediction", "MAE (kWh/hour)"]) { const cell = document.createElement("th"); cell.scope = "col"; cell.textContent = label; header.append(cell); }
+    head.append(header); table.append(head);
+    for (const [label, error] of rows) {
+        const line = document.createElement("tr"), name = document.createElement("th"), value = document.createElement("td");
+        name.scope = "row"; name.textContent = label;
+        value.textContent = error == null ? "Not yet available" : error.toLocaleString(undefined, {minimumFractionDigits: 3, maximumFractionDigits: 3});
+        line.append(name, value); body.append(line);
+    }
+    table.append(body); parent.append(table);
+}
+
+function appendModelOverview(details, row, paragraph) {
     const model = row.selection;
     const fields = document.createElement("dl"); fields.className = "model-selection-summary";
     const values = [["Readiness", row.readiness ? optionLabel(row.readiness) : "Not known"]];
@@ -94,12 +105,18 @@ export function renderCurrentModel(parent, row, expanded = false) {
         paragraph("Recorder availability is month-level evidence, not the first complete measured hour. Missing production or weather hours remain unknown.");
         if (row.solarHistory.issue) paragraph(Object.hasOwn(HISTORY_IMPORT_MESSAGES, row.solarHistory.issue) ? HISTORY_IMPORT_MESSAGES[row.solarHistory.issue] : "History import is temporarily unavailable. Last accepted history is retained.");
     }
+}
+
+function appendCurrentWeather(row, paragraph, comparison) {
     if (row.solarWeatherService) {
         const weather = row.solarWeatherService, service = comparison("Current forecast weather");
         paragraph(`Weather model: ${weather.model === "ecmwf_ifs" ? "ECMWF IFS" : optionLabel(weather.model)}. Selection: ${weather.selection === "latest_available" ? "Newest available forecast run" : optionLabel(weather.selection)}.`, service);
         paragraph(`Run initialized: ${weather.initialized_at ? when(weather.initialized_at) : "Not supplied"}. Actual receipt: ${when(weather.received_at)}.`, service);
         paragraph(`Provider publication: ${weather.available_at ? when(weather.available_at) : "Not known"}. Initialization and receipt do not establish a publication time.`, service);
     }
+}
+
+function appendDailySelection(row, paragraph) {
     if (row.dailySelection) {
         const learning = row.dailySelection;
         if (learning.required_windows == null) {
@@ -150,6 +167,9 @@ export function renderCurrentModel(parent, row, expanded = false) {
         for (const window of learning.windows || []) paragraph(`${when(window.start)} to ${when(window.end)}: Mean absolute error per hour: Candidate ${window.mae_kwh.candidate.toLocaleString(undefined, {maximumFractionDigits: 3})} kWh: Simpler model ${window.mae_kwh.simpler.toLocaleString(undefined, {maximumFractionDigits: 3})} kWh: Weekday profile ${window.mae_kwh.profile.toLocaleString(undefined, {maximumFractionDigits: 3})} kWh.`);
         paragraph("This predicts consumption. Home Assistant retains control of operating mode, comfort and safety.");
     }
+}
+
+function appendSolarSelection(row, paragraph, comparison) {
     if (row.solarSelection) {
         const solar = row.solarSelection;
         const names = {automatic: "Automatic", pvwatts: "PVWatts", ha: "Home Assistant", ml: "Machine learning"};
@@ -159,33 +179,17 @@ export function renderCurrentModel(parent, row, expanded = false) {
         else paragraph("Forecasts saved before the measured day are compared on the same actual production hours. Historical forecast assessment can admit machine learning without waiting for new daily comparisons. Lower mean absolute error is better.", complete);
         paragraph("Captured comparisons use real forecasts saved before their outcomes. PVWatts and Machine learning use the same captured ECMWF IFS weather forecast. The Home Assistant provider uses its own weather. This comparison includes the weather source and determines Automatic selection when a common captured cohort is available.", complete);
         if (solar.admission_basis === "historical_forecast_backtest") paragraph("Historical admission scores are shown in the historical forecast backtest below. They are not real captured forecast scores.", complete);
-        else if (Object.keys(solar.mae_kwh || {}).length) errors(complete, Object.entries(solar.mae_kwh).map(([source, error]) => [source === "ml" ? "Machine learning" : names[source], error]));
+        else if (Object.keys(solar.mae_kwh || {}).length) appendModelErrors(complete, Object.entries(solar.mae_kwh).map(([source, error]) => [source === "ml" ? "Machine learning" : names[source], error]));
         else paragraph("Captured comparison scores are unavailable. Check the historical assessment and usable production history below.", complete);
         if (solar.issue) paragraph(solar.issue, complete);
         if (row.solarLearning && !row.solarTraining) paragraph(`ML learning: ${optionLabel(row.solarLearning)}`, complete);
     }
+}
+
+function appendSolarTraining(row, paragraph, comparison) {
     if (row.solarTraining) {
         const training = row.solarTraining;
-        if (training.historical_assessment) {
-            const assessment = training.historical_assessment, historical = comparison("Historical forecast backtest");
-            const states = {eligible: "Accuracy requirements passed", insufficient_history: "More complete forecast and measurement history is needed", not_improved: "PVWatts retained: Accuracy did not improve enough", invalid_evidence: "Historical forecast evidence is unavailable"};
-            paragraph(states[assessment.status] || "Waiting for historical forecast evidence", historical);
-            paragraph(`Archived weather: ${assessment.weather_model === "ecmwf_ifs" ? "ECMWF IFS" : optionLabel(assessment.weather_model)}. ${assessment.run_initializations?.length || 0} predetermined weekly runs; two simulated 48-hour plans per run.`, historical);
-            paragraph(`${assessment.matched_pairs} forecast/measurement pairs across ${assessment.unique_hours} unique production hours. The plans overlap; pairs are not independent measured hours.`, historical);
-            paragraph("Origins at initialization and 24 hours later are simulations. They do not claim that a forecast was actually published then. Historical publication time is not known.", historical);
-            for (const origin of assessment.per_origin || []) {
-                paragraph(`Planning origin: ${origin.origin_delay_hours} hours after initialization. ${origin.matched_hours} matched forecast/measurement pairs. Mean absolute error is in kWh per hour; both the model and served forecast must improve on PVWatts.`, historical);
-                errors(historical, [["PVWatts", origin.baseline_mae_kwh], ["Machine learning", origin.model_mae_kwh], ["Served forecast", origin.service_mae_kwh]]);
-            }
-            if (assessment.windows?.length) {
-                const windows = document.createElement("details"), label = document.createElement("summary");
-                label.textContent = `Simulated planning windows: ${assessment.windows.length}`; windows.append(label);
-                for (const window of assessment.windows) paragraph(`Run initialized: ${when(window.initialized_at)}. Simulated plan: ${when(window.origin)} to ${when(window.end)} (end exclusive). ${window.matched_hours} matched hours; provider lead starts at initialization, planning lead starts at the simulated origin.`, windows);
-                historical.append(windows);
-            }
-            if (assessment.created_at) paragraph(`Assessment created: ${when(assessment.created_at)}. This actual creation time is not backdated.`, historical);
-            if (assessment.issue) paragraph(assessment.issue, historical);
-        }
+        if (training.historical_assessment) appendHistoricalBacktest(training.historical_assessment, paragraph, comparison);
         const controlled = comparison("Model comparison");
         const names = {nonlinear_shadow: row.solarSelection?.active === "ml" ? "Machine learning is active" : "Machine learning is learning in shadow mode", baseline_preferred: "PVWatts retained after historical validation", linear_preferred: "Simpler correction retained", insufficient_clean_history: "Collecting usable training history", insufficient_validation_history: "Collecting usable historical validation", training_failed: "Training temporarily unavailable", blocked: "Independent production evidence required"};
         paragraph(`Solar learning: ${names[training.status] || "Waiting for usable history"}`, controlled);
@@ -197,31 +201,56 @@ export function renderCurrentModel(parent, row, expanded = false) {
         if (training.training_start && training.training_end) paragraph(`Training period: ${when(training.training_start)} to ${when(training.training_end)} (end exclusive).`, controlled);
         if (training.validation_start && training.validation_end) paragraph(`Validation period: ${when(training.validation_start)} to ${when(training.validation_end)}`, controlled);
         paragraph("Training and validation measurements all count equally. No fixed age discount is applied.", controlled);
-        if (training.time_trend) {
-            const trend = training.time_trend;
-            const states = {active: "Learned trend selected automatically for the candidate", insufficient_history: "No trend selected: More comparable seasonal history is needed", not_improved: "No trend selected: Seasonal comparisons did not improve enough", unstable: "No trend selected: The estimate did not meet the stability or safety checks"};
-            paragraph(`Time trend: ${states[trend.status] || "Waiting for trend evidence"}`, controlled);
-            if (trend.status === "active" && trend.annual_change != null) paragraph(`Selected change in yield: ${trend.annual_change > 0 ? "+" : ""}${percentage(trend.annual_change * 100)} per year.`, controlled);
-            if (trend.status !== "active" && trend.candidate_annual_change != null) paragraph(`Tested change in yield: ${trend.candidate_annual_change > 0 ? "+" : ""}${percentage(trend.candidate_annual_change * 100)} per year. This trend is not applied.`, controlled);
-            if (trend.reference) paragraph(`Trend reference: ${when(trend.reference)}`, controlled);
-            if (trend.reason) paragraph(trend.reason, controlled);
-            paragraph("A learned change in yield can include shading, soiling and weather bias. It does not establish physical panel degradation.", controlled);
-            if (trend.folds?.length) {
-                const backtests = document.createElement("details"), heading = document.createElement("summary");
-                heading.textContent = `Seasonal time-trend comparisons: ${trend.folds.length}`; backtests.append(heading);
-                for (const fold of trend.folds) paragraph(`Training ends: ${when(fold.training_end)}. Validation: ${when(fold.validation_start)} to ${when(fold.validation_end)}. Mean absolute error: Without trend ${fold.baseline_mae_kwh.toLocaleString(undefined, {maximumFractionDigits: 3})} kWh/hour. With trend ${fold.trend_mae_kwh.toLocaleString(undefined, {maximumFractionDigits: 3})} kWh/hour. Tested annual change: ${percentage(fold.annual_change * 100)}.`, backtests);
-                controlled.append(backtests);
-            }
-        }
-        errors(controlled, [["PVWatts", training.baseline_mae_kwh], ["Machine learning", training.tree_mae_kwh]]);
+        if (training.time_trend) appendSolarTrend(training.time_trend, controlled, paragraph);
+        appendModelErrors(controlled, [["PVWatts", training.baseline_mae_kwh], ["Machine learning", training.tree_mae_kwh]]);
         paragraph("Reliable daylight measurements remain included at zero, low or unexpectedly high production. Original measurements are retained.", controlled);
         for (const [reason, count] of Object.entries(training.excluded_counts || {})) paragraph(`Excluded from learning: ${optionLabel(reason)}: ${count} ${count === 1 ? "hour" : "hours"}.`, controlled);
         for (const [reason, count] of Object.entries(training.diagnostic_counts || {})) paragraph(`Marked for review, still included: ${optionLabel(reason)}: ${count} ${count === 1 ? "hour" : "hours"}. A statistical difference does not prove a meter fault or curtailment.`, controlled);
         if (training.status === "nonlinear_shadow" && row.solarSelection?.active !== "ml" && training.historical_assessment?.status !== "eligible") paragraph("Historical training alone does not activate it. Machine learning also needs a successful historical forecast backtest or complete forecasts captured before later measurements.", controlled);
         if (training.issue) paragraph(training.issue, controlled);
     }
+}
+
+function appendHistoricalBacktest(assessment, paragraph, comparison) {
+    const historical = comparison("Historical forecast backtest");
+    const states = {eligible: "Accuracy requirements passed", insufficient_history: "More complete forecast and measurement history is needed", not_improved: "PVWatts retained: Accuracy did not improve enough", invalid_evidence: "Historical forecast evidence is unavailable"};
+    paragraph(states[assessment.status] || "Waiting for historical forecast evidence", historical);
+    paragraph(`Archived weather: ${assessment.weather_model === "ecmwf_ifs" ? "ECMWF IFS" : optionLabel(assessment.weather_model)}. ${assessment.run_initializations?.length || 0} predetermined weekly runs; two simulated 48-hour plans per run.`, historical);
+    paragraph(`${assessment.matched_pairs} forecast/measurement pairs across ${assessment.unique_hours} unique production hours. The plans overlap; pairs are not independent measured hours.`, historical);
+    paragraph("Origins at initialization and 24 hours later are simulations. They do not claim that a forecast was actually published then. Historical publication time is not known.", historical);
+    for (const origin of assessment.per_origin || []) {
+        paragraph(`Planning origin: ${origin.origin_delay_hours} hours after initialization. ${origin.matched_hours} matched forecast/measurement pairs. Mean absolute error is in kWh per hour; both the model and served forecast must improve on PVWatts.`, historical);
+        appendModelErrors(historical, [["PVWatts", origin.baseline_mae_kwh], ["Machine learning", origin.model_mae_kwh], ["Served forecast", origin.service_mae_kwh]]);
+    }
+    if (assessment.windows?.length) {
+        const windows = document.createElement("details"), label = document.createElement("summary");
+        label.textContent = `Simulated planning windows: ${assessment.windows.length}`; windows.append(label);
+        for (const window of assessment.windows) paragraph(`Run initialized: ${when(window.initialized_at)}. Simulated plan: ${when(window.origin)} to ${when(window.end)} (end exclusive). ${window.matched_hours} matched hours; provider lead starts at initialization, planning lead starts at the simulated origin.`, windows);
+        historical.append(windows);
+    }
+    if (assessment.created_at) paragraph(`Assessment created: ${when(assessment.created_at)}. This actual creation time is not backdated.`, historical);
+    if (assessment.issue) paragraph(assessment.issue, historical);
+}
+
+function appendSolarTrend(trend, controlled, paragraph) {
+    const states = {active: "Learned trend selected automatically for the candidate", insufficient_history: "No trend selected: More comparable seasonal history is needed", not_improved: "No trend selected: Seasonal comparisons did not improve enough", unstable: "No trend selected: The estimate did not meet the stability or safety checks"};
+    paragraph(`Time trend: ${states[trend.status] || "Waiting for trend evidence"}`, controlled);
+    if (trend.status === "active" && trend.annual_change != null) paragraph(`Selected change in yield: ${trend.annual_change > 0 ? "+" : ""}${percentage(trend.annual_change * 100)} per year.`, controlled);
+    if (trend.status !== "active" && trend.candidate_annual_change != null) paragraph(`Tested change in yield: ${trend.candidate_annual_change > 0 ? "+" : ""}${percentage(trend.candidate_annual_change * 100)} per year. This trend is not applied.`, controlled);
+    if (trend.reference) paragraph(`Trend reference: ${when(trend.reference)}`, controlled);
+    if (trend.reason) paragraph(trend.reason, controlled);
+    paragraph("A learned change in yield can include shading, soiling and weather bias. It does not establish physical panel degradation.", controlled);
+    if (trend.folds?.length) {
+        const backtests = document.createElement("details"), heading = document.createElement("summary");
+        heading.textContent = `Seasonal time-trend comparisons: ${trend.folds.length}`; backtests.append(heading);
+        for (const fold of trend.folds) paragraph(`Training ends: ${when(fold.training_end)}. Validation: ${when(fold.validation_start)} to ${when(fold.validation_end)}. Mean absolute error: Without trend ${fold.baseline_mae_kwh.toLocaleString(undefined, {maximumFractionDigits: 3})} kWh/hour. With trend ${fold.trend_mae_kwh.toLocaleString(undefined, {maximumFractionDigits: 3})} kWh/hour. Tested annual change: ${percentage(fold.annual_change * 100)}.`, backtests);
+        controlled.append(backtests);
+    }
+}
+
+function appendModelWindows(row, paragraph) {
+    const model = row.selection;
     for (const issue of new Set([row.issue, model?.issue].filter(issue => issue && issue !== row.solarHistory?.issue))) paragraph(Object.hasOwn(HISTORY_IMPORT_MESSAGES, issue) ? HISTORY_IMPORT_MESSAGES[issue] : issue === "Available PV needs uncurtailed, independent production evidence" ? "Model comparison needs independent evidence of available solar production, including production prevented by curtailment." : issue);
     for (const [label, value] of [["Pending comparison ends", model?.pending_until], ["Last evaluated", model?.evaluated_at]]) if (value) paragraph(`${label}: ${when(value)}`);
     for (const window of model?.windows || []) paragraph(`${when(window.start)} to ${when(window.end)}: Simulated baseline cost: ${money(window.baseline.economic_cost)} ${model.currency}: Candidate: ${money(window.candidate.economic_cost)} ${model.currency}: Baseline grid import: ${window.baseline.corrected_import_kwh.toLocaleString()} kWh: Candidate: ${window.candidate.corrected_import_kwh.toLocaleString()} kWh, including the existing terminal-stock correction. These are simulated decisions, not measured savings.`);
-    parent.append(details);
 }
