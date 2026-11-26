@@ -1449,6 +1449,12 @@ def test_consumer_forecast_projection_is_estimated_and_expires(duration_hours, m
         validate(document)
     forecast.pop("valid_until")
 
+    records = document["result"]["devices"]
+    records.append(dict(records[0]))
+    with pytest.raises(ValueError, match="Unexpected or duplicated consumer forecast"):
+        validate(document)
+    records.pop()
+
     document["result"]["devices"][0]["forecast"]["steps"][0]["kwh"] = float("nan")
     with pytest.raises(ValueError, match="quantity"):
         validate(document)
