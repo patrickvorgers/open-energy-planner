@@ -172,6 +172,138 @@ def _read_comparison(documents, path, source_id, day, timezone, hours):
     return record
 
 
+def _score_comparisons(
+    documents,
+    source,
+    timezone,
+    prefix,
+    tomorrow,
+    now,
+    *,
+    models,
+    provider_revisions,
+    inverter,
+    siblings,
+    meter_hours,
+    control,
+    evidence_issue,
+):
+    actual = meter_hours.get(source.entity_id, {})
+    cohorts = []
+    for day_index in range(1, MAX_ACCURACY_LOOKBACK_DAYS + 1):
+        day = tomorrow - day_index * DAY
+        hours, end = comparison_hours(day, timezone)
+        path = prefix + day.isoformat() + ".json"
+        if end > now:
+            continue
+        if evidence_issue:
+            break
+        try:
+            record = _read_comparison(documents, path, source.source_id, day, timezone, hours)
+        except (OSError, ValueError, TypeError, KeyError):
+            evidence_issue = (
+                "Stored solar accuracy evidence is unreadable. Automatic comparison is unavailable"
+            )
+            cohorts = []
+            break
+        if record is None:
+            continue
+        if not set(models) <= set(record["models"]):
+            continue
+        if (
+            ForecastSource.HOME_ASSISTANT in models
+            and record.get("ha_configuration_versions", []) != provider_revisions
+        ):
+            continue
+        if not all(
+            learning_interval(source, instant, instant + HOUR)
+            and unrestricted_interval(source, instant, instant + HOUR, control)
+            for instant in hours
+        ):
+            continue
+        values = [actual.get(instant) for instant in hours]
+        if any(value is None for value in values):
+            continue
+        if any(
+            ac_comparison_issue(
+                source.measurement_boundary,
+                inverter.ac_limit_w,
+                tuple(
+                    meter_hours.get(other.entity_id, {}).get(instant)
+                    if other.measurement_boundary == "ac"
+                    else None
+                    for other in siblings
+                ),
+            )
+            for instant in hours
+        ):
+            continue
+        cohorts.append((record, values))
+        if len(cohorts) == MIN_ACCURACY_DAYS:
+            break
+    scores = {}
+    if len(cohorts) == MIN_ACCURACY_DAYS and evidence_issue is None:
+        scores = {
+            model: mean_absolute_error(
+                [predicted for record, _values in cohorts for predicted in record["models"][model]],
+                [observed for _record, values in cohorts for observed in values],
+            )
+            for model in models
+        }
+    return cohorts, scores, evidence_issue
+
+
+def _select_model(source, models, scores, control, now, *, enforce_ml_policy):
+    preference = source.forecast_source
+    chosen = (
+        min(scores, key=scores.get)
+        if preference == ForecastSource.AUTOMATIC and scores
+        else ForecastSource.PVWATTS
+        if preference == ForecastSource.AUTOMATIC
+        else preference
+    )
+    if chosen not in models:
+        chosen = ForecastSource.PVWATTS
+    learning_issue = None
+    if (
+        chosen in (ForecastSource.PVWATTS, ForecastSource.ML)
+        and preference in (ForecastSource.AUTOMATIC, ForecastSource.ML)
+        and enforce_ml_policy
+        and (
+            not scores
+            or scores[ForecastSource.PVWATTS] - scores[ForecastSource.ML]
+            < max(MIN_ABSOLUTE_GAIN_KWH, scores[ForecastSource.PVWATTS] * MIN_RELATIVE_GAIN)
+        )
+    ):
+        eligible_scores = {
+            model: error for model, error in scores.items() if model != ForecastSource.ML
+        }
+        chosen = (
+            min(eligible_scores, key=eligible_scores.get)
+            if preference == ForecastSource.AUTOMATIC and eligible_scores
+            else ForecastSource.PVWATTS
+        )
+        learning_issue = (
+            (
+                "ML is collecting matched forecast accuracy. PVWatts remains active."
+                if not scores
+                else "ML has not improved forecast accuracy enough. PVWatts remains active."
+            )
+            if chosen == ForecastSource.PVWATTS
+            else None
+        )
+    if (
+        chosen == ForecastSource.PVWATTS
+        and source.curtailment_entity_id
+        and (
+            control is None
+            or control.checked_until < now.replace(minute=0, second=0, microsecond=0)
+        )
+    ):
+        learning_issue = "Curtailment feedback is still being collected. Check the linked sensor and its Recorder history. Background checks continue while PVWatts remains available."
+    return chosen, learning_issue
+
+
 def choose_sources(
     store,
     configuration,
@@ -285,79 +417,22 @@ def choose_sources(
         except OSError:
             evidence_issue = "Solar accuracy evidence could not be saved"
         history = histories.get(source.entity_id)
-        actual = meter_hours.get(source.entity_id, {})
-        cohorts = []
-        for day_index in range(1, MAX_ACCURACY_LOOKBACK_DAYS + 1):
-            day = tomorrow - day_index * DAY
-            hours, end = comparison_hours(day, baseline.location.timezone)
-            path = prefix + day.isoformat() + ".json"
-            if end > now:
-                continue
-            if evidence_issue:
-                break
-            try:
-                record = _read_comparison(
-                    store.documents, path, source_id, day, baseline.location.timezone, hours
-                )
-            except (OSError, ValueError, TypeError, KeyError):
-                evidence_issue = "Stored solar accuracy evidence is unreadable. Automatic comparison is unavailable"
-                cohorts = []
-                break
-            if record is None:
-                continue
-            if not set(models) <= set(record["models"]):
-                continue
-            if (
-                ForecastSource.HOME_ASSISTANT in models
-                and record.get("ha_configuration_versions", []) != provider_revisions
-            ):
-                continue
-            if not all(
-                learning_interval(source, instant, instant + HOUR)
-                and unrestricted_interval(
-                    source,
-                    instant,
-                    instant + HOUR,
-                    (feedback or {}).get(source.curtailment_entity_id),
-                )
-                for instant in hours
-            ):
-                continue
-            values = [actual.get(instant) for instant in hours]
-            if any(value is None for value in values):
-                continue
-            if any(
-                ac_comparison_issue(
-                    source.measurement_boundary,
-                    inverters[source.inverter_id].ac_limit_w,
-                    tuple(
-                        meter_hours.get(other.entity_id, {}).get(instant)
-                        if other.measurement_boundary == "ac"
-                        else None
-                        for other in siblings
-                    ),
-                )
-                for instant in hours
-            ):
-                continue
-            cohorts.append((record, values))
-            if len(cohorts) == MIN_ACCURACY_DAYS:
-                break
-        scores = {}
+        cohorts, scores, issue = _score_comparisons(
+            store.documents,
+            source,
+            baseline.location.timezone,
+            prefix,
+            tomorrow,
+            now,
+            models=models,
+            provider_revisions=provider_revisions,
+            inverter=inverters[source.inverter_id],
+            siblings=siblings,
+            meter_hours=meter_hours,
+            control=(feedback or {}).get(source.curtailment_entity_id),
+            evidence_issue=evidence_issue,
+        )
         admission_basis = "captured_forecasts"
-        issue = evidence_issue
-        if len(cohorts) == MIN_ACCURACY_DAYS and issue is None:
-            scores = {
-                model: mean_absolute_error(
-                    [
-                        predicted
-                        for record, _values in cohorts
-                        for predicted in record["models"][model]
-                    ],
-                    [observed for _record, values in cohorts for observed in values],
-                )
-                for model in models
-            }
         assessment = (historical_assessments or {}).get(source_id)
         if (
             not scores
@@ -383,53 +458,14 @@ def choose_sources(
             }
             admission_basis = "historical_forecast_backtest"
         preference = source.forecast_source
-        chosen = (
-            min(scores, key=scores.get)
-            if preference == ForecastSource.AUTOMATIC and scores
-            else ForecastSource.PVWATTS
-            if preference == ForecastSource.AUTOMATIC
-            else preference
+        chosen, learning_issue = _select_model(
+            source,
+            models,
+            scores,
+            (feedback or {}).get(source.curtailment_entity_id),
+            now,
+            enforce_ml_policy=source_id in (ml_policies or {}),
         )
-        if chosen not in models:
-            chosen = ForecastSource.PVWATTS
-        learning_issue = None
-        if (
-            chosen in (ForecastSource.PVWATTS, ForecastSource.ML)
-            and preference in (ForecastSource.AUTOMATIC, ForecastSource.ML)
-            and source_id in (ml_policies or {})
-            and (
-                not scores
-                or scores[ForecastSource.PVWATTS] - scores[ForecastSource.ML]
-                < max(MIN_ABSOLUTE_GAIN_KWH, scores[ForecastSource.PVWATTS] * MIN_RELATIVE_GAIN)
-            )
-        ):
-            eligible_scores = {
-                model: error for model, error in scores.items() if model != ForecastSource.ML
-            }
-            chosen = (
-                min(eligible_scores, key=eligible_scores.get)
-                if preference == ForecastSource.AUTOMATIC and eligible_scores
-                else ForecastSource.PVWATTS
-            )
-            learning_issue = (
-                (
-                    "ML is collecting matched forecast accuracy. PVWatts remains active."
-                    if not scores
-                    else "ML has not improved forecast accuracy enough. PVWatts remains active."
-                )
-                if chosen == ForecastSource.PVWATTS
-                else None
-            )
-        control = (feedback or {}).get(source.curtailment_entity_id)
-        if (
-            chosen == ForecastSource.PVWATTS
-            and source.curtailment_entity_id
-            and (
-                control is None
-                or control.checked_until < now.replace(minute=0, second=0, microsecond=0)
-            )
-        ):
-            learning_issue = "Curtailment feedback is still being collected. Check the linked sensor and its Recorder history. Background checks continue while PVWatts remains available."
         selected[source_id] = (chosen, models[chosen])
         statuses[source_id] = {
             "requested": preference,
