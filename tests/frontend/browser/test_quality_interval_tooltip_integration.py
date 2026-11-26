@@ -79,6 +79,8 @@ def test_independent_intervals_keep_native_indices_and_select_matching_evidence(
     page.get_by_role("button", name="Connect", exact=True).click()
     canvas = page.locator("#quality-chart-0")
     evidence = page.get_by_role("region", name="Hourly forecast evidence", exact=True)
+    page.get_by_role("checkbox", name="Forecast irradiance", exact=True).uncheck()
+    page.get_by_role("checkbox", name="Actual irradiance (satellite)", exact=True).uncheck()
 
     def keyboard_focus(target, direction="Tab"):
         """Reach a chart or legend control through actual keyboard navigation."""
