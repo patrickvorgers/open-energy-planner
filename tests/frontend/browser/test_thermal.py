@@ -139,6 +139,30 @@ def thermal_monitor_page(thermal_page):
     return page, state
 
 
+def test_add_application_lists_all_thermal_types_and_cancel_keeps_the_current_boiler(thermal_page):
+    """Offer one toolbar entry and return to it without editing when the type dialog is cancelled."""
+    page, state = thermal_page
+    add = page.get_by_role("button", name="Add application", exact=True)
+    expect(page.get_by_role("button", name="Add electric boiler", exact=True)).to_have_count(0)
+    add.click()
+    dialog = page.get_by_role("dialog", name="Add thermal application", exact=True)
+    kind = dialog.get_by_label("Application type", exact=True)
+    expect(kind.locator("option")).to_have_text(
+        ["Space heating", "Domestic hot water", "Electric boiler"]
+    )
+    kind.select_option(label="Electric boiler")
+    evidence = Path("results/ci")
+    evidence.mkdir(parents=True, exist_ok=True)
+    page.screenshot(
+        path=str(evidence / f"thermal-add-application-{page.viewport_size['width']}.png")
+    )
+    dialog.get_by_role("button", name="Cancel", exact=True).click()
+    expect(dialog).not_to_be_visible()
+    expect(add).to_be_focused()
+    expect(page.locator("#thermal-title")).to_have_text("Utility boiler")
+    assert state["posts"] == []
+
+
 def test_space_heating_area_controls_source_filter_and_preserves_boiler(thermal_page):
     """Use real Settings controls to filter sources, cancel drafts and save alongside the boiler."""
     page, state = thermal_page
@@ -439,7 +463,7 @@ def test_fifth_boiler_can_be_cancelled_configured_saved_and_reloaded(thermal_pag
     state["document"]["devices"] = state["document"]["devices"][:4]
     page.reload()
     expect(page.locator("#thermal-store-select option")).to_have_count(4)
-    expect(page.locator("#add-thermal")).to_be_enabled()
+    expect(page.get_by_role("button", name="Add application", exact=True)).to_be_enabled()
     add_thermal_appliance(page)
     expect(page.locator('[data-field="enabled"]')).not_to_be_checked()
     expect(page.locator("#save-thermal")).to_be_disabled()
@@ -558,7 +582,7 @@ def test_selected_boiler_remove_cancel_and_save_preserve_other_identity_and_phys
     page.locator("#save-thermal").click()
     expect(page.locator("#thermal-save-state")).to_have_text("All changes saved.")
     assert state["posts"][-1]["configuration"]["stores"] == []
-    expect(page.locator("#add-thermal")).to_be_enabled()
+    expect(page.get_by_role("button", name="Add application", exact=True)).to_be_enabled()
 
 
 def test_heater_kw_input_saves_whole_watts_without_accepting_fractional_watts(thermal_page):
@@ -718,7 +742,7 @@ def test_energy_boiler_intents_do_not_replace_configuration(thermal_monitor_page
     """Daily comfort and pause actions use individual intents while all model bindings remain intact."""
     page, state = thermal_monitor_page
     original = deepcopy(state["document"]["configuration"])
-    expect(page.get_by_role("button", name="Add electric boiler", exact=True)).to_have_count(0)
+    expect(page.get_by_role("button", name="Add application", exact=True)).to_have_count(0)
     expect(page.locator('[data-field="volume_litres"]')).to_have_count(0)
     expect(
         page.get_by_role("link", name="Configure electric boilers in Appliances settings")

@@ -8,7 +8,7 @@ import pytest
 from playwright.sync_api import expect
 
 from tests.app.ev.support.devices import settings
-from tests.frontend.browser.helpers import TOKEN
+from tests.frontend.browser.helpers import TOKEN, start_electric_boiler_setup
 from tests.frontend.browser.test_charge_point_energy_selection import (
     prepare_charge_point,
     publish_choices,
@@ -84,9 +84,12 @@ def open_sources(page, category):
         kind.get_by_role("radio", name="Charge point", exact=False).check()
         kind.get_by_role("button", name="Continue", exact=True).click()
         title = "Add charge point"
-    else:
-        title = "Add appliance" if category == "consumption" else "Add electric boiler"
+    elif category == "consumption":
+        title = "Add appliance"
         page.get_by_role("button", name=title, exact=True).click()
+    else:
+        start_electric_boiler_setup(page)
+        title = "Add electric boiler"
     return page.get_by_role("dialog", name=title, exact=True)
 
 
@@ -321,7 +324,7 @@ def test_shared_picker_excludes_every_assigned_category_and_preserves_cancel(app
     origin = {
         "consumption": "Add appliance",
         "point": "Add vehicle or charge point",
-        "boiler": "Add electric boiler",
+        "boiler": "Add application",
     }[category]
     expect(page.get_by_role("button", name=origin, exact=True)).to_be_focused()
     picker = open_sources(page, category)
@@ -577,9 +580,7 @@ def test_pending_refresh_updates_authoritative_choice_before_typed_draft(
         expect(
             page.get_by_role(
                 "button",
-                name="Add vehicle or charge point"
-                if category == "point"
-                else "Add electric boiler",
+                name="Add vehicle or charge point" if category == "point" else "Add application",
                 exact=True,
             )
         ).to_be_enabled()
