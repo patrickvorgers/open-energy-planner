@@ -3,6 +3,7 @@
 from dataclasses import dataclass
 from datetime import datetime
 
+from open_energy_planner.appliances.ev.fallback import EV_CONTROL_DEFERRED, EV_FALLBACK_REASONS
 from open_energy_planner.notifications.model import Lifecycle, NoticeText, Notification
 
 
@@ -22,6 +23,7 @@ class PlanningStatus:
     block_reason: str | None = None
     has_published: bool = False
     block_text: NoticeText | None = None
+    ev_fallback_active: bool = False
 
     @property
     def unknown(self):
@@ -76,6 +78,21 @@ def planning_notice(state: PlanningStatus, text: NoticeText) -> Notification:
 
 def planning_notifications(state: PlanningStatus, explain):
     """Project coordinator evidence with module advice as a fallback to authoritative domain notices."""
+    if state.ev_fallback_active:
+        return (
+            Notification(
+                "planning:ev_control_deferred",
+                EV_CONTROL_DEFERRED,
+                NoticeText(
+                    "Energy plan active without EV charging control",
+                    "The plan includes expected charging consumption. Charging optimization "
+                    "retries at the next planning round. You don't need to do anything now.",
+                    "View EV charging",
+                    "/ev",
+                    "info",
+                ),
+            ),
+        )
     if state.unknown:
         return None
     if state.status == "ready" or not state.cause:
@@ -86,6 +103,15 @@ def planning_notifications(state: PlanningStatus, explain):
 
 def explain_planning_problem(reason: str, _detail: str | None = None) -> NoticeText:
     """Explain assembled planning inputs and calculation outcomes, with an honest unknown fallback."""
+    if reason in EV_FALLBACK_REASONS:
+        return NoticeText(
+            "Waiting for a new energy plan",
+            "The charging schedule could not be confirmed, and no checked fallback plan was available. "
+            "The next planning round retries automatically. You don't need to do anything now.",
+            "View planning",
+            "/overview",
+            "info",
+        )
     if reason == "configuration_changed":
         return NoticeText(
             "Waiting for inputs for the updated settings",

@@ -188,9 +188,12 @@ class SolveOptions:
 
     time_limit_s: float = DEFAULT_SOLVER_TIME_LIMIT_SECONDS
     strategy: Strategy = Strategy.COST
+    ev_fallback_reserve_s: float = 0
 
     def __post_init__(self) -> None:
         """Require positive finite seconds and coerce strategy through Strategy. Unknown values raise ValueError."""
         if not isfinite(self.time_limit_s) or self.time_limit_s <= 0:
             raise ValueError("Time limit must be finite and positive")
+        if not 0 <= self.ev_fallback_reserve_s < self.time_limit_s:
+            raise ValueError("EV fallback reserve must fit within the time limit")
         object.__setattr__(self, "strategy", Strategy(self.strategy))
