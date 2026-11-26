@@ -297,6 +297,62 @@ class CatalogueDiscovery:
             self.hass, identities, self._state_changed
         )
 
+    async def _refresh_catalogue(self, active, names, dirty, *, energy, history) -> dict:
+        previous = self.body
+        suggestions = (
+            await catalogue.energy_suggestions(self.hass) if energy else previous["suggestions"]
+        )
+        entities = {item["entity_id"]: item for item in previous["entities"]}
+        if energy:
+            dirty.update(active ^ set(entities))
+            dirty.update(
+                identity
+                for identity in names.keys() | self._names.keys()
+                if names.get(identity) != self._names.get(identity)
+            )
+        for identity in dirty:
+            if identity not in active:
+                entities.pop(identity, None)
+                continue
+            state = self.hass.states.get(identity)
+            if state is None:
+                state = State(identity, STATE_UNKNOWN)
+            projected = catalogue.catalogue_entity(self.hass, state, names) if state else None
+            if projected is None:
+                entities.pop(identity, None)
+            else:
+                entities[identity] = projected
+        return {
+            "entities": catalogue.ordered_entities(self.hass, entities.values(), suggestions)
+            if dirty or energy
+            else previous["entities"],
+            "suggestions": suggestions,
+            "history": await setup_history(self.hass, suggestions["terms"])
+            if history
+            else previous["history"],
+            "timezone": self.hass.config.time_zone,
+            "country": self.hass.config.country,
+            **({"areas": previous["areas"]} if "areas" in previous else {}),
+        }
+
+    def _index_catalogue(self, manager, body):
+        self._forecast_entries = {
+            identity
+            for source in (manager.data or {}).get("energy_sources", ())
+            if source.get("type") == "solar"
+            and isinstance(source.get("config_entry_solar_forecast"), list)
+            for identity in (source.get("config_entry_solar_forecast") or ())
+            if isinstance(identity, str)
+        }
+        self._device_entities = {}
+        self._entry_entities = {}
+        for item in body["entities"]:
+            self._device_entities.setdefault(item["device_id"], set()).add(item["entity_id"])
+            if item.get("integration_id"):
+                self._entry_entities.setdefault(item["integration_id"], set()).add(
+                    item["entity_id"]
+                )
+
     async def capture(self, *, force=False, now=None):
         """Read changed projections without periodic metadata audits.
 
@@ -329,48 +385,9 @@ class CatalogueDiscovery:
             if full:
                 body = await catalogue.setup_catalogue(self.hass, selected=active)
             else:
-                previous = self.body
-                suggestions = (
-                    await catalogue.energy_suggestions(self.hass)
-                    if energy
-                    else previous["suggestions"]
+                body = await self._refresh_catalogue(
+                    active, names, dirty, energy=energy, history=history
                 )
-                entities = {item["entity_id"]: item for item in previous["entities"]}
-                if energy:
-                    dirty.update(active ^ set(entities))
-                    dirty.update(
-                        identity
-                        for identity in names.keys() | self._names.keys()
-                        if names.get(identity) != self._names.get(identity)
-                    )
-                for identity in dirty:
-                    if identity not in active:
-                        entities.pop(identity, None)
-                        continue
-                    state = self.hass.states.get(identity)
-                    if state is None:
-                        state = State(identity, STATE_UNKNOWN)
-                    projected = (
-                        catalogue.catalogue_entity(self.hass, state, names) if state else None
-                    )
-                    if projected is None:
-                        entities.pop(identity, None)
-                    else:
-                        entities[identity] = projected
-                body = {
-                    "entities": catalogue.ordered_entities(
-                        self.hass, entities.values(), suggestions
-                    )
-                    if dirty or energy
-                    else previous["entities"],
-                    "suggestions": suggestions,
-                    "history": await setup_history(self.hass, suggestions["terms"])
-                    if history
-                    else previous["history"],
-                    "timezone": self.hass.config.time_zone,
-                    "country": self.hass.config.country,
-                    **({"areas": previous["areas"]} if "areas" in previous else {}),
-                }
             if self._closed:
                 return None
             if generation != self.generation:
@@ -379,22 +396,7 @@ class CatalogueDiscovery:
             self.body = body
             self.captured_generation = generation
             self._names = names
-            self._forecast_entries = {
-                identity
-                for source in (manager.data or {}).get("energy_sources", ())
-                if source.get("type") == "solar"
-                and isinstance(source.get("config_entry_solar_forecast"), list)
-                for identity in (source.get("config_entry_solar_forecast") or ())
-                if isinstance(identity, str)
-            }
-            self._device_entities = {}
-            self._entry_entities = {}
-            for item in body["entities"]:
-                self._device_entities.setdefault(item["device_id"], set()).add(item["entity_id"])
-                if item.get("integration_id"):
-                    self._entry_entities.setdefault(item["integration_id"], set()).add(
-                        item["entity_id"]
-                    )
+            self._index_catalogue(manager, body)
             self._watch_states()
             if full or history:
                 self._history_day = now.date()

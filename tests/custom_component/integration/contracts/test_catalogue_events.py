@@ -165,6 +165,16 @@ def test_generation_change_during_capture_requires_repair_and_close_detaches(mon
                 assert repaired["entities"][0]["unit"] == "kW"
                 discovery.acknowledge(repaired)
                 assert discovery.healthy
+                hass.states.async_set("sensor.active", "1", {"unit_of_measurement": "MW"})
+                await hass.async_block_till_done()
+                incremental = await discovery.capture()
+                assert incremental["entities"][0]["unit"] == "MW"
+                full = await discovery.capture(force=True)
+                assert incremental == full
+                discovery.acknowledge(incremental)
+                assert not discovery.healthy
+                discovery.acknowledge(full)
+                assert discovery.healthy
                 discovery.close()
                 generation = discovery.generation
                 hass.states.async_set("sensor.active", "1", {"unit_of_measurement": "W"})
