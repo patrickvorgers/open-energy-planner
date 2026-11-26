@@ -107,7 +107,7 @@ export class PriceSourceSettings {
  * forecast, other source or gap. Update coverage, replace source rows while preserving open
  * details, then replace provenance. Without #price-source-list, skip rows and provenance.
  */
-function renderQuality(prices) {
+function renderPublishedSource(prices) {
     const source = document.getElementById("price-published-source");
     if (source) {
         const route = prices.published_source;
@@ -130,6 +130,9 @@ function renderQuality(prices) {
             if (source.textContent !== message) source.textContent = message;
         }
     }
+}
+
+function renderPublishedCoverage(prices) {
     const coverage = document.getElementById("price-published-coverage");
     if (coverage) {
         let publishedUntil = null;
@@ -142,6 +145,9 @@ function renderQuality(prices) {
             ? `Known prices from now until ${when(publishedUntil)}. Forecasts fill only unpublished hours.`
             : "No published Nord Pool prices available from now. Forecasts fill unpublished hours.";
     }
+}
+
+function renderForecastComparisons(prices) {
     const container = document.getElementById("price-source-list");
     if (!container) return;
     const expanded = [...container.children].map(item => item.querySelector("details")?.open);
@@ -173,6 +179,9 @@ function renderQuality(prices) {
         if (row.selection_issue) text("p", "Forecast comparison storage unavailable: The preference may be defaulted after restart", item);
         container.append(item);
     }
+}
+
+function renderForecastProvenance(prices) {
     const provenance = document.getElementById("price-source-provenance");
     if (provenance) {
         const expandedSources = new Set([...provenance.querySelectorAll("details[open]")].map(detail => detail.dataset.source));
@@ -208,4 +217,11 @@ function renderQuality(prices) {
         }
         for (const [source, issue] of Object.entries(prices.issues || {})) text("p", `${name(source)}: ${issue}`, provenance);
     }
+}
+
+function renderQuality(prices) {
+    renderPublishedSource(prices);
+    renderPublishedCoverage(prices);
+    renderForecastComparisons(prices);
+    renderForecastProvenance(prices);
 }

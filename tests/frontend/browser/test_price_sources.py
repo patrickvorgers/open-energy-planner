@@ -291,7 +291,9 @@ def test_forecast_availability_keeps_provenance_honest_and_details_with_source(p
     page.evaluate(
         "window.sources.update({...window.snapshot, source_status: [...window.snapshot.source_status].reverse()})"
     )
-    expect(overview.locator('details[data-source="epex_predictor"]')).to_have_attribute("open", "")
+    epex_details = overview.locator('details[data-source="epex_predictor"]')
+    expect(epex_details).to_have_attribute("open", "")
+    expect(epex_details.get_by_text("Received: 10/27/2026, 6:56 PM", exact=True)).to_be_visible()
     expect(
         overview.locator('details[data-source="energy_price_forecast_eu"]')
     ).not_to_have_attribute("open", "")
