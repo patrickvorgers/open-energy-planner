@@ -65,6 +65,239 @@ def _valid_area(area):
     )
 
 
+def _validate_catalogue_header(body):
+    """Validate the catalogue envelope and optional location metadata."""
+    if not isinstance(body, dict) or set(body) - {"country", "areas"} != {
+        "entities",
+        "suggestions",
+        "timezone",
+        "history",
+    }:
+        raise ValueError("Invalid HA catalogue")
+    areas = body.get("areas", [])
+    if not isinstance(areas, list) or not all(_valid_area(area) for area in areas):
+        raise ValueError("Invalid Home Assistant areas")
+    if len({area["id"] for area in areas}) != len(areas):
+        raise ValueError("Invalid Home Assistant areas")
+    country = body.get("country")
+    if country is not None and (
+        not isinstance(country, str)
+        or len(country) != 2
+        or not country.isascii()
+        or not country.isalpha()
+    ):
+        raise ValueError("Invalid Home Assistant country")
+
+
+def _validate_entities(entities):
+    """Accept only permitted Home Assistant entity metadata."""
+    if not isinstance(entities, list):
+        raise TypeError("Expected setup entities")
+    for entity in entities:
+        if not isinstance(entity, dict) or set(entity) - {
+            "device_name",
+            "energy_name",
+            "integration_id",
+            "integration_name",
+            "integration_domain",
+            "integration_display_name",
+            "device_entry_type",
+            "area_id",
+        } != {
+            "entity_id",
+            "name",
+            "unit",
+            "device_id",
+            "device_class",
+            "state_class",
+        }:
+            raise ValueError("Invalid setup entity")
+        if any(
+            not isinstance(value_item, str) or len(value_item) > MAX_CATALOGUE_FIELD_LENGTH
+            for value_item in entity.values()
+        ):
+            raise ValueError("Invalid setup entity metadata")
+        if ("integration_domain" in entity) != ("integration_display_name" in entity) or (
+            "integration_domain" in entity
+            and (
+                not entity["integration_domain"].strip()
+                or not entity["integration_display_name"].strip()
+            )
+        ):
+            raise ValueError("Invalid setup entity metadata")
+        if "device_entry_type" in entity and entity["device_entry_type"] != "service":
+            raise ValueError("Invalid setup entity metadata")
+        if ("integration_id" in entity) != ("integration_name" in entity) or (
+            "integration_id" in entity and not entity["integration_id"].strip()
+        ):
+            raise ValueError("Invalid setup entity metadata")
+        if not entity["entity_id"].startswith(
+            ("sensor.", "binary_sensor.", "water_heater.", "device_tracker.", "climate.")
+        ):
+            raise ValueError(
+                "Only sensor, binary sensor, device tracker, water heater and climate metadata is supported"
+            )
+
+
+def _validate_energy_consumers(consumers):
+    """Validate unique Energy consumers and their optional upstream meters."""
+    if not isinstance(consumers, list):
+        raise TypeError("Invalid Energy consumers")
+    identities = set()
+    for consumer in consumers:
+        if not isinstance(consumer, dict) or set(consumer) not in (
+            {"entity_id", "upstream"},
+            {"entity_id", "upstream", "power_entity"},
+        ):
+            raise ValueError("Invalid Energy consumer")
+        EnergyTerm(consumer["entity_id"], 1)
+        if consumer.get("power_entity") is not None:
+            EnergyTerm(consumer["power_entity"], 1)
+        if consumer["entity_id"] in identities:
+            raise ValueError("Duplicate Energy consumer")
+        identities.add(consumer["entity_id"])
+        if consumer["upstream"] is not None:
+            EnergyTerm(consumer["upstream"], 1)
+
+
+def _validate_energy_grid(hints):
+    """Check the grid channels and settlement roles against Energy terms."""
+    if hints["energy_status"] == "ready" and "grid_power_entities" not in hints:
+        raise ValueError("Ready Energy configuration requires its grid power channels")
+    if "grid_power_entities" in hints:
+        powers = hints["grid_power_entities"]
+        if (
+            not isinstance(powers, list)
+            or len(set(powers)) != len(powers)
+            or any(
+                not isinstance(entity, str)
+                or not entity.startswith("sensor.")
+                or len(entity) > MAX_ENTITY_ID_LENGTH
+                for entity in powers
+            )
+        ):
+            raise ValueError("Invalid grid power suggestions")
+    if "settlement" in hints:
+        roles = hints["settlement"]
+        terms = {energy_term["entity_id"]: energy_term["sign"] for energy_term in hints["terms"]}
+        if not isinstance(roles, dict) or set(roles) != {"imports", "exports"}:
+            raise ValueError("Invalid grid settlement roles")
+        for key, sign in (("imports", 1), ("exports", -1)):
+            if not isinstance(roles[key], list) or any(
+                terms.get(entity_item) != sign for entity_item in roles[key]
+            ):
+                raise ValueError("Invalid grid settlement bindings")
+
+
+def _validate_energy_batteries(hints):
+    """Check battery suggestions and their household balance membership."""
+    if not isinstance(hints["batteries"], list):
+        raise TypeError("Invalid battery suggestions")
+    for battery in hints["batteries"]:
+        if (
+            not isinstance(battery, dict)
+            or set(battery)
+            != {
+                "energy_entity",
+                "soc_entity",
+                "power_entity",
+                "charge_energy_entity",
+                "capacity_kwh",
+            }
+            or any(
+                value_item is not None
+                and (not isinstance(value_item, str) or len(value_item) > MAX_ENTITY_ID_LENGTH)
+                for key, value_item in battery.items()
+                if key != "capacity_kwh"
+            )
+        ):
+            raise ValueError("Invalid battery suggestion")
+        capacity = battery.get("capacity_kwh")
+        if capacity is not None and (
+            type(capacity) not in (int, float)
+            or not isfinite(capacity)
+            or not 0 < capacity <= MAX_BATTERY_NUMERIC_SETTING
+        ):
+            raise ValueError("Invalid Energy battery capacity")
+    if hints["grid_export"] is not None and (
+        not isinstance(hints["grid_export"], str)
+        or len(hints["grid_export"]) > MAX_ENTITY_ID_LENGTH
+    ):
+        raise ValueError("Invalid grid export suggestion")
+    if hints["energy_status"] == "ready":
+        meters = [
+            *hints["solar_sources"],
+            *[battery_item["energy_entity"] for battery_item in hints["batteries"]],
+        ]
+        positive = {
+            energy_term["entity_id"] for energy_term in hints["terms"] if energy_term["sign"] == 1
+        }
+        negative = {term["entity_id"] for term in hints["terms"] if term["sign"] == -1}
+        if any(
+            battery.get("charge_energy_entity") is not None
+            and battery["charge_energy_entity"] not in negative
+            for battery in hints["batteries"]
+        ):
+            raise ValueError("Battery charging must be present in the household energy balance")
+        if len(set(meters)) != len(meters) or any(
+            meter_entity not in positive for meter_entity in meters
+        ):
+            raise ValueError(
+                "Energy devices must identify distinct supply meters in the household balance"
+            )
+
+
+def _validate_energy_hints(hints, timezone):
+    """Validate Energy suggestions in the order used by catalogue admission."""
+    if not isinstance(hints, dict) or set(hints) - {
+        "settlement",
+        "grid_power_entities",
+        "consumers",
+        "solar_configurations",
+    } != {
+        "terms",
+        "soc",
+        "grid_power",
+        "solar",
+        "solar_sources",
+        "energy_status",
+        "batteries",
+        "grid_export",
+    }:
+        raise ValueError("Invalid Energy suggestions")
+    _validate_energy_consumers(hints.get("consumers", []))
+    _validate_energy_grid(hints)
+    # Reuse the domain parser for proposed AC energy channels. Never trust an arbitrary expression.
+    parse_demand(
+        {
+            "timezone": timezone,
+            "annual_kwh": DEFAULT_ANNUAL_HOUSEHOLD_KWH,
+            "terms": hints["terms"],
+            "exclusions": [],
+        }
+    )
+    if (
+        not isinstance(hints["soc"], list)
+        or any(
+            not isinstance(value_item, str) or len(value_item) > MAX_CATALOGUE_FIELD_LENGTH
+            for value_item in hints["soc"]
+        )
+        or not (hints["grid_power"] is None or isinstance(hints["grid_power"], str))
+        or type(hints["solar"]) is not bool
+        or not isinstance(hints["solar_sources"], list)
+        or any(
+            not isinstance(value_item, str) or len(value_item) > MAX_CATALOGUE_FIELD_LENGTH
+            for value_item in hints["solar_sources"]
+        )
+    ):
+        raise ValueError("Invalid setup suggestions")
+    if hints["energy_status"] not in ("missing", "incomplete", "ready"):
+        raise ValueError("Invalid Energy status")
+    if (hints["energy_status"] == "ready") != bool(hints["terms"]):
+        raise ValueError("Energy readiness requires a complete balance")
+    _validate_energy_batteries(hints)
+
+
 class HACatalogue:
     """Keep bounded metadata and compact setup statistics in memory, separate from forecast training evidence."""
 
@@ -86,218 +319,10 @@ class HACatalogue:
 
     def receive(self, body, now):
         """Validate typed sensor metadata, Energy readiness and compact sum endpoints, excluding arbitrary HA attributes."""
-        if not isinstance(body, dict) or set(body) - {"country", "areas"} != {
-            "entities",
-            "suggestions",
-            "timezone",
-            "history",
-        }:
-            raise ValueError("Invalid HA catalogue")
-        areas = body.get("areas", [])
-        if not isinstance(areas, list) or not all(_valid_area(area) for area in areas):
-            raise ValueError("Invalid Home Assistant areas")
-        if len({area["id"] for area in areas}) != len(areas):
-            raise ValueError("Invalid Home Assistant areas")
-        country = body.get("country")
-        if country is not None and (
-            not isinstance(country, str)
-            or len(country) != 2
-            or not country.isascii()
-            or not country.isalpha()
-        ):
-            raise ValueError("Invalid Home Assistant country")
-        if not isinstance(body["entities"], list):
-            raise TypeError("Expected setup entities")
-        for entity in body["entities"]:
-            if not isinstance(entity, dict) or set(entity) - {
-                "device_name",
-                "energy_name",
-                "integration_id",
-                "integration_name",
-                "integration_domain",
-                "integration_display_name",
-                "device_entry_type",
-                "area_id",
-            } != {
-                "entity_id",
-                "name",
-                "unit",
-                "device_id",
-                "device_class",
-                "state_class",
-            }:
-                raise ValueError("Invalid setup entity")
-            if any(
-                not isinstance(value_item, str) or len(value_item) > MAX_CATALOGUE_FIELD_LENGTH
-                for value_item in entity.values()
-            ):
-                raise ValueError("Invalid setup entity metadata")
-            if ("integration_domain" in entity) != ("integration_display_name" in entity) or (
-                "integration_domain" in entity
-                and (
-                    not entity["integration_domain"].strip()
-                    or not entity["integration_display_name"].strip()
-                )
-            ):
-                raise ValueError("Invalid setup entity metadata")
-            if "device_entry_type" in entity and entity["device_entry_type"] != "service":
-                raise ValueError("Invalid setup entity metadata")
-            if ("integration_id" in entity) != ("integration_name" in entity) or (
-                "integration_id" in entity and not entity["integration_id"].strip()
-            ):
-                raise ValueError("Invalid setup entity metadata")
-            if not entity["entity_id"].startswith(
-                ("sensor.", "binary_sensor.", "water_heater.", "device_tracker.", "climate.")
-            ):
-                raise ValueError(
-                    "Only sensor, binary sensor, device tracker, water heater and climate metadata is supported"
-                )
+        _validate_catalogue_header(body)
+        _validate_entities(body["entities"])
         hints = body["suggestions"]
-        if not isinstance(hints, dict) or set(hints) - {
-            "settlement",
-            "grid_power_entities",
-            "consumers",
-            "solar_configurations",
-        } != {
-            "terms",
-            "soc",
-            "grid_power",
-            "solar",
-            "solar_sources",
-            "energy_status",
-            "batteries",
-            "grid_export",
-        }:
-            raise ValueError("Invalid Energy suggestions")
-        consumers = hints.get("consumers", [])
-        if not isinstance(consumers, list):
-            raise TypeError("Invalid Energy consumers")
-        identities = set()
-        for consumer in consumers:
-            if not isinstance(consumer, dict) or set(consumer) not in (
-                {"entity_id", "upstream"},
-                {"entity_id", "upstream", "power_entity"},
-            ):
-                raise ValueError("Invalid Energy consumer")
-            EnergyTerm(consumer["entity_id"], 1)
-            if consumer.get("power_entity") is not None:
-                EnergyTerm(consumer["power_entity"], 1)
-            if consumer["entity_id"] in identities:
-                raise ValueError("Duplicate Energy consumer")
-            identities.add(consumer["entity_id"])
-            if consumer["upstream"] is not None:
-                EnergyTerm(consumer["upstream"], 1)
-        if hints["energy_status"] == "ready" and "grid_power_entities" not in hints:
-            raise ValueError("Ready Energy configuration requires its grid power channels")
-        if "grid_power_entities" in hints:
-            powers = hints["grid_power_entities"]
-            if (
-                not isinstance(powers, list)
-                or len(set(powers)) != len(powers)
-                or any(
-                    not isinstance(entity, str)
-                    or not entity.startswith("sensor.")
-                    or len(entity) > MAX_ENTITY_ID_LENGTH
-                    for entity in powers
-                )
-            ):
-                raise ValueError("Invalid grid power suggestions")
-        if "settlement" in hints:
-            roles = hints["settlement"]
-            terms = {
-                energy_term["entity_id"]: energy_term["sign"] for energy_term in hints["terms"]
-            }
-            if not isinstance(roles, dict) or set(roles) != {"imports", "exports"}:
-                raise ValueError("Invalid grid settlement roles")
-            for key, sign in (("imports", 1), ("exports", -1)):
-                if not isinstance(roles[key], list) or any(
-                    terms.get(entity_item) != sign for entity_item in roles[key]
-                ):
-                    raise ValueError("Invalid grid settlement bindings")
-        # Reuse the domain parser for proposed AC energy channels. Never trust an arbitrary expression.
-        parse_demand(
-            {
-                "timezone": body["timezone"],
-                "annual_kwh": DEFAULT_ANNUAL_HOUSEHOLD_KWH,
-                "terms": hints["terms"],
-                "exclusions": [],
-            }
-        )
-        if (
-            not isinstance(hints["soc"], list)
-            or any(
-                not isinstance(value_item, str) or len(value_item) > MAX_CATALOGUE_FIELD_LENGTH
-                for value_item in hints["soc"]
-            )
-            or not (hints["grid_power"] is None or isinstance(hints["grid_power"], str))
-            or type(hints["solar"]) is not bool
-            or not isinstance(hints["solar_sources"], list)
-            or any(
-                not isinstance(value_item, str) or len(value_item) > MAX_CATALOGUE_FIELD_LENGTH
-                for value_item in hints["solar_sources"]
-            )
-        ):
-            raise ValueError("Invalid setup suggestions")
-        if hints["energy_status"] not in ("missing", "incomplete", "ready"):
-            raise ValueError("Invalid Energy status")
-        if (hints["energy_status"] == "ready") != bool(hints["terms"]):
-            raise ValueError("Energy readiness requires a complete balance")
-        if not isinstance(hints["batteries"], list):
-            raise TypeError("Invalid battery suggestions")
-        for battery in hints["batteries"]:
-            if (
-                not isinstance(battery, dict)
-                or set(battery)
-                != {
-                    "energy_entity",
-                    "soc_entity",
-                    "power_entity",
-                    "charge_energy_entity",
-                    "capacity_kwh",
-                }
-                or any(
-                    value_item is not None
-                    and (not isinstance(value_item, str) or len(value_item) > MAX_ENTITY_ID_LENGTH)
-                    for key, value_item in battery.items()
-                    if key != "capacity_kwh"
-                )
-            ):
-                raise ValueError("Invalid battery suggestion")
-            capacity = battery.get("capacity_kwh")
-            if capacity is not None and (
-                type(capacity) not in (int, float)
-                or not isfinite(capacity)
-                or not 0 < capacity <= MAX_BATTERY_NUMERIC_SETTING
-            ):
-                raise ValueError("Invalid Energy battery capacity")
-        if hints["grid_export"] is not None and (
-            not isinstance(hints["grid_export"], str)
-            or len(hints["grid_export"]) > MAX_ENTITY_ID_LENGTH
-        ):
-            raise ValueError("Invalid grid export suggestion")
-        if hints["energy_status"] == "ready":
-            meters = [
-                *hints["solar_sources"],
-                *[battery_item["energy_entity"] for battery_item in hints["batteries"]],
-            ]
-            positive = {
-                energy_term["entity_id"]
-                for energy_term in hints["terms"]
-                if energy_term["sign"] == 1
-            }
-            negative = {term["entity_id"] for term in hints["terms"] if term["sign"] == -1}
-            if any(
-                battery.get("charge_energy_entity") is not None
-                and battery["charge_energy_entity"] not in negative
-                for battery in hints["batteries"]
-            ):
-                raise ValueError("Battery charging must be present in the household energy balance")
-            if len(set(meters)) != len(meters) or any(
-                meter_entity not in positive for meter_entity in meters
-            ):
-                raise ValueError(
-                    "Energy devices must identify distinct supply meters in the household balance"
-                )
+        _validate_energy_hints(hints, body["timezone"])
         annual_estimate(hints["terms"], body["history"])
         validate_configuration_suggestions(
             hints.get("solar_configurations", []), hints["solar_sources"]

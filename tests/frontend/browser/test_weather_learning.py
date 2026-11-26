@@ -135,6 +135,7 @@ def test_weather_candidate_waiting_rejected_and_validated_are_separate_from_acti
                 "status": "accuracy_validated",
                 "completed_windows": 1,
                 "historical_seasons": {"winter": 0, "spring": 0, "summer": 0, "autumn": 1},
+                "excluded_reason": "controlled_use",
                 "windows": [
                     {
                         "day": "2026-10-25",
@@ -175,6 +176,8 @@ def test_weather_candidate_waiting_rejected_and_validated_are_separate_from_acti
         )
         expect(details).to_contain_text("(historical replay)")
         expect(details).to_contain_text("Absolute daily energy error")
+        expect(details).to_contain_text("Days with planned device operation are excluded")
+        expect(details).not_to_contain_text("complete forward days")
     else:
         expect(details).to_contain_text("Shadow waiting for decision evidence")
         expect(details).to_contain_text(
