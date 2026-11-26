@@ -8,6 +8,7 @@ from open_energy_planner.core.units import WATTS_PER_KW
 from open_energy_planner.demand.calculation.composition import integrals
 
 EV_SERVICE_UNPROVEN = "ev_service_unproven"
+EV_FALLBACK_REASONS = (EV_SERVICE_UNPROVEN, "ev_service_time_limit")
 EV_CONTROL_DEFERRED = "ev_control_deferred"
 EV_FALLBACK_BUDGET_SECONDS = 20
 

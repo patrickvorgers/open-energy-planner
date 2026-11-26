@@ -6,6 +6,7 @@ from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from typing import Protocol
 
+from open_energy_planner.appliances.ev.fallback import EV_CONTROL_DEFERRED, EV_FALLBACK_REASONS
 from open_energy_planner.core.units import (
     FULL_SOC_PERCENT,
     SECONDS_PER_HOUR,
@@ -28,8 +29,8 @@ BOUNDARY_RETRY_REASONS = (
     "stale_input",
     "input_expired_during_solve",
     "publication_inputs_expired",
-    "ev_control_deferred",
-    "ev_service_unproven",
+    EV_CONTROL_DEFERRED,
+    *EV_FALLBACK_REASONS,
 )
 GRID_DEVIATION_W = 1000
 BATTERY_DEVIATION_FRACTION = 0.05

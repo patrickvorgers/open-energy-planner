@@ -177,10 +177,7 @@ class HighsSolver:
                 )
             from .ev import prioritize_service
 
-            ev_deadline = deadline - options.ev_fallback_reserve_s
-            ev_issue = prioritize_service(
-                model, problem, ev_deadline if perf_counter() < ev_deadline else deadline
-            )
+            ev_issue = prioritize_service(model, problem, deadline - options.ev_fallback_reserve_s)
             if ev_issue:
                 return SolveResult(
                     Status.NO_CANDIDATE,

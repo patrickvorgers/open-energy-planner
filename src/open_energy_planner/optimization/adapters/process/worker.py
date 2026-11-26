@@ -48,7 +48,7 @@ def solve_with_ev_fallback_in_child(problem, sender, solver_time_limit, strategy
     configure_worker_threads()
     from open_energy_planner.appliances.ev.fallback import (
         EV_FALLBACK_BUDGET_SECONDS,
-        EV_SERVICE_UNPROVEN,
+        EV_FALLBACK_REASONS,
     )
     from open_energy_planner.optimization.adapters.highs import HighsSolver
 
@@ -57,7 +57,7 @@ def solve_with_ev_fallback_in_child(problem, sender, solver_time_limit, strategy
         reserve = min(EV_FALLBACK_BUDGET_SECONDS, solver_time_limit / 2)
         solver = HighsSolver()
         primary = solver.solve(problem, SolveOptions(solver_time_limit, strategy, reserve))
-        if primary.stop_reason == EV_SERVICE_UNPROVEN:
+        if primary.stop_reason in EV_FALLBACK_REASONS:
             remaining = deadline - monotonic()
             if remaining > 0:
                 alternative = solver.solve(fallback, SolveOptions(remaining, strategy))

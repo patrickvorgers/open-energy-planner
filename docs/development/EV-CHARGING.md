@@ -368,7 +368,8 @@ SoC availability, target completion and control capability. Only eligible live
 inferred future arrival. Original component forecasts and actual meter histories
 remain immutable evidence. The existing separation proof is still required.
 
-If HiGHS returns `ev_service_unproven` after the charging forecasts were
+If HiGHS returns `ev_service_unproven` or reaches the reserved EV service
+deadline (`ev_service_time_limit`) after the charging forecasts were
 separated successfully, OEP can publish a checked energy plan without EV
 commands. The worker reserves up to 20 seconds of the shared native budget
 for this retry when there is a usable alternative. The fallback restores

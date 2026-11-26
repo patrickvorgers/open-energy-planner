@@ -696,7 +696,13 @@ def test_changing_price_versions_coalesce_at_clock_boundaries(caplog):
 
 @pytest.mark.parametrize("overrun", [False, True])
 @pytest.mark.parametrize(
-    "retry_reason", ["input_expired_during_solve", "ev_service_unproven", "ev_control_deferred"]
+    "retry_reason",
+    [
+        "input_expired_during_solve",
+        "ev_service_unproven",
+        "ev_service_time_limit",
+        "ev_control_deferred",
+    ],
 )
 def test_live_clock_runs_quarters_and_keeps_pending_updates_through_busy_boundaries(
     overrun, retry_reason

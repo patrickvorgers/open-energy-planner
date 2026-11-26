@@ -3,7 +3,7 @@
 from dataclasses import dataclass
 from datetime import datetime
 
-from open_energy_planner.appliances.ev.fallback import EV_CONTROL_DEFERRED, EV_SERVICE_UNPROVEN
+from open_energy_planner.appliances.ev.fallback import EV_CONTROL_DEFERRED, EV_FALLBACK_REASONS
 from open_energy_planner.notifications.model import Lifecycle, NoticeText, Notification
 
 
@@ -103,7 +103,7 @@ def planning_notifications(state: PlanningStatus, explain):
 
 def explain_planning_problem(reason: str, _detail: str | None = None) -> NoticeText:
     """Explain assembled planning inputs and calculation outcomes, with an honest unknown fallback."""
-    if reason == EV_SERVICE_UNPROVEN:
+    if reason in EV_FALLBACK_REASONS:
         return NoticeText(
             "Waiting for a new energy plan",
             "OEP could not confirm the charging schedule or publish a checked fallback. "

@@ -77,7 +77,8 @@ def test_fallback_restores_load_and_protects_both_directions():
 
 
 @pytest.mark.parametrize("reject", [False, True])
-def test_verified_fallback_publishes_and_has_no_ev_permissions(monkeypatch, reject):
+@pytest.mark.parametrize("stop_reason", ["ev_service_unproven", "ev_service_time_limit"])
+def test_verified_fallback_publishes_and_has_no_ev_permissions(monkeypatch, reject, stop_reason):
     """Use the real fallback optimizer after an injected EV proof failure, then validate the HA plan."""
     original_solve = HighsSolver.solve
 
@@ -85,7 +86,7 @@ def test_verified_fallback_publishes_and_has_no_ev_permissions(monkeypatch, reje
         """Only inject the proof failure on the controlled attempt."""
         if inputs.ev_work:
             assert options.ev_fallback_reserve_s == 20
-            return SolveResult(Status.NO_CANDIDATE, None, "ev_service_unproven", 0, 0, None)
+            return SolveResult(Status.NO_CANDIDATE, None, stop_reason, 0, 0, None)
         assert 0 < options.time_limit_s <= 120
         return original_solve(solver, inputs, options)
 
