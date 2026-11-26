@@ -22,8 +22,6 @@ CODEX_BOT_ID = 199175422
 MAX_CODEX_STATE_CHARACTERS = 10000
 CODEQL_APP_ID = 57789
 REPOWISE_APP_ID = 3768688
-REPOWISE_BOT_ID = 286013898
-REPOWISE_STATE_PREFIX = "<!-- repowise-bot:v4 "
 MAX_REPOWISE_STATE_CHARACTERS = 10000
 MAX_PR_FILES = 150
 PREREQUISITE_CHECKS = (
@@ -213,14 +211,16 @@ def provider_comment(comment, login, bot_id, app_id):
     )
 
 
-def repowise_summary_matches(comment, head, base, check_id):
-    """Bind an authentic RepoWise publication to the checked revision and exact scan."""
-    if not provider_comment(comment, "repowise-bot[bot]", REPOWISE_BOT_ID, REPOWISE_APP_ID):
+def repowise_summary_matches(check_run, head, base):
+    """Bind the selected app's published check output to its head, base and run."""
+    output = check_run.get("output")
+    report = output.get("text") if isinstance(output, dict) else None
+    if not isinstance(report, str):
         return False
-    line = comment["body"].split("\n", 1)[0].rstrip("\r")
-    if not line.startswith(REPOWISE_STATE_PREFIX) or not line.endswith(" -->"):
+    _, fence, state_block = report.replace("\r\n", "\n").rstrip().rpartition("\n```json\n")
+    if not fence or not state_block.endswith("\n```"):
         return False
-    state_json = line[len(REPOWISE_STATE_PREFIX) : -len(" -->")]
+    state_json = state_block.removesuffix("\n```")
     if len(state_json) > MAX_REPOWISE_STATE_CHARACTERS:
         return False
     try:
@@ -232,7 +232,7 @@ def repowise_summary_matches(comment, head, base, check_id):
     return (state.get("head"), state.get("base"), state["run"]) == (
         head,
         base,
-        check_id,
+        check_run["id"],
     )
 
 
@@ -248,18 +248,13 @@ def recorded_repowise_disposition(comment, marker, author_ids):
     return first.rstrip("\r") == marker and bool(explanation.strip())
 
 
-def require_repowise_scan(checks, comments, head, base):
-    """Return the latest successful, authentically published RepoWise check for this revision."""
+def require_repowise_scan(checks, head, base):
+    """Return the latest successful RepoWise check ID with matching app output."""
     latest = latest_check(checks, "Repowise review", REPOWISE_APP_ID)
     if not latest or (latest.get("status"), latest.get("conclusion")) != ("completed", "success"):
         raise VerificationError("Wait for the current-head RepoWise scan to finish successfully")
-    summaries = [
-        comment
-        for comment in comments
-        if repowise_summary_matches(comment, head, base, latest["id"])
-    ]
-    if len(summaries) != 1:
-        raise VerificationError("Missing or ambiguous RepoWise publication for this head and base")
+    if not repowise_summary_matches(latest, head, base):
+        raise VerificationError("Missing or invalid RepoWise check output for this head and base")
     return latest["id"]
 
 
@@ -277,7 +272,7 @@ def repowise_disposition_author_ids(current):
 def require_repowise_disposition(checks, comments, current):
     """Require the PR author or repo owner to account for findings on the exact current scan."""
     head, base = current["head"]["sha"], current["base"]["sha"]
-    check_id = require_repowise_scan(checks, comments, head, base)
+    check_id = require_repowise_scan(checks, head, base)
     author_ids = repowise_disposition_author_ids(current)
     marker = f"<!-- oep-repowise-disposition:{head}:{base}:{check_id} -->"
     if not any(recorded_repowise_disposition(comment, marker, author_ids) for comment in comments):

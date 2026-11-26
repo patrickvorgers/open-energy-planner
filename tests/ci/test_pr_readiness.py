@@ -12,7 +12,7 @@ from script.ci.pr_readiness import (
     require_resolved_threads,
     reset_changed_pr,
 )
-from tests.ci.test_ci_candidate import Evidence, check
+from tests.ci.test_ci_candidate import Evidence, check, repowise_output
 
 
 class ReadinessEvidence:
@@ -280,6 +280,7 @@ def test_ready_and_manual_retry_use_the_same_current_head_gate(action):
             "| Publish review results | Completed | 1s |\n"
         ),
     }
+    checks[-1]["output"] = repowise_output(9001)
     checks.append(
         {**checks[2], "id": 5, "conclusion": "skipped", "output": {"title": "Review skipped"}}
     )

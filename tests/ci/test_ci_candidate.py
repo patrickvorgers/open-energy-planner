@@ -61,7 +61,14 @@ def candidate():
             "| Publish review results | Completed | 1s |\n"
         ),
     }
+    checks[-1]["output"] = repowise_output(9001)
     return event, current, checks
+
+
+def repowise_output(run_id, *, head=HEAD, base=BASE):
+    """Represent the report and final revision metadata published by the RepoWise check."""
+    state = json.dumps({"head": head, "base": base, "run": run_id})
+    return {"text": f"### Review points and new health findings (0)\n\n```json\n{state}\n```"}
 
 
 @pytest.mark.parametrize("action", ["ready_for_review", "labeled"])
@@ -85,12 +92,6 @@ class Evidence:
         self.current = current
         self.comments = []
         self.repowise = [
-            {
-                "id": 301,
-                "user": {"login": "repowise-bot[bot]", "type": "Bot", "id": 286013898},
-                "performed_via_github_app": {"id": 3768688},
-                "body": f'<!-- repowise-bot:v4 {{"head":"{HEAD}","base":"{BASE}","run":9001}} -->',
-            },
             {
                 "id": 302,
                 "user": {"type": "User", "id": 99},
@@ -203,8 +204,10 @@ def test_candidate_file_limit_cannot_be_bypassed_by_a_manual_review(candidate, c
         "skipped",
         "wrong-app",
         "stale-scan",
+        "stale-head",
         "stale-base",
-        "spoofed-report",
+        "missing-output",
+        "malformed-output",
         "missing-disposition",
         "empty-disposition",
         "wrong-actor",
@@ -216,7 +219,7 @@ def test_candidate_requires_fresh_repowise_disposition(candidate, fault):
     event, current, checks = candidate
     client = Evidence(current, checks)
     scan = checks[-1]
-    report, disposition = client.repowise
+    (disposition,) = client.repowise
     if fault == "missing-scan":
         checks.pop()
     elif fault == "pending":
@@ -227,10 +230,14 @@ def test_candidate_requires_fresh_repowise_disposition(candidate, fault):
         scan["app"]["id"] = 1
     elif fault == "stale-scan":
         scan["id"] = 9002
+    elif fault == "stale-head":
+        scan["output"] = repowise_output(9001, head="3" * 40)
     elif fault == "stale-base":
-        report["body"] = report["body"].replace(BASE, "3" * 40)
-    elif fault == "spoofed-report":
-        report["user"]["id"] = 99
+        scan["output"] = repowise_output(9001, base="3" * 40)
+    elif fault == "missing-output":
+        scan.pop("output")
+    elif fault == "malformed-output":
+        scan["output"]["text"] = scan["output"]["text"].replace("{", "[", 1)
     elif fault == "missing-disposition":
         client.repowise.pop()
     elif fault == "empty-disposition":
@@ -241,6 +248,32 @@ def test_candidate_requires_fresh_repowise_disposition(candidate, fault):
         disposition["body"] = disposition["body"].replace(":9001", ":9000")
     with pytest.raises(VerificationError, match="RepoWise"):
         check(event, REPOSITORY, client)
+
+
+def test_ready_rescan_uses_check_output_when_bot_comment_still_names_old_run(candidate):
+    """A Ready rescan needs its own disposition even when the bot keeps its earlier comment."""
+    event, current, checks = candidate
+    event["action"] = "ready_for_review"
+    client = Evidence(current, checks)
+    client.comments.append(
+        {
+            "id": 301,
+            "user": {"login": "repowise-bot[bot]", "type": "Bot", "id": 286013898},
+            "performed_via_github_app": {"id": 3768688},
+            "body": f'<!-- repowise-bot:v4 {{"head":"{HEAD}","base":"{BASE}","run":9001}} -->',
+        }
+    )
+    rescan = {**checks[-1], "id": 9002, "status": "in_progress", "conclusion": None}
+    checks.append(rescan)
+    with pytest.raises(VerificationError, match="finish successfully"):
+        check(event, REPOSITORY, client)
+
+    rescan.update(status="completed", conclusion="success", output=repowise_output(9002))
+    with pytest.raises(VerificationError, match="disposition"):
+        check(event, REPOSITORY, client)
+
+    client.repowise[0]["body"] = client.repowise[0]["body"].replace(":9001", ":9002")
+    assert check(event, REPOSITORY, client) == HEAD
 
 
 @pytest.mark.parametrize("check_index", [0, 1, 2, 3])

@@ -130,7 +130,9 @@ the decisions on the others. Inspect unscanned changed files where relevant.
 
 The PR author or repository owner posts a new PR conversation comment. Its first
 line is the following marker, using the two full commit SHAs and the numeric
-GitHub **Repowise review** check-run ID recorded in the RepoWise bot summary.
+GitHub **Repowise review** check-run ID recorded in the check output. Use the
+latest check on the current head. The PR conversation summary can still point
+to an earlier scan of the same revision.
 
 ```text
 <!-- oep-repowise-disposition:<head-sha>:<base-sha>:<check-run-id> -->
@@ -145,6 +147,11 @@ successful RepoWise report and a matching human disposition. They verify
 identity and freshness. The operator remains responsible for the reasoning
 and for resolving discussions. The existing Dependabot exception applies.
 The change takes effect in trusted-main review checks once it is on main.
+
+If Ready starts a replacement scan and admission stops before the build,
+wait for that scan, read its report and record the new disposition. Use the
+documented `ci: run` retry on the same ready PR if the reviewed head and base
+still match.
 
 ## Choose the reviewer before requesting a review
 
