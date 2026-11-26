@@ -1128,7 +1128,7 @@ class PlanCoordinator:
 
     async def _report_lifecycle(self, state):
         """Send an advisory hint with a short bound during Core startup or shutdown."""
-        if self.closed:
+        if self.closed or self.client.instance_mismatch:
             return
         try:
             async with asyncio.timeout(2):
