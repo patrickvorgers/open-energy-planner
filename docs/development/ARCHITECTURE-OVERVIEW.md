@@ -77,13 +77,14 @@ App paths are relative to `src/open_energy_planner/`.
 ```mermaid
 flowchart TD
     accTitle: Home Assistant source and measurement flow
-    accDescr: Home Assistant pushes coalesced, timestamped captures of selected sources and independently responds to app requests for bounded Recorder history. App services own admission and planning roles.
+    accDescr: Home Assistant pushes selected-source captures, responds to requested Recorder history, and reports graceful Core lifecycle events. The app owns input admission and uses the lifecycle hints for notifications.
     ENERGY["HA Energy and entity registry<br/>Membership, meter identities and location"] --> HA["HA coordinator.py<br/>Manage catalogue and requested history"]
     STATES["Selected HA entity states<br/>Power and battery SoC"] --> PUSH["HA observation sender<br/>Initial capture, changes and freshness heartbeat"]
     RECORDER["HA Recorder<br/>Statistics and supported raw histories"] --> HA
     HA -->|Catalogue| CATALOGUE["home_assistant/setup_catalogue.py<br/>Admit and expose available sources"]
     PUSH -->|Current timestamped observations| OBS["home_assistant/observations.py and live_inputs.py<br/>Validate observations against the configured sources"]
     HA -->|Requested history batches| HIST["Domain importers<br/>Normalize and store measured series by source"]
+    HA -->|Core lifecycle hint| NOTICE["Home Assistant lifecycle diagnostics<br/>Planning notifications"]
     CATALOGUE --> CONFIG["installation/<br/>Bind meters and configure topology and limits"]
     CONFIG --> OBS
     OBS --> LIVE["Live planning inputs"]

@@ -2,13 +2,54 @@
 
 import re
 from copy import deepcopy
+from dataclasses import asdict
 from datetime import UTC, datetime, timedelta
 
 import pytest
 from playwright.sync_api import expect
 
-from tests.app.notifications.support import notification_document
+from tests.app.notifications.support import measurement_evidence, notification_document
 from tests.frontend.browser.helpers import TOKEN, discover, open_primary_navigation
+
+
+@pytest.mark.parametrize("app_site", ["measurement_ingress"], indirect=True)
+def test_real_lifecycle_and_sensor_notices_are_short_and_actionable(app_page):
+    """Display authenticated synthetic lifecycle and observation evidence on desktop and mobile."""
+    from open_energy_planner.home_assistant.observation_wire import configuration_document
+
+    page, url = app_page
+    page.clock.install()
+    config, report = measurement_evidence(datetime.now(UTC))
+    reply = page.request.put(url + "/v1/sources", data=configuration_document(config))
+    assert reply.ok
+    revision = reply.json()["measurement_config"]["revision"]
+    reply = page.request.post(
+        url + "/v1/observations",
+        data={
+            "config_revision": revision,
+            "captured_at": report.captured_at.isoformat(),
+            "readings": [],
+            "issues": [asdict(issue) for issue in report.issues],
+        },
+    )
+    assert reply.ok
+    assert page.request.post(url + "/v1/ha/lifecycle", data={"state": "restarting"}).ok
+    page.goto(url + "/overview")
+    bell = page.get_by_role("button", name=re.compile(r"^Notifications: "))
+    bell.click()
+    popup = page.get_by_role("dialog", name="Notifications", exact=True)
+    expect(popup).to_contain_text("Home Assistant is restarting")
+    expect(popup).not_to_contain_text("sensor.grid")
+    width = page.viewport_size["width"]
+    popup.screenshot(path=f"results/ci/planning-ha-restart-{width}.png")
+
+    assert page.request.post(url + "/v1/ha/lifecycle", data={"state": "started"}).ok
+    with page.expect_response("**/v1/notifications"):
+        page.clock.fast_forward(16000)
+    expect(popup).to_contain_text("sensor.grid: The configured sensor does not exist")
+    expect(popup).not_to_contain_text("sensor.soc")
+    expect(popup).not_to_contain_text("Home Assistant is restarting")
+    popup.screenshot(path=f"results/ci/planning-required-sensor-{width}.png")
 
 
 @pytest.mark.parametrize("app_site", ["ingress"], indirect=True)
@@ -188,18 +229,18 @@ def test_solar_notice_distinguishes_missing_inputs_update_and_failure(app_page, 
 @pytest.mark.parametrize("app_site", ["ingress"], indirect=True)
 @pytest.mark.parametrize("named", [False, True])
 def test_sensor_identity_and_remedy_are_visible_in_both_notification_views(app_page, named):
-    """Desktop/mobile ingress shows both real source failures without a technical-details disclosure or overflow."""
+    """Desktop and mobile show one concrete blocking sensor in both notification views."""
     from open_energy_planner.home_assistant.notifications import explain_measurement_problem
     from open_energy_planner.runtime.diagnostics.planning_notifications import (
         PlanningStatus,
         planning_notice,
     )
-    from tests.app.notifications.support import measurement_evidence
 
     page, url = app_page
     now = datetime(2026, 11, 1, 9, tzinfo=UTC)
     config, report = measurement_evidence(now)
-    names = {"sensor.soc": "Yixiang MB56 32kWh"} if named else None
+    identity = "Grid meter (sensor.grid)" if named else "sensor.grid"
+    names = {"sensor.grid": "Grid meter"} if named else None
     text = explain_measurement_problem(
         "required_measurement_unavailable", config, report, now, names
     )
@@ -210,20 +251,14 @@ def test_sensor_identity_and_remedy_are_visible_in_both_notification_views(app_p
     page.route("**/v1/notifications", lambda route: route.fulfill(json=result))
     page.goto(url + "/setup")
     banner = page.get_by_role("region", name="Notifications")
-    expect(banner).to_contain_text("sensor.grid: The configured sensor does not exist")
-    expect(banner).to_contain_text(
-        "Yixiang MB56 32kWh (sensor.soc): Home Assistant reports unknown or unavailable"
-        if named
-        else "sensor.soc: Home Assistant reports unknown or unavailable"
-    )
+    expect(banner).to_contain_text(f"{identity}: The configured sensor does not exist")
+    expect(banner).not_to_contain_text("sensor.soc")
     expect(banner.get_by_text("Technical details", exact=True)).to_have_count(0)
     page.get_by_role("button", name="Notifications: 1 active", exact=True).click()
     popup = page.locator("#notification-center-panel")
     expect(popup).to_be_visible()
-    expect(popup).to_contain_text("sensor.grid")
-    expect(popup).to_contain_text("sensor.soc")
-    if named:
-        expect(popup).to_contain_text("Yixiang MB56 32kWh")
+    expect(popup).to_contain_text(f"{identity}: The configured sensor does not exist")
+    expect(popup).not_to_contain_text("sensor.soc")
     assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
     page.screenshot(
         path=f"results/ci/actionable-sensors-{page.viewport_size['width']}.png", full_page=True

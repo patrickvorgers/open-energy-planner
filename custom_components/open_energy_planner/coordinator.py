@@ -9,7 +9,11 @@ from uuid import uuid4
 
 from aiohttp import ClientError, ClientResponseError, ServerFingerprintMismatch
 from homeassistant.components import persistent_notification
-from homeassistant.const import EVENT_HOMEASSISTANT_STARTED
+from homeassistant.const import (
+    EVENT_HOMEASSISTANT_STARTED,
+    EVENT_HOMEASSISTANT_STOP,
+    RESTART_EXIT_CODE,
+)
 from homeassistant.core import callback
 from homeassistant.helpers.event import (
     async_track_point_in_utc_time,
@@ -69,6 +73,7 @@ class PlanCoordinator:
         self.boundary_cancel = None
         self.plan_watch_task = None
         self.startup_cancel = None
+        self.shutdown_cancel = None
         self.lock = asyncio.Lock()
         self.services_lock = asyncio.Lock()
         self.observations_lock = asyncio.Lock()
@@ -1121,6 +1126,16 @@ class PlanCoordinator:
         """Follow the currently configured authenticated connection through reconnects."""
         return await self.client.watch_plan_status(cursor)
 
+    async def _report_lifecycle(self, state):
+        """Send an advisory hint with a short bound during Core startup or shutdown."""
+        if self.closed or self.client.instance_mismatch:
+            return
+        try:
+            async with asyncio.timeout(2):
+                await self.client.request("POST", "/v1/ha/lifecycle", {"state": state})
+        except (ClientError, TimeoutError, ValueError):
+            _LOGGER.debug("Home Assistant lifecycle hint did not reach OEP: %s", state)
+
     def start(self):
         """Start the plan watch, source reports and independent service timers."""
 
@@ -1128,11 +1143,22 @@ class PlanCoordinator:
             """Replace early placeholder metadata without waiting for the normal catalogue refresh period."""
             self.startup_cancel = None
             self.catalogue_sent = None
-            await self.sync_services()
+            await asyncio.gather(self._report_lifecycle("started"), self.sync_services())
 
+        async def stopping(_event):
+            """Report the Core exit reason before its shared HTTP session closes."""
+            self.shutdown_cancel = None
+            state = "restarting" if self.hass.exit_code == RESTART_EXIT_CODE else "stopping"
+            await self._report_lifecycle(state)
+
+        self.shutdown_cancel = self.hass.bus.async_listen_once(EVENT_HOMEASSISTANT_STOP, stopping)
         if not self.hass.is_running:
             self.startup_cancel = self.hass.bus.async_listen_once(
                 EVENT_HOMEASSISTANT_STARTED, started
+            )
+        else:
+            self.hass.async_create_background_task(
+                self._report_lifecycle("started"), "OEP Home Assistant ready hint"
             )
         from .appliance_history import RETRY_SECONDS, synchronize
 
@@ -1210,6 +1236,8 @@ class PlanCoordinator:
             self.service_cancel()
         if self.startup_cancel:
             self.startup_cancel()
+        if self.shutdown_cancel:
+            self.shutdown_cancel()
         if self.ev_cancel:
             self.ev_cancel()
         if self.thermal_cancel:

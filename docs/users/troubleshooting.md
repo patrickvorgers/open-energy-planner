@@ -64,6 +64,16 @@ own notifications.
 
 ## No plan available
 
+If Home Assistant reports a restart, Notifications shows **Home Assistant is
+restarting**. A normal stop without a confirmed restart shows **Home Assistant
+is stopping**. The message clears when the integration reports that Home
+Assistant has started or after five minutes. If no shutdown signal reaches the
+app, it can only report that it is waiting for Home Assistant measurements.
+
+When the integration identifies a required sensor fault, the warning shows one
+blocking sensor and its reason. Check the named sensor first. If it recovers and
+another required sensor still blocks planning, the warning shows the next sensor.
+
 Read the reason in Notifications before changing settings. A plan can be rejected
 even when all sensors are present. For example, battery or vehicle measurements
 may no longer support the remaining commands, or a heating start may pass during

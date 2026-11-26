@@ -21,6 +21,7 @@ class PlanningStatus:
     blocked_since: datetime | None
     block_reason: str | None = None
     has_published: bool = False
+    block_text: NoticeText | None = None
 
     @property
     def unknown(self):
@@ -79,7 +80,7 @@ def planning_notifications(state: PlanningStatus, explain):
         return None
     if state.status == "ready" or not state.cause:
         return ()
-    text = explain(state.cause) or explain_planning_problem(state.cause)
+    text = explain(state.cause) or state.block_text or explain_planning_problem(state.cause)
     return (planning_notice(state, text),)
 
 

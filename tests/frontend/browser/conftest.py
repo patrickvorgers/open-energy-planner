@@ -153,7 +153,11 @@ def app_site(request, savings_now):
 
         async def serve():
             """Own the app lifecycle and close its forecast/solver tasks before deleting the temporary store."""
-            ingress = getattr(request, "param", None) in ("ingress", "activity_ingress")
+            ingress = getattr(request, "param", None) in (
+                "ingress",
+                "activity_ingress",
+                "measurement_ingress",
+            )
             if getattr(request, "param", None) in (
                 "savings",
                 "savings_corrected",
@@ -234,9 +238,13 @@ def app_site(request, savings_now):
                         event.remove(database_engine, "before_cursor_execute", fail_selection)
 
             application_factory = create_app
-            if getattr(request, "param", None) in {"maintenance", "maintenance_interrupted"}:
-                from functools import partial
+            if getattr(request, "param", None) == "measurement_ingress":
+                from types import SimpleNamespace
 
+                application_factory = partial(
+                    create_app, basis_source=SimpleNamespace(current=lambda *_args, **_kwargs: None)
+                )
+            if getattr(request, "param", None) in {"maintenance", "maintenance_interrupted"}:
                 from open_energy_planner.runtime.maintenance import create_managed_app
 
                 application_factory = partial(create_managed_app, factory=create_app)
