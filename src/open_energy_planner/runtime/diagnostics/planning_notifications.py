@@ -85,8 +85,8 @@ def planning_notifications(state: PlanningStatus, explain):
                 EV_CONTROL_DEFERRED,
                 NoticeText(
                     "Energy plan active without EV charging control",
-                    "The plan includes expected charging consumption. OEP retries charging "
-                    "optimization at the next planning round. You don't need to do anything now.",
+                    "The plan includes expected charging consumption. Charging optimization "
+                    "retries at the next planning round. You don't need to do anything now.",
                     "View EV charging",
                     "/ev",
                     "info",
@@ -106,8 +106,8 @@ def explain_planning_problem(reason: str, _detail: str | None = None) -> NoticeT
     if reason in EV_FALLBACK_REASONS:
         return NoticeText(
             "Waiting for a new energy plan",
-            "OEP could not confirm the charging schedule or publish a checked fallback. "
-            "It retries automatically at the next planning round. You don't need to do anything now.",
+            "The charging schedule could not be confirmed, and no checked fallback plan was available. "
+            "The next planning round retries automatically. You don't need to do anything now.",
             "View planning",
             "/overview",
             "info",
