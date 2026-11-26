@@ -143,7 +143,7 @@ and end. Calendar days use the installation timezone, including 23-hour and
 25-hour days when the clocks change. Today's summary adds up only the planned
 intervals shown for today. Earlier measured energy is excluded.
 
-[Open the mobile chart example](../assets/planning-mobile.png) to see the stacked cost cards and legend below the same synthetic two-day plan. Open any guide figure at full size when its labels are too small on your screen.
+[Open the mobile chart example](../assets/planning-mobile.png) to see the stacked cost cards, linked charts and Chart series controls for the same synthetic two-day plan. Open any guide figure at full size when its labels are too small on your screen.
 
 ## See individual appliances
 

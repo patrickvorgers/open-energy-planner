@@ -60,17 +60,7 @@ def test_documentation_plan_contains_real_solar_storage_and_daily_variation(app_
         assert any(value is not None and abs(value) > 0.01 for value in values), label
     expect(page.locator("#ems-costs > dl dd").first).not_to_have_text("- EUR")
     expect(page.locator(".grid-mode-block:visible").first).to_be_visible()
-    destination = Path("results/ci/documentation-examples")
-    destination.mkdir(parents=True, exist_ok=True)
-    page.evaluate("document.fonts.ready")
-    size = page.viewport_size
-    panel = page.locator(".optimizer-scenario")
-    if size["width"] == 390:
-        page.set_viewport_size({**size, "height": 1100})
-    panel.evaluate('node => node.scrollIntoView({block: "center"})')
-    panel.screenshot(path=str(destination / f"planning-example-{page.viewport_size['width']}.png"))
-    if size["width"] == 390:
-        page.set_viewport_size(size)
+    capture(page, "planning-example", ".optimizer-scenario")
     capture(page, "planning-scenarios", ".scenario-card:has(#self-consumption-chart)")
 
 
