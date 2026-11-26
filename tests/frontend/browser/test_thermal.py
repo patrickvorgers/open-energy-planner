@@ -339,15 +339,20 @@ def test_heat_source_actions_follow_source_rows_at_each_width(thermal_page):
         full_page=True,
     )
 
+    remove.click()
+    expect(sources).to_have_count(1)
     refresh.click()
     expect(refresh).to_be_enabled()
     expect(add).to_have_count(1)
-    expect(sources).to_have_count(2)
-    remove.click()
     expect(sources).to_have_count(1)
+    expect(sources.get_by_role("heading", name="Heat pump meter", exact=True)).to_be_visible()
     page.get_by_role("button", name="Cancel", exact=True).click()
     expect(add).to_have_count(0)
     expect(refresh).to_be_visible()
+    expect(page.locator("#thermal-summary .thermal-heat-source")).to_have_count(2)
+    expect(
+        page.get_by_role("heading", name="Living room air conditioner", exact=True)
+    ).to_be_visible()
 
 
 @pytest.mark.parametrize("remove_source", [False, True])
