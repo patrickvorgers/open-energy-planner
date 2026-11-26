@@ -18,6 +18,7 @@ def test_real_lifecycle_and_sensor_notices_are_short_and_actionable(app_page):
     from open_energy_planner.home_assistant.observation_wire import configuration_document
 
     page, url = app_page
+    page.clock.install()
     config, report = measurement_evidence(datetime.now(UTC))
     reply = page.request.put(url + "/v1/sources", data=configuration_document(config))
     assert reply.ok
@@ -43,6 +44,8 @@ def test_real_lifecycle_and_sensor_notices_are_short_and_actionable(app_page):
     popup.screenshot(path=f"results/ci/planning-ha-restart-{width}.png")
 
     assert page.request.post(url + "/v1/ha/lifecycle", data={"state": "started"}).ok
+    with page.expect_response("**/v1/notifications"):
+        page.clock.fast_forward(16000)
     expect(popup).to_contain_text("sensor.grid: The configured sensor does not exist")
     expect(popup).not_to_contain_text("sensor.soc")
     expect(popup).not_to_contain_text("Home Assistant is restarting")

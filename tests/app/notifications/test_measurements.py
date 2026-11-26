@@ -173,7 +173,7 @@ def test_lifecycle_hint_expires_when_no_startup_is_reported():
         clock = [NOW]
         lifecycle = HomeAssistantLifecycle(clock=lambda: clock[0])
         app = web.Application()
-        lifecycle.register(app)
+        lifecycle.register(app, lambda _request: None)
         async with TestClient(TestServer(app)) as client:
             assert lifecycle.notice() is None
             response = await client.post("/v1/ha/lifecycle", json={"state": "stopping"})

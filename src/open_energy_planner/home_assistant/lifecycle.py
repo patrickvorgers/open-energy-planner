@@ -5,7 +5,6 @@ from datetime import UTC, datetime, timedelta
 from aiohttp import web
 
 from open_energy_planner.notifications.model import NoticeText, Notification, Severity
-from open_energy_planner.runtime.settings_reads import mark_command_free
 
 HINT_LIFETIME = timedelta(minutes=5)
 SHUTDOWN_TITLES = {
@@ -22,7 +21,7 @@ class HomeAssistantLifecycle:
         self._clock = clock or (lambda: datetime.now(UTC))
         self._shutdown = None
 
-    def register(self, app):
+    def register(self, app, mark_command_free):
         """Accept lifecycle hints through the existing authenticated app and peer routes."""
 
         async def update(request):

@@ -405,7 +405,7 @@ def create_app(
 
     register_notifications(app, notification_center)
     register_build_info(app)
-    ha_lifecycle.register(app)
+    ha_lifecycle.register(app, mark_command_free)
     if source == "home_assistant":
         from .build_info import BUILD_STATUS
         from .runtime.diagnostics.version_notifications import version_notifications
