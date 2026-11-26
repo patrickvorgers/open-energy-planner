@@ -87,6 +87,8 @@ def test_charts_precede_simulations_and_evidence_waits_for_disclosure(app_page):
     page.evaluate(
         "window.immediatePlanChart = Chart.getChart(document.getElementById('plan-chart'))"
     )
+    series = page.get_by_text("Chart series", exact=True)
+    series.click()
     page.locator("#plan-chart-legend").get_by_label("Grid import: AC", exact=True).uncheck()
     page.locator("#energy-chart-legend").get_by_label("Optimizer", exact=True).uncheck()
     assert len(simulations) == 1
@@ -106,7 +108,9 @@ def test_charts_precede_simulations_and_evidence_waits_for_disclosure(app_page):
     assert evidence == []
     captures = Path("results/ci/progressive-planning")
     captures.mkdir(parents=True, exist_ok=True)
+    series.click()
     page.locator("#plan-chart-legend").get_by_label("Grid import: AC", exact=True).check()
+    series.press("Escape")
     page.locator(".optimizer-scenario").screenshot(
         path=str(captures / f"optimizer-{page.viewport_size['width']}.png")
     )

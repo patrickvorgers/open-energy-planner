@@ -19,6 +19,8 @@ def test_appliance_legends_follow_window_without_losing_visibility_choices(app_p
     page.get_by_label("Installation API token", exact=True).fill(TOKEN)
     page.get_by_role("button", name="Connect", exact=True).click()
     wait_for_product_reads(page)
+    series = page.get_by_text("Chart series", exact=True)
+    series.click()
     identities = ("plan-chart", "self-consumption-chart", "reference-chart")
     original = page.evaluate(
         """ids => ids.map(id => Chart.getChart(document.getElementById(id)).data.datasets.map(dataset => dataset.data))""",
@@ -49,6 +51,7 @@ def test_appliance_legends_follow_window_without_losing_visibility_choices(app_p
         expect(later).to_be_visible()
     for hours in (6, 24):
         page.get_by_role("button", name=f"Next {hours} hours", exact=True).click()
+        series.click()
         for identity in identities:
             legend = page.locator(f"#{identity}-legend")
             expect(legend.locator("label").filter(has_text="Later appliance")).not_to_be_visible()
@@ -56,6 +59,7 @@ def test_appliance_legends_follow_window_without_losing_visibility_choices(app_p
             if hours == 6:
                 expect(legend.locator("label").filter(has_text="Dryer")).not_to_be_visible()
     page.get_by_role("button", name=re.compile(r"^Full period")).click()
+    series.click()
     for identity in identities:
         later = page.locator(f"#{identity}-legend").get_by_role(
             "checkbox", name="Later appliance", exact=True
@@ -107,6 +111,7 @@ def test_bulk_legend_selection_is_local_and_keeps_rounding_filter(app_page):
     page.get_by_label("Installation API token", exact=True).fill(TOKEN)
     page.get_by_role("button", name="Connect", exact=True).click()
     wait_for_product_reads(page)
+    page.get_by_text("Chart series", exact=True).click()
     identities = ("plan-chart", "self-consumption-chart", "reference-chart")
     original = page.evaluate(
         """ids => ids.map(id => Chart.getChart(document.getElementById(id)).data.datasets.map(dataset => dataset.data))""",
@@ -127,9 +132,9 @@ def test_bulk_legend_selection_is_local_and_keeps_rounding_filter(app_page):
         for other in identities:
             if other != identity:
                 expect(
-                    page.locator(f"#{other}-legend").get_by_role(
-                        "checkbox", name="Charge point", exact=True
-                    )
+                    page.locator(f"#{other}-legend")
+                    .get_by_text("Charge point", exact=True)
+                    .locator("input")
                 ).to_be_checked()
         legend.get_by_role("button", name="Select all", exact=True).press("Space")
         expect(legend.get_by_role("button", name="Deselect all", exact=True)).to_be_visible()
@@ -166,6 +171,7 @@ def test_rounding_uses_combined_displayed_bar_and_preserves_unknowns(
     page.get_by_role("button", name="Connect", exact=True).click()
     wait_for_product_reads(page)
     legend = page.locator("#plan-chart-legend")
+    legend.get_by_text("Chart series", exact=True).click()
     for expected, scheduled, visible in (
         (rounded_expected, rounded_scheduled, True),
         (-0.025, -0.025, False),

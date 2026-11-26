@@ -365,6 +365,14 @@ refreshing Planning updates this preview. It does not change frozen plan inputs.
 Plan selection switches all original inputs together. New prices or contract
 changes do not rewrite the displayed plan's saved rates.
 
+With a plan selected, Price inputs sits directly below the Optimizer balance with
+matching time bounds and plot edges. A shared cursor uses the original interval
+boundaries. The interval readout values gross grid import and export at the
+original contract rates, before export bonus and battery valuation. The price
+bands rank the lowest import and highest potential export rates from the original
+plan per local day. Changing the visible time window leaves the rankings intact.
+The tariff preview retains its separate whole-day spot price ranking.
+
 A non-quarter boundary such as 07:19 can be an exact sunrise/bonus-window edge.
 It is not necessarily a market-source timestamp. Native provider resolution is
 preserved and hourly forecasts are not given invented quarter variation. The

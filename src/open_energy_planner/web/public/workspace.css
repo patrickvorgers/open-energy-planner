@@ -7,6 +7,20 @@
 .price-daily-key i { width:1.25rem; height:.35rem; }
 .price-daily-low { background:#16816b; }
 .price-daily-high { background:#bf5c32; }
+.workspace .compact-planning-legend { display:flex; flex-wrap:wrap; align-items:center; gap:4px 14px; padding:0 0 6px; }
+.compact-planning-legend .planning-group { display:inline-flex; align-items:center; gap:6px; font-size:11px; }
+.compact-planning-legend .planning-group[hidden] { display:none; }
+.workspace .compact-planning-legend details { border:0; padding:0; margin:0 0 0 auto; position:relative; }
+.compact-planning-legend summary { padding:6px 0; }
+.workspace .planning-series-options { position:absolute; inset-inline-end:0; z-index:4; width:min(28rem, calc(100vw - 4.5rem)); max-height:55vh; overflow:auto; padding:12px; background:white; border:1px solid var(--oep-line); border-radius:10px; box-shadow:0 4px 16px #1c334026; }
+.planning-series-options .chart-legend { display:grid; grid-template-columns:repeat(auto-fit,minmax(min(175px,100%),1fr)); gap:4px 12px; padding-top:6px; }
+.linked-price { min-width:0; border-top:1px solid var(--oep-line); margin-top:10px; padding-top:12px; }
+.linked-price h4 { margin:0; font-size:16px; }
+.linked-price header p { margin:4px 0; }
+.linked-price .chart-legend { display:flex; flex-wrap:wrap; gap:2px 16px; padding-top:4px; }
+.linked-price .price-daily-key { gap:4px 16px; }
+.workspace .linked-price .chart-wrap { height:220px; }
+.chart-linked-cost { margin:4px 0 8px; line-height:1.5; }
 .workspace { background:#f4f6f9; color:#1d2b42; }
 .sidebar { position:fixed; inset:0 auto 0 0; width:224px; padding:32px 20px; background:#102b33; color:#b8cbd0; display:flex; flex-direction:column; z-index:10; }
 .brand { display:flex; gap:12px; align-items:center; color:white; text-decoration:none; font-size:16px; line-height:1.25; }

@@ -123,7 +123,9 @@ Interval pop-ups show positive **Total production** and negative **Total consump
 
 Bars show mean kW for their covered quarter. Battery lines use the separate SoC percentage axis. Tap or hover for the exact interval. A partial quarter has its actual covered duration rather than a fabricated full-quarter energy amount.
 
-Use **Next 6 hours**, **Next 24 hours** or **Full period**. Day bands and date labels identify calendar boundaries in the installation timezone. The legend sits below the full-width chart, with aligned columns on wider screens and compact wrapping on phones. Toggle a series to inspect the others. Hidden or missing data must not be interpreted as a measured zero.
+Use **Next 6 hours**, **Next 24 hours** or **Full period**. The Optimizer and **Price inputs** charts are stacked on the same time scale. Hover or tap either chart to mark the same interval in both. The interval shows grid energy, the original import and export rates, import cost and export revenue before bonus. With a chart focused, use the arrow keys to move by interval and Escape to dismiss the selection. Day labels follow the installation timezone.
+
+The Optimizer legend groups the main energy flows. Open **Chart series** to toggle individual devices, conversion losses and state of charge. Hidden or missing data does not represent a measured zero.
 
 Hover over a date above any of the three scenario charts to see **Expected energy totals**.
 **Total expected production** and **Total expected energy use** sum the scenario flows for the shown period.
@@ -163,7 +165,7 @@ Missing values remain unavailable, rather than being rounded to zero.
 Changing the period updates the entries and preserves your checkbox choices.
 Turning off an eligible appliance keeps its switch available so you can show it again.
 
-Each of the three legends has a **Deselect all** button. After any series is
+The Optimizer's **Chart series** menu and the two comparison legends each have a **Deselect all** button. After any series is
 unchecked it becomes **Select all**. It controls only that chart's available
 legend entries, including both contributions of each device and the battery
 percentage line. It cannot reveal devices excluded by the rounding rule.
@@ -194,8 +196,9 @@ Household demand and available solar describe original forecast inputs before th
 
 The **Price inputs** chart follows the selected latest or historical plan and shows its frozen prices. Newly received prices and changed contract rules appear when a new plan uses them. Without a plan, the same graph is explicitly labelled **Current tariff preview** and uses cached market prices with saved rules. Solid lines identify published prices and dotted lines identify forecast prices. A forecast price is not a later published settlement price. Conditional export bonus revenue can depend on eligibility and remaining allowance, so a preview rate is not a promise that every exported kWh earns it.
 
-The green lower edge marks each day's twelve cheapest spot-price quarters. The
-orange upper edge marks its twelve most expensive quarters. Selection covers the
+For a selected plan, the green lower edge marks up to twelve intervals per day with the lowest original import rates. The orange upper edge marks up to twelve with the highest original export rates, including eligible bonus before the volume cap. The rankings cover the original plan and stay fixed when you switch to a shorter view. Equal rates are ranked chronologically. Missing rates are skipped.
+
+The current tariff preview uses spot prices instead. The green lower edge marks each day's twelve cheapest spot-price quarters. The orange upper edge marks its twelve most expensive. Selection covers the
 complete calendar day in the installation timezone, including elapsed quarters.
 Hover over a marked quarter for its selection and price provenance. The chart's
 screen-reader description also includes selected elapsed quarters outside the

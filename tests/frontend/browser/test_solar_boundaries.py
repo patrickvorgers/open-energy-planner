@@ -216,6 +216,8 @@ def test_three_scenarios_show_independent_solar_with_balanced_day_and_night(app_
                 0, abs=0.00005
             )
         legend = page.locator(f"#{identity}-legend")
+        if identity == "plan-chart":
+            legend.get_by_text("Chart series", exact=True).click()
         dc = legend.get_by_role("checkbox", name="Solar production: DC", exact=True)
         ac = legend.get_by_role("checkbox", name="Solar production: AC", exact=True)
         dc.focus()

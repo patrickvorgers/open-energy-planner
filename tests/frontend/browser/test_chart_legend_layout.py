@@ -19,7 +19,7 @@ LONG_NAME = "Synthetic upstairs heat pump with an unusually long descriptive met
     indirect=True,
 )
 def test_shared_legends_use_full_plot_width_and_keep_controls(app_page):
-    """Real 48-hour charts retain data, complete labels and keyboard controls on four widths."""
+    """Real 48-hour charts retain labels and controls and link optimizer and price inspection."""
     page, url = app_page
     page.clock.set_fixed_time(START)
 
@@ -35,8 +35,37 @@ def test_shared_legends_use_full_plot_width_and_keep_controls(app_page):
     page.get_by_role("button", name="Connect", exact=True).click()
     expect(page.locator("#overview-status")).to_contain_text("Connected")
     wait_for_product_reads(page)
+    optimizer = page.locator(".optimizer-scenario")
+    series = optimizer.get_by_text("Chart series", exact=True)
+    expect(series).to_be_visible()
+    expect(optimizer.get_by_role("button", name="Deselect all", exact=True)).to_be_hidden()
+    plan = page.locator("#plan-chart")
+    price = page.locator("#price-chart")
+    assert price.bounding_box()["y"] > plan.bounding_box()["y"] + plan.bounding_box()["height"]
+    scales = page.evaluate("""() => ["plan-chart", "price-chart"].map(id => {
+        const chart = Chart.getChart(id);
+        return [chart.scales.x.min, chart.scales.x.max, chart.chartArea.left, chart.chartArea.right];
+    })""")
+    assert scales[0] == pytest.approx(scales[1], abs=1)
+    directory = Path("results/ci/chart-legend-columns")
+    directory.mkdir(parents=True, exist_ok=True)
+    optimizer.screenshot(path=str(directory / f"planning-{page.viewport_size['width']}.png"))
+    images = (
+        "() => ['plan-chart', 'price-chart'].map(id => document.getElementById(id).toDataURL())"
+    )
+    idle = page.evaluate(images)
+    price.focus()
+    page.keyboard.press("ArrowRight")
+    assert all(before != after for before, after in zip(idle, page.evaluate(images), strict=True))
+    expect(page.locator("#linked-chart-reading")).to_contain_text("Revenue before bonus")
+    expect(page.locator("#price-chart-tooltip")).to_be_visible()
+    page.keyboard.press("Escape")
+    expect(page.locator("#price-chart-tooltip")).to_be_hidden()
+    if page.viewport_size["width"] < 500:
+        price.tap()
+        expect(page.locator("#price-chart-tooltip")).to_be_visible()
+        expect(page.locator("#plan-evidence-panel")).to_have_js_property("open", False)
     for identity in (
-        "plan-chart",
         "self-consumption-chart",
         "reference-chart",
         "price-chart",
@@ -70,6 +99,7 @@ def test_shared_legends_use_full_plot_width_and_keep_controls(app_page):
             == original
         )
     legend = page.locator("#plan-chart-legend")
+    series.click()
     expect(legend.get_by_role("checkbox", name=LONG_NAME, exact=True)).to_be_visible()
     expect(legend.get_by_role("checkbox", name="Unused appliance", exact=True)).not_to_be_visible()
     if page.viewport_size["width"] > 640:
@@ -86,11 +116,8 @@ def test_shared_legends_use_full_plot_width_and_keep_controls(app_page):
     page.keyboard.press("Space")
     expect(legend.get_by_role("checkbox", name="Grid import: AC", exact=True)).to_be_checked()
     assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
-    directory = Path("results/ci/chart-legend-columns")
-    directory.mkdir(parents=True, exist_ok=True)
-    page.locator(".optimizer-scenario").screenshot(
-        path=str(directory / f"planning-{page.viewport_size['width']}.png")
-    )
+    page.keyboard.press("Escape")
+    expect(series).to_be_focused()
 
 
 @pytest.mark.parametrize("width", [1280, 390])

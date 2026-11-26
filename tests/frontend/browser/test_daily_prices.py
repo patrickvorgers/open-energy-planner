@@ -94,10 +94,9 @@ def test_price_daily_marks_and_accessible_description_follow_backend(app_page):
 
 
 @pytest.mark.parametrize("app_site", ["savings"], indirect=True)
-def test_original_plan_keeps_frozen_prices_and_uses_only_returned_daily_labels(app_page):
-    """A deliberately contrary backend label is rendered verbatim without recalculating frozen plan prices."""
+def test_original_plan_keeps_frozen_prices_and_ranks_contract_rates(app_page):
+    """Original contract rates determine the plan bands without rewriting frozen chart prices."""
     page, url = app_page
-    captured = {}
     headers = {"Authorization": "Bearer " + TOKEN}
     plan_id = page.request.get(url + "/v1/plans?limit=1", headers=headers).json()["plans"][0][
         "plan_id"
@@ -107,47 +106,19 @@ def test_original_plan_keeps_frozen_prices_and_uses_only_returned_daily_labels(a
     ).json()["plan"]
     frozen_tariffs = plan["input_snapshot"]["tariff_evidence"]
 
-    def daily_response(route):
-        """Return a backend-selected expensive quarter independently of the plan's numerical rates."""
-        from urllib.parse import parse_qs, urlparse
-
-        query = parse_qs(urlparse(route.request.url).query)
-        start = datetime.fromisoformat(query["start"][0])
-        from datetime import timedelta
-
-        end = start + timedelta(minutes=15)
-        captured["start"] = start.timestamp() * 1000
-        route.fulfill(
-            json={
-                "days": [
-                    {
-                        "day": start.date().isoformat(),
-                        "status": "final",
-                        "currency": "EUR",
-                        "cheapest": [],
-                        "most_expensive": [start.isoformat()],
-                        "quarters": [
-                            {
-                                "start": start.isoformat(),
-                                "end": end.isoformat(),
-                                "market_price": -100.0,
-                                "price_kind": "published",
-                            }
-                        ],
-                    }
-                ]
-            }
-        )
-
-    page.route("**/v1/prices/daily?*", daily_response)
     page.goto(url + "/overview?plan=" + plan_id)
     page.get_by_label("Installation API token", exact=True).fill(TOKEN)
     page.get_by_role("button", name="Connect", exact=True).click()
-    expect(page.locator("#price-daily-status")).to_contain_text("12 most expensive quarters")
+    expect(page.locator("#price-low-label")).to_have_text("Lowest import rates")
+    expect(page.locator("#price-high-label")).to_have_text("Highest export rates")
     marks = page.evaluate(
         "Chart.getChart(document.getElementById('price-chart')).dailyPriceQuarters"
     )
-    assert marks[0]["start"] == captured["start"] and marks[0]["extreme"] == "most_expensive"
+    assert {mark["extreme"] for mark in marks} == {"cheapest", "most_expensive"}
+    assert {mark["start"] for mark in marks} <= {
+        datetime.fromisoformat(interval["start"]).timestamp() * 1000
+        for interval in plan["input_snapshot"]["problem"]["intervals"]
+    }
     canvas = page.locator("#price-chart")
     canvas.scroll_into_view_if_needed()
     pointer = page.evaluate("""() => {
@@ -158,7 +129,7 @@ def test_original_plan_keeps_frozen_prices_and_uses_only_returned_daily_labels(a
     }""")
     canvas.hover(position=pointer)
     expect(page.locator("#price-chart-tooltip")).to_contain_text(
-        "One of this day's 12 most expensive spot-price quarters"
+        "Among the day's lowest import rates in this plan"
     )
     rates = page.evaluate(
         "Chart.getChart(document.getElementById('price-chart')).data.datasets.map(dataset => dataset.data.map(point => point.y))"

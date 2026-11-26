@@ -68,6 +68,16 @@ const MAX_TIME_AXIS_LABELS = 6;
 const DAILY_DATE_LABEL_MIN_WIDTH_PX = 120;
 const FORECAST_PRICE_DASH = [2, 4];
 const PRICE_EXTREME_COLORS = {cheapest: "#16816b", most_expensive: "#bf5c32"};
+const LINKED_CHART_IDS = ["plan-chart", "price-chart"];
+const LINKED_LEFT_AXIS_PX = 64;
+const LINKED_RIGHT_AXIS_PX = 58;
+const DAILY_HIGHLIGHT_QUARTERS = 12;
+const OPTIMIZER_GROUPS = {
+    import: "Grid import", export: "Grid export", solar: "Solar", solarAC: "Solar",
+    load: "Household & devices", charge: "Battery", discharge: "Battery"
+};
+let linkedInterval = null;
+const isLinkedChart = id => LINKED_CHART_IDS.includes(id);
 const DEVICE_PATTERN_SIZE_PX = 8;
 let inspectSteps = [], planningHours = 0, planEvidence = null, currentPriceWindow = null, priceRequest = 0, priceInputPlanId = null;
 
@@ -125,7 +135,7 @@ function balanceNotes(bar, id, axisTime) {
 /** Keep labels, right-aligned numbers and units in distinct columns without interpreting provider text as HTML. */
 function renderTooltip({chart: instance, tooltip}, node, balance = false, balanceTime = null) {
     const batteryPlan = instance.canvas.id === "battery-plan-chart";
-    node.classList.remove("chart-tooltip-day"); node.style.maxHeight = "";
+    node.classList.remove("chart-tooltip-day", "chart-tooltip-linked"); node.style.maxHeight = "";
     node.hidden = !tooltip.opacity || Boolean(instance.canvas.closest("[hidden]"));
     if (node.hidden) return;
     node.replaceChildren();
@@ -198,6 +208,7 @@ function renderTooltip({chart: instance, tooltip}, node, balance = false, balanc
         }
         section.append(table); sections.append(section);
     }
+    if (isLinkedChart(instance.canvas.id) && linkedInterval) node.append(linkedCostText(linkedInterval));
     node.append(sections);
     const notes = [...(interval ? balanceNotes(interval.raw, instance.canvas.id, when) : tooltip.afterBody)];
     if (totalItems.length) notes.push("Totals include all flows, including hidden series. Supply is positive. Use is negative.");
@@ -205,9 +216,101 @@ function renderTooltip({chart: instance, tooltip}, node, balance = false, balanc
         const explanation = document.createElement("p"); explanation.className = "chart-tooltip-explanation";
         explanation.textContent = notes.join("\n"); node.append(explanation);
     }
-    const bounds = instance.canvas.getBoundingClientRect(), margin = TOOLTIP_VIEWPORT_MARGIN_PX;
-    node.style.left = `${Math.max(margin, Math.min(bounds.left + tooltip.caretX + margin, window.innerWidth - node.offsetWidth - margin))}px`;
-    node.style.top = `${Math.max(margin, Math.min(bounds.top + tooltip.caretY + margin, window.innerHeight - node.offsetHeight - margin))}px`;
+    positionChartTooltip(node, instance.canvas, tooltip.caretX, tooltip.caretY);
+}
+/** Show plan cash flows before bonus and battery valuation. Missing evidence remains unknown. */
+function linkedCostText({gridImport, gridExport, buyRate, sellRate, currency}) {
+    const exchange = (label, energy, rate, amountLabel) => {
+        const known = Number.isFinite(energy) && Number.isFinite(rate);
+        return `${label}: ${Number.isFinite(energy) ? number(energy) + " kWh" : "Unavailable"}. ${amountLabel}: ${known ? money(energy * rate) + " " + currency : "Unavailable"} at ${Number.isFinite(rate) ? money(rate) + " " + currency + "/kWh" : "an unavailable rate"}.`;
+    };
+    const text = document.createElement("p");
+    text.className = "chart-linked-cost";
+    text.textContent = [
+        exchange("Grid import", gridImport, buyRate, "Cost"),
+        exchange("Grid export", gridExport, sellRate, "Revenue before bonus")
+    ].join(" ");
+    return text;
+}
+
+/** Redraw one timestamp across both plots without changing their scales or datasets. */
+function selectLinkedInterval(interval) {
+    if (interval === linkedInterval) return;
+    linkedInterval = interval;
+    for (const id of LINKED_CHART_IDS) charts.get(id)?.draw();
+}
+
+/** Use the plan's real interval boundaries, including partial opening quarters. */
+function linkedChartInteraction(canvas, tooltip, hideTooltip, signal) {
+    const intervalAt = (chart, pixel) => {
+        const time = chart.scales.x.getValueForPixel(pixel);
+        return inspectSteps.find(interval => interval.start <= time && time < interval.end) ?? null;
+    };
+    const midpoint = interval => (interval.start + interval.end) / 2;
+    const inspectInterval = (chart, interval, y) => {
+        selectLinkedInterval(interval);
+        hideTooltip();
+        if (!interval) return;
+        const peerTooltip = $(`${LINKED_CHART_IDS.find(id => id !== canvas.id)}-tooltip`);
+        if (peerTooltip && !peerTooltip.classList.contains("chart-tooltip-day")) peerTooltip.hidden = true;
+        const title = document.createElement("p");
+        title.className = "chart-tooltip-title";
+        title.textContent = `From ${when(interval.start)} to ${when(interval.end)}`;
+        const cost = linkedCostText(interval);
+        tooltip.classList.remove("chart-tooltip-balance", "chart-tooltip-day");
+        tooltip.classList.add("chart-tooltip-linked");
+        tooltip.style.maxHeight = "";
+        tooltip.replaceChildren(title, cost);
+        tooltip.hidden = false;
+        positionChartTooltip(tooltip, canvas, chart.scales.x.getPixelForValue(midpoint(interval)), y);
+        $("linked-chart-reading").textContent = `${title.textContent}. ${cost.textContent}`;
+        $("inspect-time").value = inspectSteps.indexOf(interval);
+        inspect();
+    };
+    canvas.tabIndex = 0;
+    canvas.addEventListener("keydown", event => {
+        const chart = charts.get(canvas.id);
+        if (event.key === "Escape") { selectLinkedInterval(null); hideTooltip(); return; }
+        const visible = inspectSteps.filter(interval => interval.end > chart.scales.x.min && interval.start < chart.scales.x.max);
+        if (!priceInputPlanId || !visible.length) return;
+        const index = visible.indexOf(linkedInterval);
+        const next = {ArrowLeft: index < 0 ? 0 : index - 1, ArrowRight: index + 1, Home: 0, End: visible.length - 1}[event.key];
+        if (next === undefined) return;
+        event.preventDefault();
+        inspectInterval(chart, visible[Math.min(visible.length - 1, Math.max(0, next))], chart.chartArea.top);
+    }, {signal});
+    canvas.addEventListener("blur", () => { hideTooltip(); selectLinkedInterval(null); }, {signal});
+    return {
+        id: "linkedPlanCursor",
+        beforeEvent(chart, {event, inChartArea, replay}) {
+            if (replay || !priceInputPlanId) return;
+            if (event.type === "mousemove" || event.type === "touchstart" || event.type === "touchmove") {
+                selectLinkedInterval(inChartArea ? intervalAt(chart, event.x) : null);
+            }
+            if (event.type === "mouseout" && !tooltip.classList.contains("chart-tooltip-linked")) selectLinkedInterval(null);
+        },
+        afterEvent(chart, {event, inChartArea, replay}) {
+            if (!replay && priceInputPlanId && inChartArea && event.type === "click") {
+                inspectInterval(chart, intervalAt(chart, event.x), event.y);
+            }
+        },
+        afterDraw(chart) {
+            if (!linkedInterval || !priceInputPlanId || !chart.chartArea) return;
+            const {ctx, chartArea: {top, bottom, left, right}, scales: {x}} = chart;
+            const pixel = x.getPixelForValue(midpoint(linkedInterval));
+            if (pixel < left || pixel > right) return;
+            ctx.save(); ctx.strokeStyle = "#3a637b"; ctx.setLineDash([4, 3]);
+            ctx.beginPath(); ctx.moveTo(pixel, top); ctx.lineTo(pixel, bottom); ctx.stroke();
+            ctx.restore();
+        }
+    };
+}
+
+/** Keep pointer and keyboard interval cards within the viewport. */
+function positionChartTooltip(node, canvas, x, y) {
+    const bounds = canvas.getBoundingClientRect(), margin = TOOLTIP_VIEWPORT_MARGIN_PX;
+    node.style.left = `${Math.max(margin, Math.min(bounds.left + x + margin, innerWidth - node.offsetWidth - margin))}px`;
+    node.style.top = `${Math.max(margin, Math.min(bounds.top + y + margin, innerHeight - node.offsetHeight - margin))}px`;
 }
 /**
  * Place daily totals in viewport CSS pixels without covering their owning date.
@@ -323,6 +426,26 @@ const dailyPriceExtremes = {id: "dailyPriceExtremes", beforeDatasetsDraw(instanc
 async function loadDailyPrices(instance) {
     const timestamps = instance.data.datasets.flatMap(dataset => dataset.data.map(point => point.x)).filter(Number.isFinite);
     const status = $("price-daily-status");
+    $("price-low-label").textContent = priceInputPlanId ? "Lowest import rates" : "12 cheapest quarters";
+    $("price-high-label").textContent = priceInputPlanId ? "Highest export rates" : "12 most expensive quarters";
+    if (priceInputPlanId) {
+        if (instance.dailyPriceQuarters) return;
+        // Rank the stored plan, including elapsed intervals. Narrowing the view never changes the selection.
+        const days = new Map();
+        for (const interval of inspectSteps) {
+            if (!Number.isFinite(interval.start) || !(interval.end > interval.start)) continue;
+            const date = localDate(interval.start);
+            if (!days.has(date)) days.set(date, []);
+            days.get(date).push(interval);
+        }
+        instance.dailyPriceQuarters = [...days.values()].flatMap(intervals => [
+            ...rankPlanRates(intervals, "buyRate", "cheapest", 1),
+            ...rankPlanRates(intervals, "rankedExportRate", "most_expensive", -1)
+        ]);
+        status.textContent = "Up to 12 intervals per day within the original plan. Export ranking uses the rate including bonus before the volume cap when bonus applies.";
+        instance.draw();
+        return;
+    }
     if (instance.dailyPricePending) return;
     if (!timestamps.length) { status.textContent = "Whole-day price rankings unavailable."; return; }
     instance.dailyPricePending = true;
@@ -360,6 +483,12 @@ async function loadDailyPrices(instance) {
         instance.dailyPricePending = false;
     }
 }
+/** Keep gaps out of the rate ranking and resolve equal rates consistently in time order. */
+function rankPlanRates(intervals, field, extreme, order) {
+    return intervals.filter(interval => Number.isFinite(interval[field]))
+        .sort((a, b) => order * (a[field] - b[field]) || a.start - b.start)
+        .slice(0, DAILY_HIGHLIGHT_QUARTERS).map(({start, end}) => ({start, end, extreme}));
+}
 /**
  * Render series into canvas id, destroying its previous chart, removing its tooltip
  * and rebuilding its accessible legend. Current-price series retain their visibility.
@@ -387,7 +516,7 @@ function chart(id, series, {utcDays = false, calendarDates = false, unit = "", m
     const daySummary = {owner: null, pinned: false};
     /** Shared dismissal also revokes date ownership when scrolling or interval inspection replaces it. */
     const hideTooltip = () => {
-        tooltip.hidden = true;
+        tooltip.hidden = true; tooltip.classList.remove("chart-tooltip-linked");
         daySummary.owner?.removeAttribute("aria-describedby");
         daySummary.owner = null; daySummary.pinned = false;
     };
@@ -397,6 +526,14 @@ function chart(id, series, {utcDays = false, calendarDates = false, unit = "", m
     }, {signal: tooltipEvents.signal});
     window.addEventListener("scroll", event => {
         if (event.target instanceof Node && tooltip.contains(event.target)) return;
+        if (linkedInterval && tooltip.classList.contains("chart-tooltip-linked") && !tooltip.hidden) {
+            const chart = charts.get(id), bounds = chart.canvas.getBoundingClientRect();
+            if (bounds.bottom > 0 && bounds.top < innerHeight) {
+                const time = (linkedInterval.start + linkedInterval.end) / 2;
+                positionChartTooltip(tooltip, chart.canvas, chart.scales.x.getPixelForValue(time), chart.chartArea.top);
+                return;
+            }
+        }
         const owner = daySummary.owner, bounds = owner?.getBoundingClientRect();
         const movesOwner = event.target === document || event.target === window
             || event.target instanceof Element && event.target.contains(owner);
@@ -406,9 +543,32 @@ function chart(id, series, {utcDays = false, calendarDates = false, unit = "", m
         } else hideTooltip();
     }, {capture: true, signal: tooltipEvents.signal});
     const canvas = $(id), legend = $(`${id}-legend`);
+    const linked = isLinkedChart(id), compact = id === "plan-chart";
+    const hasSoc = series.some(entry => entry.axis === "soc");
     // A retained immutable plan has the same legend group identities even after its labels change.
     const previousVisibility = preserveVisibility ? new Map([...legend.querySelectorAll("input")].map(input => [input.dataset.legendIdentity, input.checked])) : new Map();
+    const seriesOpen = preserveVisibility && legend.querySelector("details")?.open;
     legend.replaceChildren();
+    let seriesHost = legend;
+    const groupKeys = new Map();
+    if (compact && series.length) {
+        const disclosure = document.createElement("details");
+        const summary = document.createElement("summary");
+        const panel = document.createElement("div");
+        seriesHost = document.createElement("div");
+        disclosure.open = Boolean(seriesOpen);
+        summary.textContent = "Chart series";
+        panel.className = "planning-series-options";
+        seriesHost.className = "chart-legend";
+        panel.append(seriesHost);
+        disclosure.append(summary, panel); legend.append(disclosure);
+        disclosure.addEventListener("keydown", event => {
+            if (event.key === "Escape") { disclosure.open = false; summary.focus(); }
+        });
+        document.addEventListener("pointerdown", event => {
+            if (disclosure.open && !disclosure.contains(event.target)) disclosure.open = false;
+        }, {signal: tooltipEvents.signal});
+    }
     const legendEntries = [];
     const planningLegend = ["plan-chart", "reference-chart", "self-consumption-chart"].includes(id);
     let deviceKey = null, selectAll = null;
@@ -435,6 +595,13 @@ function chart(id, series, {utcDays = false, calendarDates = false, unit = "", m
             selectAll.disabled = !eligible.length;
             selectAll.textContent = eligible.every(({input}) => input.checked) ? "Deselect all" : "Select all";
         }
+        for (const {item, swatch, indexes} of groupKeys.values()) {
+            const colors = [...new Set(indexes.filter(index => instance.isDatasetVisible(index))
+                .map(index => instance.data.datasets[index].swatchColor))];
+            item.hidden = !colors.length;
+            if (colors.length) swatch.style.background = colors.length > 1
+                ? `linear-gradient(90deg, ${colors[0]} 50%, ${colors[1]} 50%)` : colors[0];
+        }
     }
     const axisTime = calendarDates ? value => dateLabel(localDate(value)) : utcDays ? (value) => dateLabel(new Date(value).toISOString().slice(0, 10)) : value => when(value);
     const datasets = series.map((s, index) => {
@@ -448,11 +615,12 @@ function chart(id, series, {utcDays = false, calendarDates = false, unit = "", m
         return {label: s.name, data: values, hidden: id === "price-chart" && hiddenPriceSeries.has(s.name), type: s.type || "line", stack: s.stack, yAxisID: s.axis || "y", unit: s.unit || unit, tooltipGroup: s.tooltipGroup, deviceState: s.deviceState, swatchColor: color, borderColor: s.outlineColor || color, backgroundColor: deviceFill(color, s.deviceState), borderWidth: s.outlineColor ? ({raw}) => raw?.y ? {top: 1, bottom: 1} : 0 : s.type === "bar" ? 0 : 2, borderSkipped: s.outlineColor ? false : undefined, borderDash: s.reference ? [6, 4] : [], segment: {borderDash: ({p0}) => p0.raw.priceKind === "forecast" ? FORECAST_PRICE_DASH : undefined}, pointRadius: 0, pointHitRadius: 10, spanGaps: false, order: s.axis === "soc" ? 0 : s.stackOrder ?? 1};
     });
     const result = new Chart(canvas, {
-        type: "line", data: {datasets: planningLegend ? [] : datasets}, plugins: [intervalWidths, ...(id === "price-chart" ? [dailyPriceExtremes] : []), ...(calendarDates ? [] : [calendarDays]), ...(gridSteps ? [gridModeStrip(gridSteps, positionDayTooltip)] : []), {
+        type: "line", data: {datasets: planningLegend ? [] : datasets}, plugins: [intervalWidths, ...(id === "price-chart" ? [dailyPriceExtremes] : []), ...(calendarDates ? [] : [calendarDays]), ...(gridSteps ? [gridModeStrip(gridSteps, positionDayTooltip)] : []), ...(linked ? [linkedChartInteraction(canvas, tooltip, hideTooltip, tooltipEvents.signal)] : []), {
             id: "deviceLegend",
             beforeUpdate: syncLegend
         }, {id: "ownedTooltip", afterDestroy() { hideTooltip(); tooltipEvents.abort(); tooltip.remove(); }}],
         options: {responsive: true, maintainAspectRatio: false, animation: false, parsing: false,
+            layout: {padding: {right: linked && !hasSoc ? LINKED_RIGHT_AXIS_PX : 0}},
             interaction: {mode: "nearest", axis: "x", intersect: false},
             onHover: (event, _elements, instance) => {
                 if (id === "price-chart") priceHoverTime = instance.scales.x.getValueForPixel(event.x);
@@ -463,6 +631,7 @@ function chart(id, series, {utcDays = false, calendarDates = false, unit = "", m
                 }
             },
             plugins: {calendarDays: {utc: utcDays, onHeading: planningLegend ? (instance, heading, day) => { hideTooltip(); planningDayHeading(instance, series, tooltip, daySummary, heading, day); } : null}, valueAxisHeadroom: {group: null}, legend: {display: false}, tooltip: {enabled: false, external: (context) => {
+                if (!context.tooltip.opacity && tooltip.classList.contains("chart-tooltip-linked")) return;
                 hideTooltip();
                 const time = balanceTime; balanceTime = null;
                 renderTooltip(context, tooltip, balance, time);
@@ -480,7 +649,10 @@ function chart(id, series, {utcDays = false, calendarDates = false, unit = "", m
                     if (id === "price-chart") {
                         const time = Number.isFinite(priceHoverTime) ? priceHoverTime : items[0].parsed.x;
                         const quarter = items[0].chart.dailyPriceQuarters?.find(quarter => quarter.start <= time && time < quarter.end);
-                        return [priceInputPlanId ? step?.priceStatus : "", quarter ? `${quarter.extreme === "cheapest" ? "One of this day's 12 cheapest spot-price quarters" : "One of this day's 12 most expensive spot-price quarters"}: ${optionLabel(quarter.status)}` : ""].filter(Boolean);
+                        const rank = quarter && (priceInputPlanId
+                            ? (quarter.extreme === "cheapest" ? "Among the day's lowest import rates in this plan" : "Among the day's highest export rates in this plan")
+                            : `${quarter.extreme === "cheapest" ? "One of this day's 12 cheapest spot-price quarters" : "One of this day's 12 most expensive spot-price quarters"}: ${optionLabel(quarter.status)}`);
+                        return [priceInputPlanId ? step?.priceStatus : "", rank].filter(Boolean);
                     }
                     return step?.commands || [];
                 }
@@ -501,10 +673,10 @@ function chart(id, series, {utcDays = false, calendarDates = false, unit = "", m
                 },
                 ticks: {padding: gridSteps ? GRID_MODE_TICK_PADDING : 3, maxTicksLimit: MAX_TIME_AXIS_LABELS, maxRotation: 0, callback: (value) => utcDays || calendarDates ? axisTime(value) : calendarTime(value)},
                 title: {display: utcDays || calendarDates, text: "Calendar date"}},
-                y: {min: minimum ?? undefined, suggestedMin: balance ? 0 : undefined, stacked: balance, beginAtZero: id === "price-chart", title: {display: Boolean(unit), text: unit}, grid: {color: (context) => context.tick.value === 0 ? "#455d70" : "#edf1f5", lineWidth: (context) => context.tick.value === 0 ? 2 : 1}, ticks: {maxTicksLimit: 6, callback: (value) => unit === "W" ? number(value) : valueText(value, unit)}},
-                ...(series.some((entry) => entry.axis === "soc") ? {soc: {position: "right", min: 0, max: 100, stacked: false, title: {display: true, text: "SoC (%)"}, ticks: {callback: (value) => percentage(value, false)}, grid: {drawOnChartArea: false}}} : {})},
+                y: {min: minimum ?? undefined, suggestedMin: balance ? 0 : undefined, stacked: balance, beginAtZero: id === "price-chart", title: {display: Boolean(unit), text: unit}, afterFit: linked ? scale => { scale.width = LINKED_LEFT_AXIS_PX; } : undefined, grid: {color: (context) => context.tick.value === 0 ? "#455d70" : "#edf1f5", lineWidth: (context) => context.tick.value === 0 ? 2 : 1}, ticks: {maxTicksLimit: 6, callback: (value) => unit === "W" ? number(value) : valueText(value, unit)}},
+                ...(hasSoc ? {soc: {position: "right", min: 0, max: 100, stacked: false, afterFit: linked ? scale => { scale.width = LINKED_RIGHT_AXIS_PX; } : undefined, title: {display: true, text: "SoC (%)"}, ticks: {callback: (value) => percentage(value, false)}, grid: {drawOnChartArea: false}}} : {})},
             onClick: (_event, elements) => {
-                if (batteryPlan || ["forecast-chart", "reference-chart", "self-consumption-chart"].includes(id) || id === "price-chart" && !priceInputPlanId || !elements.length) return;
+                if (linked || batteryPlan || ["forecast-chart", "reference-chart", "self-consumption-chart"].includes(id) || !elements.length) return;
                 const time = datasets[elements[0].datasetIndex].data[elements[0].index].x;
                 const index = inspectSteps.findIndex((step) => step.start <= time && time < step.end);
                 if (index >= 0) { $("inspect-time").value = index; inspect(); $("plan-evidence-panel").open = true; $("interval-evidence-panel").open = true; $("evidence-time").scrollIntoView({block: "nearest"}); }
@@ -531,7 +703,7 @@ function chart(id, series, {utcDays = false, calendarDates = false, unit = "", m
             }
             applyRange();
         });
-        legend.append(selectAll);
+        seriesHost.append(selectAll);
     }
     const legendGroups = new Map();
     series.forEach((s, index) => {
@@ -553,8 +725,20 @@ function chart(id, series, {utcDays = false, calendarDates = false, unit = "", m
             applyRange();
         });
         const swatch = document.createElement("span"); swatch.className = "series-swatch"; swatch.style.backgroundColor = s.legendColor || datasets[indexes[0]].swatchColor; swatch.setAttribute("aria-hidden", "true");
-        label.append(input, swatch, document.createTextNode(s.legendName || s.name)); legend.append(label);
+        label.append(input, swatch, document.createTextNode(s.legendName || s.name)); seriesHost.append(label);
         legendEntries.push({label, input, indexes, device: s.deviceState != null});
+        const group = OPTIMIZER_GROUPS[s.flowKey] || (s.deviceState != null ? OPTIMIZER_GROUPS.load : null);
+        if (compact && group) {
+            if (!groupKeys.has(group)) {
+                const item = document.createElement("span"), keySwatch = document.createElement("span");
+                item.className = "planning-group"; keySwatch.className = "series-swatch";
+                keySwatch.setAttribute("aria-hidden", "true");
+                item.append(keySwatch, group);
+                legend.insertBefore(item, legend.querySelector("details"));
+                groupKeys.set(group, {item, swatch: keySwatch, indexes: []});
+            }
+            groupKeys.get(group).indexes.push(...indexes);
+        }
     }
     if (gridSteps) {
         const item = document.createElement("span"), swatch = document.createElement("span");
@@ -562,13 +746,13 @@ function chart(id, series, {utcDays = false, calendarDates = false, unit = "", m
         swatch.className = "grid-mode-swatch";
         swatch.setAttribute("aria-hidden", "true");
         item.append(swatch, ZERO_GRID_LABEL);
-        legend.append(item);
+        legend.insertBefore(item, legend.querySelector("details"));
     }
     if (series.some(s => s.deviceState != null)) {
         const key = document.createElement("p"); key.id = `${id}-device-key`; deviceKey = key;
         key.className = "chart-device-key";
         key.textContent = "Striped bars show expected use. Solid bars show scheduled use.";
-        legend.append(key);
+        seriesHost.append(key);
     }
     if (!datasets.some((d) => d.data.length)) {
         const empty = document.createElement("p"); empty.textContent = "No covered data available."; legend.append(empty);
@@ -1082,6 +1266,7 @@ async function showPlan(signal, background = false) {
             batteryLabels.set(battery.device_id, label);
         });
         inspectSteps = [];
+        selectLinkedInterval(null);
         const intervals = plan.input_snapshot?.problem?.intervals || [];
         const inverterGroups = new Map((plan.input_snapshot?.problem?.inverters || []).map((inverter, index) =>
             [inverter.inverter_id, {id: inverter.inverter_id, title: plan.comparison_names?.[inverter.inverter_id] || `Inverter ${index + 1}`} ]));
@@ -1099,14 +1284,15 @@ async function showPlan(signal, background = false) {
             const tariff = plan.input_snapshot?.tariff_evidence?.find((t) => Date.parse(t.start) <= time && Date.parse(t.end) > time);
             const add = (list, value, priceKind) => { if (value != null) list.push([time, value, priceKind], [end, value, priceKind]); };
             add(buy, prices.buy_price, tariff?.price_kind); add(sell, prices.sell_price, tariff?.price_kind);
+            let exportWithBonus = null;
             if (bonusRules.length) {
                 // Frozen compiled rates already include rule/window eligibility. Intentionally ignore quota.
                 const rates = bonusRules.map((rule) => rule.rates?.[i]);
                 const tariffs = plan.input_snapshot?.tariff_evidence || [];
                 const covered = !tariffs.length || tariffs.some((tariff) => Date.parse(tariff.start) <= time && Date.parse(tariff.end) >= end);
                 const known = covered && Number.isFinite(prices.sell_price) && rates.every((rate) => Number.isFinite(rate) && rate >= 0);
-                const total = known ? prices.sell_price + rates.reduce((sum, rate) => sum + rate, 0) : null;
-                bonusSell.push([time, total, tariff?.price_kind], [end, total, tariff?.price_kind]);
+                exportWithBonus = known ? prices.sell_price + rates.reduce((sum, rate) => sum + rate, 0) : null;
+                bonusSell.push([time, exportWithBonus, tariff?.price_kind], [end, exportWithBonus, tariff?.price_kind]);
             }
             const originalDemand = householdForecastEnergy(plan, prices);
             add(demandForecast, prices.duration_h > 0 && originalDemand != null ? originalDemand / prices.duration_h : null);
@@ -1144,6 +1330,10 @@ async function showPlan(signal, background = false) {
                 deviceValues.push(intervalCard(name, [["Solar production", production]], inverterGroups.get(inverter)));
             }
             inspectSteps.push({start: time, end, commands,
+                gridImport: imported, gridExport: exported, currency,
+                buyRate: tariff ? tariff.buy_price : prices.buy_price,
+                sellRate: tariff ? tariff.sell_price : prices.sell_price,
+                rankedExportRate: bonusRules.length ? exportWithBonus : (tariff ? tariff.sell_price : prices.sell_price),
                 priceStatus: tariff ? `${tariff.price_kind === "published" ? "Published market rate" : tariff.price_kind === "forecast" ? "Forecast market rate" : "Market rate provenance unclassified"}: Native ${tariff.native_resolution_minutes}-minute resolution` : "Market provenance unavailable",
                 values: [
                     intervalCard("Energy in this interval", [["Grid import", imported, "kWh"], ["Grid export", exported, "kWh"], ["Household demand: AC", step.load_kwh, "kWh"], ["Available solar: DC", step.pv_kwh, "kWh"]]),

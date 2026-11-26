@@ -298,7 +298,10 @@ export function energyBalances(plan, labels) {
         ];
         const series = definitions
             .filter(([key]) => !(converter && key === "load") && (group.units.length || !["charge", "discharge"].includes(key)))
-            .map(([key, name, tooltipGroup]) => flowSeries(name, FLOW_COLORS[key], intervals, rows.map((row) => row?.[key]), tooltipGroup));
+            .map(([key, name, tooltipGroup]) => ({
+                ...flowSeries(name, FLOW_COLORS[key], intervals, rows.map((row) => row?.[key]), tooltipGroup),
+                flowKey: key
+            }));
         if (!converter) for (const part of consumption.parts) {
             series.push({...flowSeries(part.name, part.color, intervals, rows.map((row, index) => row == null ? null : -part.values[index]), "Consumption"), legendId: part.identity, legendName: part.legendName, deviceState: part.state});
         }
