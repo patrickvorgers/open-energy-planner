@@ -110,3 +110,20 @@ def test_projection_rejects_invalid_soc_before_command_admission(field, value):
     projection["vehicles"][0]["actual"] = actual
     with pytest.raises((ValueError, TypeError)):
         ev.receive(projection)
+
+
+def test_projection_checks_point_capability_before_power_and_membership():
+    """Report the first invalid point field in the established validation order."""
+    projection = {**settings(), "configuration_version": "configuration", "revision": "revision"}
+    for vehicle in projection["vehicles"]:
+        vehicle.update(name="Synthetic car", next_departure=(NOW + timedelta(hours=1)).isoformat())
+    point = projection["points"][0]
+    point.update(name="Synthetic wallbox", control="unsupported", maximum_w=0, vehicle_ids=[])
+    with pytest.raises(ValueError, match="Invalid EV capability"):
+        ev.receive(projection)
+    point["control"] = "variable"
+    with pytest.raises(ValueError, match="Invalid EV maximum power"):
+        ev.receive(projection)
+    point["maximum_w"] = 10000
+    with pytest.raises(ValueError, match="Invalid EV vehicle membership"):
+        ev.receive(projection)
