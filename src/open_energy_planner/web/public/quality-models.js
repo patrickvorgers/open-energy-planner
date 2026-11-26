@@ -118,55 +118,63 @@ function appendCurrentWeather(row, paragraph, comparison) {
 
 function appendDailySelection(row, paragraph) {
     if (row.dailySelection) {
-        const learning = row.dailySelection;
-        if (learning.required_windows == null) {
-            const historical = (learning.windows || []).filter(window => window.source === "historical_replay").length;
-            const completed = learning.completed_windows;
-            paragraph(`Daily accuracy: ${completed} complete local day${completed === 1 ? "" : "s"}, including ${historical} historical replay${historical === 1 ? "" : "s"}. Selection: ${optionLabel(learning.status)}.`);
-            if (learning.historical_seasons) {
-                const seasons = Object.entries(learning.historical_seasons);
-                paragraph(`Historical test days by season: ${seasons.map(([season, count]) => `${optionLabel(season)}: ${count}`).join(", ")}.`);
-            }
-            paragraph("The model with the lowest average hourly error is selected. Each comparison uses the same measured hours. Original forecasts replace replays for the same day when available.");
-            if (learning.replay_issue) paragraph("Historical replay evidence is temporarily unavailable.");
-        } else {
-            paragraph(`Daily accuracy: ${learning.completed_windows} of ${learning.required_windows} complete local days. Selection: ${optionLabel(learning.status)}.`);
-            paragraph("Original forecasts are frozen before midnight in the Home Assistant timezone. Models use the same measured hours. Missing measurements do not count as zero consumption. A simpler profile remains active until another model consistently improves accuracy.");
-            paragraph(`Each compared day must improve the baseline by more than ${percentage(learning.required_relative_benefit_percent)} and ${learning.required_absolute_benefit_kwh?.toLocaleString(undefined, {maximumFractionDigits: 3}) ?? "Unknown"} kWh per hour.`);
-        }
-        if (learning.pending_until) paragraph(`Pending measured day ends: ${when(learning.pending_until)}`);
-        for (const window of learning.windows || []) {
-            const errors = Object.entries(window.mae_kwh).map(([model, value]) => `${optionLabel(model)}: ${value.toLocaleString(undefined, {maximumFractionDigits: 4})} kWh`).join(", ");
-            paragraph(`${dateLabel(window.day)}${window.source === "historical_replay" ? " (historical replay)" : ""}: Mean absolute hourly error: ${errors}.`);
-            const totals = Object.entries(window.daily_energy_error_kwh || {}).map(([model, value]) => `${optionLabel(model)}: ${value.toLocaleString(undefined, {maximumFractionDigits: 4})} kWh`).join(", ");
-            if (totals) paragraph(`${dateLabel(window.day)}: Absolute daily energy error: ${totals}.`);
-        }
-        if (learning.excluded_reason === "controlled_use") paragraph("Days with planned device operation are excluded from spontaneous-use comparisons. A planned shift does not prove a behavior forecast was wrong.");
-        if (learning.excluded_reason === "control_history_unavailable") paragraph("Published control history is unavailable. The simpler model remains active until intervention evidence can be checked.");
-        if (learning.training_quality) {
-            const quality = learning.training_quality;
-            paragraph(`Weather candidate training coverage: ${quality.used_hours} of ${quality.source_hours} measured hours have complete inputs.`);
-            for (const period of quality.excluded_periods || []) paragraph(`Excluded training hours: ${when(period.start)} to ${when(period.end)}: ${optionLabel(period.reason)}.`);
-        }
+        appendDailyAccuracy(row.dailySelection, paragraph);
+        appendDailyComparisons(row.dailySelection, paragraph);
     }
-    if (row.weatherLearning) {
-        const learning = row.weatherLearning;
-        const reasons = {training_history_required: "Collecting at least 28 days of complete device and temperature history.", model_runtime_unavailable: "The candidate model is unavailable. The simpler forecast remains in use.", weather_forecast_unavailable: "The candidate needs a complete temperature forecast within its observed training range. The simpler forecast remains in use.", forward_archive_required: "Waiting for saved forward comparisons.", comparison_evidence_unreadable: "Saved comparison evidence is unavailable. The simpler forecast remains in use.", collecting_forward_accuracy: "Collecting later measurements for predictions saved before the measured day.", no_consistent_accuracy_benefit: "The simpler model is retained because the candidate did not consistently improve accuracy.", accuracy_validated: "The nonlinear candidate improved all required forward comparisons. Household activation still requires the existing decision comparison."};
-        paragraph(`Weather candidate: Machine learning: ${learning.completed_windows} of ${learning.required_windows} complete forward days.`);
-        paragraph(reasons[learning.status] || "Waiting for candidate evidence.");
-        if (learning.training_quality) {
-            const quality = learning.training_quality;
-            paragraph(`Training coverage: ${quality.used_hours} of ${quality.source_hours} measured hours have complete inputs.`);
-            const exclusions = {previous_day_incomplete: "A complete preceding day of measurements is unavailable", temperature_unavailable: "Temperature was unavailable at training time"};
-            for (const period of quality.excluded_periods || []) paragraph(`Excluded training hours: ${when(period.start)} to ${when(period.end)}: ${exclusions[period.reason] || "Required input is unavailable"}.`);
+    if (row.weatherLearning) appendWeatherLearning(row.weatherLearning, paragraph);
+}
+
+function appendDailyAccuracy(learning, paragraph) {
+    if (learning.required_windows == null) {
+        const historical = (learning.windows || []).filter(window => window.source === "historical_replay").length;
+        const completed = learning.completed_windows;
+        paragraph(`Daily accuracy: ${completed} complete local day${completed === 1 ? "" : "s"}, including ${historical} historical replay${historical === 1 ? "" : "s"}. Selection: ${optionLabel(learning.status)}.`);
+        if (learning.historical_seasons) {
+            const seasons = Object.entries(learning.historical_seasons);
+            paragraph(`Historical test days by season: ${seasons.map(([season, count]) => `${optionLabel(season)}: ${count}`).join(", ")}.`);
         }
-        paragraph("Each comparison uses the same measured hours for the candidate, Ridge or the current simpler model, and the weekday profile. Missing measurements remain unknown. Cold spells and defrost peaks are not trimmed.");
-        paragraph(`The candidate must improve each simpler model by more than ${percentage(learning.required_relative_benefit_percent)} and ${learning.required_absolute_benefit_kwh?.toLocaleString(undefined, {maximumFractionDigits: 3}) ?? "Unknown"} kWh per hour in every required day.`);
-        if (learning.pending_until) paragraph(`Pending measured day ends: ${when(learning.pending_until)}`);
-        if (learning.excluded_window) paragraph(`Excluded comparison: ${when(learning.excluded_window.start)}: Complete measured hours are unavailable.`);
-        for (const window of learning.windows || []) paragraph(`${when(window.start)} to ${when(window.end)}: Mean absolute error per hour: Candidate ${window.mae_kwh.candidate.toLocaleString(undefined, {maximumFractionDigits: 3})} kWh: Simpler model ${window.mae_kwh.simpler.toLocaleString(undefined, {maximumFractionDigits: 3})} kWh: Weekday profile ${window.mae_kwh.profile.toLocaleString(undefined, {maximumFractionDigits: 3})} kWh.`);
-        paragraph("This predicts consumption. Home Assistant retains control of operating mode, comfort and safety.");
+        paragraph("The model with the lowest average hourly error is selected. Each comparison uses the same measured hours. Original forecasts replace replays for the same day when available.");
+        if (learning.replay_issue) paragraph("Historical replay evidence is temporarily unavailable.");
+    } else {
+        paragraph(`Daily accuracy: ${learning.completed_windows} of ${learning.required_windows} complete local days. Selection: ${optionLabel(learning.status)}.`);
+        paragraph("Original forecasts are frozen before midnight in the Home Assistant timezone. Models use the same measured hours. Missing measurements do not count as zero consumption. A simpler profile remains active until another model consistently improves accuracy.");
+        paragraph(`Each compared day must improve the baseline by more than ${percentage(learning.required_relative_benefit_percent)} and ${learning.required_absolute_benefit_kwh?.toLocaleString(undefined, {maximumFractionDigits: 3}) ?? "Unknown"} kWh per hour.`);
     }
+}
+
+function appendDailyComparisons(learning, paragraph) {
+    if (learning.pending_until) paragraph(`Pending measured day ends: ${when(learning.pending_until)}`);
+    for (const window of learning.windows || []) {
+        const errors = Object.entries(window.mae_kwh).map(([model, value]) => `${optionLabel(model)}: ${value.toLocaleString(undefined, {maximumFractionDigits: 4})} kWh`).join(", ");
+        paragraph(`${dateLabel(window.day)}${window.source === "historical_replay" ? " (historical replay)" : ""}: Mean absolute hourly error: ${errors}.`);
+        const totals = Object.entries(window.daily_energy_error_kwh || {}).map(([model, value]) => `${optionLabel(model)}: ${value.toLocaleString(undefined, {maximumFractionDigits: 4})} kWh`).join(", ");
+        if (totals) paragraph(`${dateLabel(window.day)}: Absolute daily energy error: ${totals}.`);
+    }
+    if (learning.excluded_reason === "controlled_use") paragraph("Days with planned device operation are excluded from spontaneous-use comparisons. A planned shift does not prove a behavior forecast was wrong.");
+    if (learning.excluded_reason === "control_history_unavailable") paragraph("Published control history is unavailable. The simpler model remains active until intervention evidence can be checked.");
+    if (learning.training_quality) {
+        const quality = learning.training_quality;
+        paragraph(`Weather candidate training coverage: ${quality.used_hours} of ${quality.source_hours} measured hours have complete inputs.`);
+        for (const period of quality.excluded_periods || []) paragraph(`Excluded training hours: ${when(period.start)} to ${when(period.end)}: ${optionLabel(period.reason)}.`);
+    }
+}
+
+function appendWeatherLearning(learning, paragraph) {
+    const reasons = {training_history_required: "Collecting at least 28 days of complete device and temperature history.", model_runtime_unavailable: "The candidate model is unavailable. The simpler forecast remains in use.", weather_forecast_unavailable: "The candidate needs a complete temperature forecast within its observed training range. The simpler forecast remains in use.", forward_archive_required: "Waiting for saved forward comparisons.", comparison_evidence_unreadable: "Saved comparison evidence is unavailable. The simpler forecast remains in use.", collecting_forward_accuracy: "Collecting later measurements for predictions saved before the measured day.", no_consistent_accuracy_benefit: "The simpler model is retained because the candidate did not consistently improve accuracy.", accuracy_validated: "The nonlinear candidate improved all required forward comparisons. Household activation still requires the existing decision comparison."};
+    paragraph(`Weather candidate: Machine learning: ${learning.completed_windows} of ${learning.required_windows} complete forward days.`);
+    paragraph(reasons[learning.status] || "Waiting for candidate evidence.");
+    if (learning.training_quality) {
+        const quality = learning.training_quality;
+        paragraph(`Training coverage: ${quality.used_hours} of ${quality.source_hours} measured hours have complete inputs.`);
+        const exclusions = {previous_day_incomplete: "A complete preceding day of measurements is unavailable", temperature_unavailable: "Temperature was unavailable at training time"};
+        for (const period of quality.excluded_periods || []) paragraph(`Excluded training hours: ${when(period.start)} to ${when(period.end)}: ${exclusions[period.reason] || "Required input is unavailable"}.`);
+    }
+    paragraph("Each comparison uses the same measured hours for the candidate, Ridge or the current simpler model, and the weekday profile. Missing measurements remain unknown. Cold spells and defrost peaks are not trimmed.");
+    paragraph(`The candidate must improve each simpler model by more than ${percentage(learning.required_relative_benefit_percent)} and ${learning.required_absolute_benefit_kwh?.toLocaleString(undefined, {maximumFractionDigits: 3}) ?? "Unknown"} kWh per hour in every required day.`);
+    if (learning.pending_until) paragraph(`Pending measured day ends: ${when(learning.pending_until)}`);
+    if (learning.excluded_window) paragraph(`Excluded comparison: ${when(learning.excluded_window.start)}: Complete measured hours are unavailable.`);
+    for (const window of learning.windows || []) paragraph(`${when(window.start)} to ${when(window.end)}: Mean absolute error per hour: Candidate ${window.mae_kwh.candidate.toLocaleString(undefined, {maximumFractionDigits: 3})} kWh: Simpler model ${window.mae_kwh.simpler.toLocaleString(undefined, {maximumFractionDigits: 3})} kWh: Weekday profile ${window.mae_kwh.profile.toLocaleString(undefined, {maximumFractionDigits: 3})} kWh.`);
+    paragraph("This predicts consumption. Home Assistant retains control of operating mode, comfort and safety.");
 }
 
 function appendSolarSelection(row, paragraph, comparison) {
