@@ -573,13 +573,14 @@ hours and nonnegative AC `kwh`. Remaining steps integrate to physical interval
 `load_kwh`. Separate appliance/EV/thermal schedules are added once by the solver.
 Configured EV meters retain their original `forecast_steps` as evidence while
 their remaining `steps` contain zero future energy over the full horizon.
-This also applies without an eligible charging session. Only live SOC-based
-`ev_work` adds future EV demand. Unprovable separation blocks live planning
-instead of publishing historical charger demand. Actual meter history is unchanged.
+This also applies without an eligible charging session in a normal plan.
+Live SOC-based `ev_work` adds scheduled demand. A checked EV fallback restores
+each original charging forecast into the corresponding remaining steps.
+Unprovable separation still blocks planning. Actual meter history is unchanged.
 Component forecast documents also retain `separated_entities`, the exact set
 of ready Energy meters subtracted from residual training. Planning rejects a
 changed or incomplete set. EV evidence additionally retains the charge point's
-`energy_entity` for final ownership validation. Existing settings and hashes are unchanged. Historical
+`energy_entity` for final ownership validation. Stored settings and previously archived hashes are unchanged. Historical
 plans without attribution retain their original aggregate presentation.
 Household-only publication may omit components. New cycle, EV and thermal control
 requires complete component ownership. EV source evidence must match the point,
@@ -1028,6 +1029,23 @@ active `power_w` for that billing segment. `steps[].devices` has EV commands wit
 kind, finite nonnegative AC power in watts, vehicle and session identity. `ev_schedule` retains
 per-session required/planned useful kWh, departure, predicted SoC and shortfall.
 All are immutable original evidence, transferred with the plan archive.
+
+New snapshots include `input_snapshot.ev_power_bounds`. Each entry is an
+`[energy_entity_id, maximum_ac_w]` pair for a configured charge point. The
+maximum is a nonnegative AC power limit in watts. The list is empty when there
+is no EV work at capture. Older plan JSON may omit the field.
+
+The optional top-level boolean `ev_control_deferred` is present and `true`
+only when the independently validated fallback produced the archived plan.
+Its inputs retain the original power bounds, restore charger forecasts in
+`load_components[].steps` exactly once and use conservative effective
+`problem.grid_import_limit_w` and `problem.grid_export_limit_w` in AC watts.
+The limits reserve space for actual charging between zero and the configured
+maximum while other work and tariff evidence are retained. The fallback input
+has empty `problem.ev_work` and `ev_evidence`. Its `ev_context.work` and
+`ev_schedule` are empty and the plan contains no EV device commands. The
+stored input hash covers the actual fallback input. No SQL change or
+historical archive conversion is required.
 
 Sustained execution-power deviation episodes and their acknowledged-replan state
 are process-local. They add no database fields and never restore physical

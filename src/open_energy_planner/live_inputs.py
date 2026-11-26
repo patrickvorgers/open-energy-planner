@@ -6,6 +6,7 @@ from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from typing import Protocol
 
+from open_energy_planner.appliances.ev.fallback import EV_CONTROL_DEFERRED, EV_FALLBACK_REASONS
 from open_energy_planner.core.units import (
     FULL_SOC_PERCENT,
     SECONDS_PER_HOUR,
@@ -24,7 +25,13 @@ from .planning_policy import FINE_INTERVAL_MINUTES
 
 REPLAN_BOUNDARY_MINUTES = 5
 BOUNDARY_START_WINDOW = timedelta(minutes=1)
-EXPIRED_ROUND_REASONS = ("stale_input", "input_expired_during_solve", "publication_inputs_expired")
+BOUNDARY_RETRY_REASONS = (
+    "stale_input",
+    "input_expired_during_solve",
+    "publication_inputs_expired",
+    EV_CONTROL_DEFERRED,
+    *EV_FALLBACK_REASONS,
+)
 GRID_DEVIATION_W = 1000
 BATTERY_DEVIATION_FRACTION = 0.05
 THERMAL_DEVIATION_C = 2
@@ -152,7 +159,7 @@ class LiveInputs:
                 await sleep((boundary - now).total_seconds())
             if (
                 _clock_boundary(now, FINE_INTERVAL_MINUTES) >= boundary
-                or self.planner.reason in EXPIRED_ROUND_REASONS
+                or self.planner.reason in BOUNDARY_RETRY_REASONS
             ):
                 self.replan_requested = True
             boundary = _clock_boundary(now, REPLAN_BOUNDARY_MINUTES)

@@ -695,7 +695,18 @@ def test_changing_price_versions_coalesce_at_clock_boundaries(caplog):
 
 
 @pytest.mark.parametrize("overrun", [False, True])
-def test_live_clock_runs_quarters_and_keeps_pending_updates_through_busy_boundaries(overrun):
+@pytest.mark.parametrize(
+    "retry_reason",
+    [
+        "input_expired_during_solve",
+        "ev_service_unproven",
+        "ev_service_time_limit",
+        "ev_control_deferred",
+    ],
+)
+def test_live_clock_runs_quarters_and_keeps_pending_updates_through_busy_boundaries(
+    overrun, retry_reason
+):
     """Run the live timer with an independent clock and hold a real coordinator task open."""
 
     async def scenario():
@@ -711,11 +722,7 @@ def test_live_clock_runs_quarters_and_keeps_pending_updates_through_busy_boundar
             if len(starts) == 1:
                 started.set()
                 await release.wait()
-            reason = (
-                "input_expired_during_solve"
-                if clock[0] == NOW + timedelta(minutes=35)
-                else "test_no_plan"
-            )
+            reason = retry_reason if clock[0] == NOW + timedelta(minutes=35) else "test_no_plan"
             return SimpleNamespace(document=None, reason=reason)
 
         async def publish(_document):
@@ -809,7 +816,7 @@ def test_live_clock_runs_quarters_and_keeps_pending_updates_through_busy_boundar
             await tick(2100)
             await planner.wait()
             assert starts[-1][0] == NOW + timedelta(minutes=35)
-            assert planner.reason == "input_expired_during_solve"
+            assert planner.reason == retry_reason
             receive(2399)
             await tick(2400)
             await planner.wait()

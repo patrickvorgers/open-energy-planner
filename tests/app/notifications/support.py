@@ -23,9 +23,12 @@ def notification_document(
     history_issue=None,
     version_status=None,
     negative_export_meters=(),
+    ev_fallback_active=False,
 ):
     """Provide the existing explicit fixture inputs through actual source registration and serialization."""
-    state = PlanningStatus(status, reason, blocked_since, block_reason)
+    state = PlanningStatus(
+        status, reason, blocked_since, block_reason, ev_fallback_active=ev_fallback_active
+    )
     center = NotificationCenter()
     center.register("versions", lambda: version_notifications(version_status == "mismatch"))
     center.register(

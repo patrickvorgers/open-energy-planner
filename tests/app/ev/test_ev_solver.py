@@ -277,6 +277,27 @@ def test_model_construction_consumes_the_same_bounded_time_budget(monkeypatch):
     assert result.plan is None
 
 
+def test_ev_stage_cannot_consume_the_reserved_fallback_budget(monkeypatch):
+    """Keep 15 remaining seconds for fallback after an earlier stage used 105 seconds."""
+    from open_energy_planner.optimization.adapters.highs import ev as ev_module
+    from open_energy_planner.optimization.adapters.highs import solver as solver_module
+
+    clock = [0.0]
+
+    def finish_reserve(*_arguments):
+        """Model earlier priorities finishing after the original EV cutoff."""
+        clock[0] = 105
+
+    monkeypatch.setattr(solver_module, "perf_counter", lambda: clock[0])
+    monkeypatch.setattr(ev_module, "perf_counter", lambda: clock[0])
+    monkeypatch.setattr(solver_module, "prioritize_reserve", finish_reserve)
+    options = SolveOptions(time_limit_s=120, ev_fallback_reserve_s=20)
+    result = HighsSolver().solve(problem((work(),)), options)
+    assert result.status == Status.NO_CANDIDATE
+    assert result.stop_reason == "ev_service_time_limit"
+    assert result.plan is None
+
+
 def test_ev_pv_stationary_battery_and_running_appliance_share_one_bus():
     """1 PV + .25 battery kWh supplies .5 household + .25 appliance + .5 EV AC, storing .4 EV kWh at 80%."""
     car = work(
