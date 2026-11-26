@@ -138,3 +138,39 @@ def test_original_plan_keeps_frozen_prices_and_ranks_contract_rates(app_page):
         [tariff[field] for tariff in frozen_tariffs for _ in range(2)]
         for field in ("market_price", "buy_price", "sell_price")
     ]
+
+
+@pytest.mark.parametrize("app_site", ["savings_corrected"], indirect=True)
+def test_linked_price_readout_uses_original_cash_rates_and_keeps_missing_values_unknown(app_page):
+    """A frozen 0.30 tariff gives 0.38 for 1.25 kWh, and missing energy cannot become zero."""
+    page, url = app_page
+    headers = {"Authorization": "Bearer " + TOKEN}
+    plan_id = page.request.get(url + "/v1/plans?limit=1", headers=headers).json()["plans"][0][
+        "plan_id"
+    ]
+    plan = page.request.get(
+        url + f"/v1/plans/{plan_id}/comparison?view=plan", headers=headers
+    ).json()["plan"]
+    page.clock.set_fixed_time(
+        datetime.fromisoformat(plan["input_snapshot"]["problem"]["intervals"][0]["start"])
+    )
+
+    def adjust_grid_evidence(route):
+        """Supply one known amount followed by a gap to the original-plan view."""
+        document = route.fetch().json()
+        opening, missing = document["plan"]["expected_flows"]
+        opening["grid_import"] = 1.25
+        missing.pop("grid_import")
+        route.fulfill(json=document)
+
+    page.route("**/comparison?view=plan", adjust_grid_evidence)
+    page.goto(url + "/overview?plan=" + plan_id)
+    page.get_by_label("Installation API token", exact=True).fill(TOKEN)
+    page.get_by_role("button", name="Connect", exact=True).click()
+    expect(page.locator("#overview-status")).to_contain_text("Connected")
+    price = page.locator("#price-chart")
+    price.press("Home")
+    reading = page.locator("#linked-chart-reading")
+    expect(reading).to_contain_text("Grid import: 1.25 kWh. Cost: 0.38 EUR at 0.30 EUR/kWh.")
+    price.press("End")
+    expect(reading).to_contain_text("Grid import: Unavailable. Cost: Unavailable at 0.30 EUR/kWh.")

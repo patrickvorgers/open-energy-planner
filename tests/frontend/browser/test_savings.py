@@ -115,6 +115,7 @@ def test_source_rename_on_savings_refreshes_the_pinned_plan_when_reopened(
     page.locator("#plan-version").select_option("browser-original-plan")
     expect(page.locator("#overview-status")).to_contain_text("Connected")
     expect(page.locator("#plan-chart-legend")).to_contain_text("Garage battery")
+    page.get_by_text("Chart series", exact=True).click()
     page.locator("#plan-chart-legend").get_by_label("Grid import: AC", exact=True).uncheck()
     page.locator("#plan-chart-legend").get_by_label("Garage battery: SoC", exact=True).uncheck()
     for chart in ("reference-chart", "self-consumption-chart"):

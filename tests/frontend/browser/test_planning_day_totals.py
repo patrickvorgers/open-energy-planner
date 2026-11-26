@@ -142,7 +142,11 @@ def test_all_planning_dates_expose_daily_energy(app_page):
         )
         heading.press("Escape")
         legend = page.locator("#" + identity + "-legend")
+        if identity == "plan-chart":
+            legend.get_by_text("Chart series", exact=True).click()
         legend.get_by_role("checkbox", name="Grid import: AC", exact=True).uncheck()
+        if identity == "plan-chart":
+            legend.get_by_text("Chart series", exact=True).press("Escape")
         heading = card.get_by_role("button", name="Expected energy totals for", exact=False).first
         heading.focus()
         expect(tooltip.locator("tr").filter(has_text="Grid import: AC")).to_have_count(0)

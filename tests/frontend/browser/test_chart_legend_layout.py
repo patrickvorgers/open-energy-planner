@@ -39,44 +39,7 @@ def test_shared_legends_use_full_plot_width_and_keep_controls(app_page):
     series = optimizer.get_by_text("Chart series", exact=True)
     expect(series).to_be_visible()
     expect(optimizer.get_by_role("button", name="Deselect all", exact=True)).to_be_hidden()
-    plan = page.locator("#plan-chart")
-    price = page.locator("#price-chart")
-    assert price.bounding_box()["y"] > plan.bounding_box()["y"] + plan.bounding_box()["height"]
-    spacing = plan.evaluate("""canvas => {
-        const tick = Chart.getChart(canvas).scales.x.getLabelItems()[0];
-        const center = canvas.getBoundingClientRect().top + tick.options.translation[1] + tick.textOffset;
-        const stripBottom = canvas.parentElement.querySelector(".grid-mode-track").getBoundingClientRect().bottom;
-        const priceTop = document.getElementById("linked-price-heading").getBoundingClientRect().top;
-        return {
-            stripGap: center - tick.font.lineHeight / 2 - stripBottom,
-            headingGap: priceTop - center - tick.font.lineHeight / 2
-        };
-    }""")
-    assert spacing["stripGap"] >= 0, spacing
-    assert 0 < spacing["headingGap"] <= 30, spacing
-    scales = page.evaluate("""() => ["plan-chart", "price-chart"].map(id => {
-        const chart = Chart.getChart(id);
-        return [chart.scales.x.min, chart.scales.x.max, chart.chartArea.left, chart.chartArea.right];
-    })""")
-    assert scales[0] == pytest.approx(scales[1], abs=1)
-    directory = Path("results/ci/chart-legend-columns")
-    directory.mkdir(parents=True, exist_ok=True)
-    optimizer.screenshot(path=str(directory / f"planning-{page.viewport_size['width']}.png"))
-    images = (
-        "() => ['plan-chart', 'price-chart'].map(id => document.getElementById(id).toDataURL())"
-    )
-    idle = page.evaluate(images)
-    price.focus()
-    page.keyboard.press("ArrowRight")
-    assert all(before != after for before, after in zip(idle, page.evaluate(images), strict=True))
-    expect(page.locator("#linked-chart-reading")).to_contain_text("Revenue before bonus")
-    expect(page.locator("#price-chart-tooltip")).to_be_visible()
-    page.keyboard.press("Escape")
-    expect(page.locator("#price-chart-tooltip")).to_be_hidden()
-    if page.viewport_size["width"] < 500:
-        price.tap()
-        expect(page.locator("#price-chart-tooltip")).to_be_visible()
-        expect(page.locator("#plan-evidence-panel")).to_have_js_property("open", False)
+    _assert_linked_plot_layout_and_inspection(page, optimizer)
     for identity in (
         "self-consumption-chart",
         "reference-chart",
@@ -130,6 +93,48 @@ def test_shared_legends_use_full_plot_width_and_keep_controls(app_page):
     assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
     page.keyboard.press("Escape")
     expect(series).to_be_focused()
+
+
+def _assert_linked_plot_layout_and_inspection(page, optimizer):
+    """Exercise matching plot edges and a shared cursor through keyboard and touch."""
+    plan = page.locator("#plan-chart")
+    price = page.locator("#price-chart")
+    assert price.bounding_box()["y"] > plan.bounding_box()["y"] + plan.bounding_box()["height"]
+    spacing = plan.evaluate("""canvas => {
+        const tick = Chart.getChart(canvas).scales.x.getLabelItems()[0];
+        const center = canvas.getBoundingClientRect().top + tick.options.translation[1] + tick.textOffset;
+        const stripBottom = canvas.parentElement.querySelector(".grid-mode-track").getBoundingClientRect().bottom;
+        const priceTop = document.getElementById("linked-price-heading").getBoundingClientRect().top;
+        return {
+            stripGap: center - tick.font.lineHeight / 2 - stripBottom,
+            headingGap: priceTop - center - tick.font.lineHeight / 2
+        };
+    }""")
+    assert spacing["stripGap"] >= 0, spacing
+    assert 0 < spacing["headingGap"] <= 30, spacing
+    scales = page.evaluate("""() => ["plan-chart", "price-chart"].map(id => {
+        const chart = Chart.getChart(id);
+        return [chart.scales.x.min, chart.scales.x.max, chart.chartArea.left, chart.chartArea.right];
+    })""")
+    assert scales[0] == pytest.approx(scales[1], abs=1)
+    directory = Path("results/ci/chart-legend-columns")
+    directory.mkdir(parents=True, exist_ok=True)
+    optimizer.screenshot(path=str(directory / f"planning-{page.viewport_size['width']}.png"))
+    images = (
+        "() => ['plan-chart', 'price-chart'].map(id => document.getElementById(id).toDataURL())"
+    )
+    idle = page.evaluate(images)
+    price.focus()
+    page.keyboard.press("ArrowRight")
+    assert all(before != after for before, after in zip(idle, page.evaluate(images), strict=True))
+    expect(page.locator("#linked-chart-reading")).to_contain_text("Revenue before bonus")
+    expect(page.locator("#price-chart-tooltip")).to_be_visible()
+    page.keyboard.press("Escape")
+    expect(page.locator("#price-chart-tooltip")).to_be_hidden()
+    if page.viewport_size["width"] < 500:
+        price.tap()
+        expect(page.locator("#price-chart-tooltip")).to_be_visible()
+        expect(page.locator("#plan-evidence-panel")).to_have_js_property("open", False)
 
 
 @pytest.mark.parametrize("width", [1280, 390])
