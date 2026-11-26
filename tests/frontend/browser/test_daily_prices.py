@@ -109,8 +109,11 @@ def test_original_plan_keeps_frozen_prices_and_ranks_contract_rates(app_page):
     page.goto(url + "/overview?plan=" + plan_id)
     page.get_by_label("Installation API token", exact=True).fill(TOKEN)
     page.get_by_role("button", name="Connect", exact=True).click()
-    expect(page.locator("#price-low-label")).to_have_text("Lowest import rates")
-    expect(page.locator("#price-high-label")).to_have_text("Highest export rates")
+    expect(page.locator("#price-low-label")).to_have_text("12 cheapest quarters")
+    expect(page.locator("#price-high-label")).to_have_text("12 most expensive quarters")
+    expect(page.locator("#price-daily-status")).to_contain_text(
+        "The cheapest quarters use import rates."
+    )
     marks = page.evaluate(
         "Chart.getChart(document.getElementById('price-chart')).dailyPriceQuarters"
     )
@@ -138,6 +141,76 @@ def test_original_plan_keeps_frozen_prices_and_ranks_contract_rates(app_page):
         [tariff[field] for tariff in frozen_tariffs for _ in range(2)]
         for field in ("market_price", "buy_price", "sell_price")
     ]
+
+
+@pytest.mark.parametrize("app_site", ["savings"], indirect=True)
+def test_linked_plan_ranks_exact_import_and_bonus_inclusive_export_intervals(app_page):
+    """The cap keeps 12 quarters. Bonus moves low base-export rates 0, 2 and 4 to the top."""
+    page, url = app_page
+    start = datetime(2026, 11, 4, 9, tzinfo=UTC)
+    boundaries = [start + timedelta(minutes=15 * index) for index in range(16)]
+    import_order = [12, 9, 6, 3, 1, 5, 7, 8, 10, 11, 13, 14, 0, 2, 4]
+    export_order = [0, 2, 4, 14, 13, 12, 11, 10, 9, 8, 7, 6]
+    bonuses = {0: 0.9, 2: 0.8, 4: 0.7}
+    headers = {"Authorization": "Bearer " + TOKEN}
+    plan_id = page.request.get(url + "/v1/plans?limit=1", headers=headers).json()["plans"][0][
+        "plan_id"
+    ]
+    page.clock.set_fixed_time(start)
+
+    def ranked_quarters(route):
+        """Provide a nonchronological import ladder and an increasing base-export ladder."""
+        document = route.fetch().json()
+        plan = document["plan"]
+        snapshot = plan["input_snapshot"]
+        interval = snapshot["problem"]["intervals"][0]
+        tariff = snapshot["tariff_evidence"][0]
+        command = plan["steps"][0]
+        flows = plan["expected_flows"][0]
+        plan.update(generated_at=start.isoformat(), valid_until=boundaries[-1].isoformat())
+        plan["steps"], plan["expected_flows"] = [], []
+        snapshot["problem"]["intervals"], snapshot["tariff_evidence"] = [], []
+        for index in range(15):
+            begin, end = boundaries[index].isoformat(), boundaries[index + 1].isoformat()
+            buy = 0.05 + import_order.index(index) * 0.02
+            sell = 0.10 + index * 0.01
+            snapshot["problem"]["intervals"].append(
+                {**interval, "start": begin, "buy_price": buy, "sell_price": sell}
+            )
+            snapshot["tariff_evidence"].append(
+                {**tariff, "start": begin, "end": end, "buy_price": buy, "sell_price": sell}
+            )
+            plan["steps"].append({**command, "start": begin, "end": end})
+            plan["expected_flows"].append(flows)
+        snapshot["problem"]["export_bonuses"] = [
+            {"rates": [bonuses.get(index, 0) for index in range(15)]}
+        ]
+        route.fulfill(json=document)
+
+    page.route("**/comparison?view=plan", ranked_quarters)
+    page.goto(url + "/overview?plan=" + plan_id)
+    page.get_by_label("Installation API token", exact=True).fill(TOKEN)
+    page.get_by_role("button", name="Connect", exact=True).click()
+    expect(page.locator("#price-daily-status")).to_contain_text(
+        "The cheapest quarters use import rates."
+    )
+    price = page.locator("#price-chart")
+    marks = price.evaluate("canvas => Chart.getChart(canvas).dailyPriceQuarters")
+    assert [(mark["extreme"], mark["start"]) for mark in marks] == [
+        (kind, boundaries[index].timestamp() * 1000)
+        for kind, indexes in (("cheapest", import_order[:12]), ("most_expensive", export_order))
+        for index in indexes
+    ]
+    price.press("Home")
+    reading = page.locator("#linked-chart-reading")
+    expect(reading).to_contain_text("Among the day's highest export rates")
+    expect(reading).not_to_contain_text("Among the day's lowest import rates")
+    expect(page.locator("#price-chart-tooltip")).to_contain_text(
+        "Among the day's highest export rates"
+    )
+    price.press("ArrowRight")
+    expect(reading).to_contain_text("Among the day's lowest import rates")
+    expect(reading).not_to_contain_text("Among the day's highest export rates")
 
 
 @pytest.mark.parametrize("app_site", ["savings_corrected"], indirect=True)

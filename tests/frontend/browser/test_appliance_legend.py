@@ -7,7 +7,7 @@ import pytest
 from playwright.sync_api import expect
 
 from tests.frontend.browser.documentation_fixture import START
-from tests.frontend.browser.helpers import TOKEN, wait_for_product_reads
+from tests.frontend.browser.helpers import TOKEN, open_chart_series, wait_for_product_reads
 
 
 @pytest.mark.parametrize("app_site", ["device_planning_legend"], indirect=True)
@@ -19,15 +19,13 @@ def test_appliance_legends_follow_window_without_losing_visibility_choices(app_p
     page.get_by_label("Installation API token", exact=True).fill(TOKEN)
     page.get_by_role("button", name="Connect", exact=True).click()
     wait_for_product_reads(page)
-    series = page.get_by_text("Chart series", exact=True)
-    series.click()
     identities = ("plan-chart", "self-consumption-chart", "reference-chart")
     original = page.evaluate(
         """ids => ids.map(id => Chart.getChart(document.getElementById(id)).data.datasets.map(dataset => dataset.data))""",
         identities,
     )
     for identity in identities:
-        legend = page.locator(f"#{identity}-legend")
+        legend = open_chart_series(page, identity)
         expect(legend.locator("label").filter(has_text="Unused appliance")).not_to_be_visible()
         expect(legend.locator("label").filter(has_text="Dishwasher")).not_to_be_visible()
         assert page.evaluate(
@@ -51,17 +49,15 @@ def test_appliance_legends_follow_window_without_losing_visibility_choices(app_p
         expect(later).to_be_visible()
     for hours in (6, 24):
         page.get_by_role("button", name=f"Next {hours} hours", exact=True).click()
-        series.click()
         for identity in identities:
-            legend = page.locator(f"#{identity}-legend")
+            legend = open_chart_series(page, identity)
             expect(legend.locator("label").filter(has_text="Later appliance")).not_to_be_visible()
             expect(legend.get_by_role("checkbox", name="Charge point", exact=True)).to_be_visible()
             if hours == 6:
                 expect(legend.locator("label").filter(has_text="Dryer")).not_to_be_visible()
     page.get_by_role("button", name=re.compile(r"^Full period")).click()
-    series.click()
     for identity in identities:
-        later = page.locator(f"#{identity}-legend").get_by_role(
+        later = open_chart_series(page, identity).get_by_role(
             "checkbox", name="Later appliance", exact=True
         )
         expect(later).to_be_visible()
@@ -94,7 +90,7 @@ def test_appliance_legends_follow_window_without_losing_visibility_choices(app_p
         }""",
             identity,
         )
-        legend = page.locator(f"#{identity}-legend")
+        legend = open_chart_series(page, identity)
         expect(legend.get_by_role("checkbox", name="Later appliance", exact=True)).to_be_visible()
         expect(page.locator(f"#{identity}-device-key")).to_be_visible()
         expect(
@@ -111,14 +107,13 @@ def test_bulk_legend_selection_is_local_and_keeps_rounding_filter(app_page):
     page.get_by_label("Installation API token", exact=True).fill(TOKEN)
     page.get_by_role("button", name="Connect", exact=True).click()
     wait_for_product_reads(page)
-    page.get_by_text("Chart series", exact=True).click()
     identities = ("plan-chart", "self-consumption-chart", "reference-chart")
     original = page.evaluate(
         """ids => ids.map(id => Chart.getChart(document.getElementById(id)).data.datasets.map(dataset => dataset.data))""",
         identities,
     )
     for identity in identities:
-        legend = page.locator(f"#{identity}-legend")
+        legend = open_chart_series(page, identity)
         button = legend.get_by_role("button", name="Deselect all", exact=True)
         expect(button).to_have_attribute("aria-controls", identity)
         button.focus()

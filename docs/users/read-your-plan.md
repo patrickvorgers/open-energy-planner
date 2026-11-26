@@ -123,9 +123,9 @@ Interval pop-ups show positive **Total production** and negative **Total consump
 
 Bars show mean kW for their covered quarter. Battery lines use the separate SoC percentage axis. Tap or hover for the exact interval. A partial quarter has its actual covered duration rather than a fabricated full-quarter energy amount.
 
-Use **Next 6 hours**, **Next 24 hours** or **Full period**. The Optimizer and **Price inputs** charts are stacked on the same time scale. Hover or tap either chart to mark the same interval in both. The interval shows grid energy, the original import and export rates, import cost and export revenue before bonus. With a chart focused, use the arrow keys to move by interval and Escape to dismiss the selection. Day labels follow the installation timezone.
+Use **Next 6 hours**, **Next 24 hours** or **Full period**. The Optimizer and **Price inputs** charts share the time axis below **Price inputs**. Hover or tap either chart to highlight the same interval in both. The interval shows grid energy, the original import and export rates, import cost and export revenue before bonus. With a chart focused, use the arrow keys to move by interval and Escape to dismiss the selection. Day labels follow the installation timezone.
 
-The Optimizer legend groups the main energy flows. Open **Chart series** to toggle individual devices, conversion losses and state of charge. Hidden or missing data does not represent a measured zero.
+The balance legends group the main energy flows. Open **Chart series** on any Planning graph to toggle its individual series. On the balance charts this includes devices, conversion losses and state of charge. Hidden or missing data does not represent a measured zero.
 
 Hover over a date above any of the three scenario charts to see **Expected energy totals**.
 **Total expected production** and **Total expected energy use** sum the scenario flows for the shown period.
@@ -165,7 +165,7 @@ Missing values remain unavailable, rather than being rounded to zero.
 Changing the period updates the entries and preserves your checkbox choices.
 Turning off an eligible appliance keeps its switch available so you can show it again.
 
-The Optimizer's **Chart series** menu and the two comparison legends each have a **Deselect all** button. After any series is
+Each **Chart series** menu has a **Deselect all** button. After any series is
 unchecked it becomes **Select all**. It controls only that chart's available
 legend entries, including both contributions of each device and the battery
 percentage line. It cannot reveal devices excluded by the rounding rule.

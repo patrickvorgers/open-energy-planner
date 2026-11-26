@@ -6,7 +6,7 @@ import pytest
 from playwright.sync_api import expect
 
 from tests.frontend.browser.documentation_fixture import START
-from tests.frontend.browser.helpers import TOKEN, wait_for_product_reads
+from tests.frontend.browser.helpers import TOKEN, open_chart_series, wait_for_product_reads
 
 WEB = Path(__file__).resolve().parents[3] / "src/open_energy_planner/web/public"
 LONG_NAME = "Synthetic upstairs heat pump with an unusually long descriptive meter name"
@@ -36,16 +36,20 @@ def test_shared_legends_use_full_plot_width_and_keep_controls(app_page):
     expect(page.locator("#overview-status")).to_contain_text("Connected")
     wait_for_product_reads(page)
     optimizer = page.locator(".optimizer-scenario")
-    series = optimizer.get_by_text("Chart series", exact=True)
+    series = page.locator("#plan-chart-legend").get_by_text("Chart series", exact=True)
     expect(series).to_be_visible()
-    expect(optimizer.get_by_role("button", name="Deselect all", exact=True)).to_be_hidden()
+    expect(
+        page.locator("#plan-chart-legend").get_by_role("button", name="Deselect all", exact=True)
+    ).to_be_hidden()
     _assert_linked_plot_layout_and_inspection(page, optimizer)
+    page.locator("#battery-plan-panel > summary").click()
     for identity in (
         "self-consumption-chart",
         "reference-chart",
         "price-chart",
         "forecast-chart",
         "energy-chart",
+        "battery-plan-chart",
     ):
         canvas = page.locator("#" + identity)
         legend = page.locator("#" + identity + "-legend")
@@ -54,6 +58,8 @@ def test_shared_legends_use_full_plot_width_and_keep_controls(app_page):
         assert bounds["y"] >= plot["y"] + plot["height"] - 1
         assert bounds["x"] == pytest.approx(plot["x"], abs=1)
         assert bounds["width"] == pytest.approx(plot["width"], abs=1)
+        expect(legend.get_by_role("checkbox").first).to_be_hidden()
+        open_chart_series(page, identity)
         for label in legend.locator("label:visible").all():
             label_bounds = label.bounding_box()
             assert label_bounds["x"] >= bounds["x"] - 1
@@ -101,17 +107,13 @@ def _assert_linked_plot_layout_and_inspection(page, optimizer):
     price = page.locator("#price-chart")
     assert price.bounding_box()["y"] > plan.bounding_box()["y"] + plan.bounding_box()["height"]
     spacing = plan.evaluate("""canvas => {
-        const tick = Chart.getChart(canvas).scales.x.getLabelItems()[0];
-        const center = canvas.getBoundingClientRect().top + tick.options.translation[1] + tick.textOffset;
         const stripBottom = canvas.parentElement.querySelector(".grid-mode-track").getBoundingClientRect().bottom;
         const priceTop = document.getElementById("linked-price-heading").getBoundingClientRect().top;
-        return {
-            stripGap: center - tick.font.lineHeight / 2 - stripBottom,
-            headingGap: priceTop - center - tick.font.lineHeight / 2
-        };
+        return priceTop - stripBottom;
     }""")
-    assert spacing["stripGap"] >= 0, spacing
-    assert 0 < spacing["headingGap"] <= 30, spacing
+    assert 0 < spacing <= 14
+    assert plan.evaluate("canvas => Chart.getChart(canvas).scales.x.options.display") is False
+    assert price.evaluate("canvas => Chart.getChart(canvas).scales.x.options.display") is True
     scales = page.evaluate("""() => ["plan-chart", "price-chart"].map(id => {
         const chart = Chart.getChart(id);
         return [chart.scales.x.min, chart.scales.x.max, chart.chartArea.left, chart.chartArea.right];

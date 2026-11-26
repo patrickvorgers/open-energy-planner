@@ -551,9 +551,9 @@ The without-battery, self-consumption and OEP charts share identical kW bounds a
 ticks from their joint visible signed stacks. Recalculate on time-window, plan,
 legend and size changes. SoC remains on its own fixed percentage axis.
 
-Place the Optimizer and Price inputs charts together with aligned time axes
-and linked interval inspection. Keep the Optimizer's individual series controls
-in its compact legend menu. With a selected plan, compare imports and exports
+Place the Optimizer and Price inputs charts together with one visible time axis
+below the price chart and linked interval inspection. Keep individual series
+controls in the compact Chart series menu on each Planning chart. With a selected plan, compare imports and exports
 against the original contract rates, including potential export bonus in the
 export-rate ranking. The no-plan preview keeps its calendar-day spot-price
 ranking.

@@ -257,7 +257,7 @@ def test_balance_axis_bounds_change_after_real_legend_and_time_controls(app_page
     grid_import = (
         page.locator("#plan-chart-legend label").filter(has_text="Grid import").locator("input")
     )
-    page.get_by_text("Chart series", exact=True).click()
+    page.locator("#plan-chart-legend").get_by_text("Chart series", exact=True).click()
     grid_import.uncheck()
     hidden_bounds = page.evaluate(read_bounds)
     assert hidden_bounds[0] == hidden_bounds[1] == hidden_bounds[2]

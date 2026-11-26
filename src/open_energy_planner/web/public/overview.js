@@ -5,7 +5,7 @@ import {calendarDays, calendarTime, calendarDayStart} from "./chart_days.js";
 import {money, configuredRate, when, dateLabel, localDate, localInstant, nextDate, percentage, optionLabel, planName, useHomeAssistantTimezone, watchSourceNames} from "./display.js";
 import {BATTERY_FLOW_GROUPS, batteryPlanSeries, batteryRouteValues, energyBalances, householdForecastEnergy, quarterBalanceSeries, balancePeriodEnergy, QUARTER_MILLISECONDS} from "./balance.js";
 import {bindSettingsActions, sessionResponse} from "./settings-actions.js";
-import {gridModeStrip, GRID_MODE_TICK_PADDING, ZERO_GRID_LABEL} from "./grid-mode-strip.js";
+import {gridModeStrip, GRID_MODE_STRIP_HEIGHT_PX, ZERO_GRID_LABEL} from "./grid-mode-strip.js";
 bindSettingsActions();
 const $ = (id) => document.getElementById(id);
 const savingsPage = createSavingsView($("savings-view"), api);
@@ -68,6 +68,10 @@ const MAX_TIME_AXIS_LABELS = 6;
 const DAILY_DATE_LABEL_MIN_WIDTH_PX = 120;
 const FORECAST_PRICE_DASH = [2, 4];
 const PRICE_EXTREME_COLORS = {cheapest: "#16816b", most_expensive: "#bf5c32"};
+const PLAN_RANK_NOTES = {
+    cheapest: "Among the day's lowest import rates in this plan",
+    most_expensive: "Among the day's highest export rates in this plan"
+};
 const LINKED_CHART_IDS = ["plan-chart", "price-chart"];
 const INTERVAL_POINTER_EVENTS = new Set(["mousemove", "touchstart", "touchmove"]);
 const LINKED_LEFT_AXIS_PX = 64;
@@ -254,6 +258,12 @@ function selectLinkedInterval(interval) {
     for (const id of LINKED_CHART_IDS) charts.get(id)?.draw();
 }
 
+/** Discard the cursor and its announced values when a different interval set replaces the plan. */
+function clearLinkedInspection() {
+    selectLinkedInterval(null);
+    $("linked-chart-reading").textContent = "";
+}
+
 /** Use the plan's real interval boundaries, including partial opening quarters. */
 function linkedChartInteraction(canvas, tooltip, hideTooltip, signal) {
     const intervalAt = (chart, pixel) => {
@@ -271,13 +281,20 @@ function linkedChartInteraction(canvas, tooltip, hideTooltip, signal) {
         title.className = "chart-tooltip-title";
         title.textContent = `From ${when(interval.start)} to ${when(interval.end)}`;
         const cost = linkedCostText(interval);
+        const rankings = planRankNotes(midpoint(interval));
         tooltip.classList.remove("chart-tooltip-balance", "chart-tooltip-day");
         tooltip.classList.add("chart-tooltip-linked");
         tooltip.style.maxHeight = "";
         tooltip.replaceChildren(title, cost);
+        for (const ranking of rankings) {
+            const note = document.createElement("p");
+            note.className = "chart-tooltip-explanation";
+            note.textContent = ranking;
+            tooltip.append(note);
+        }
         tooltip.hidden = false;
         positionChartTooltip(tooltip, canvas, chart.scales.x.getPixelForValue(midpoint(interval)), y);
-        $("linked-chart-reading").textContent = `${title.textContent}. ${cost.textContent}`;
+        $("linked-chart-reading").textContent = [`${title.textContent}.`, cost.textContent, ...rankings].join(" ");
         $("inspect-time").value = inspectSteps.indexOf(interval);
         inspect();
     };
@@ -310,9 +327,13 @@ function linkedChartInteraction(canvas, tooltip, hideTooltip, signal) {
         afterDraw(chart) {
             if (!linkedInterval || !priceInputPlanId || !chart.chartArea) return;
             const {ctx, chartArea: {top, bottom, left, right}, scales: {x}} = chart;
-            const pixel = x.getPixelForValue(midpoint(linkedInterval));
-            if (pixel < left || pixel > right) return;
-            ctx.save(); ctx.strokeStyle = "#3a637b"; ctx.setLineDash([4, 3]);
+            const start = Math.max(left, x.getPixelForValue(linkedInterval.start));
+            const end = Math.min(right, x.getPixelForValue(linkedInterval.end));
+            if (end <= start) return;
+            const pixel = (start + end) / 2;
+            ctx.save(); ctx.fillStyle = "#3a637b26";
+            ctx.fillRect(start, top, end - start, bottom - top);
+            ctx.strokeStyle = "#3a637b"; ctx.setLineDash([4, 3]);
             ctx.beginPath(); ctx.moveTo(pixel, top); ctx.lineTo(pixel, bottom); ctx.stroke();
             ctx.restore();
         }
@@ -439,8 +460,8 @@ const dailyPriceExtremes = {id: "dailyPriceExtremes", beforeDatasetsDraw(instanc
 async function loadDailyPrices(instance) {
     const timestamps = instance.data.datasets.flatMap(dataset => dataset.data.map(point => point.x)).filter(Number.isFinite);
     const status = $("price-daily-status");
-    $("price-low-label").textContent = priceInputPlanId ? "Lowest import rates" : "12 cheapest quarters";
-    $("price-high-label").textContent = priceInputPlanId ? "Highest export rates" : "12 most expensive quarters";
+    $("price-low-label").title = priceInputPlanId ? "Lowest import rates" : "Lowest spot prices";
+    $("price-high-label").title = priceInputPlanId ? "Highest export rates" : "Highest spot prices";
     if (priceInputPlanId) { drawStoredPriceRankings(instance, status); return; }
     if (instance.dailyPricePending) return;
     if (!timestamps.length) { status.textContent = "Whole-day price rankings unavailable."; return; }
@@ -498,7 +519,7 @@ function drawStoredPriceRankings(instance, status) {
         ...rankPlanRates(intervals, "buyRate", "cheapest", 1),
         ...rankPlanRates(intervals, "rankedExportRate", "most_expensive", -1)
     ]);
-    status.textContent = "Up to 12 intervals per day within the original plan. Export ranking uses the rate including bonus before the volume cap when bonus applies.";
+    status.textContent = "Up to 12 intervals per day within the original plan. The cheapest quarters use import rates. The most expensive quarters use export rates including eligible bonus before the volume cap.";
     instance.draw();
 }
 
@@ -508,8 +529,15 @@ function rankPlanRates(intervals, field, extreme, order) {
         .sort((a, b) => order * (a[field] - b[field]) || a.start - b.start)
         .slice(0, DAILY_HIGHLIGHT_QUARTERS).map(({start, end}) => ({start, end, extreme}));
 }
+
+/** Share the price highlights across mouse, touch and keyboard inspection. */
+function planRankNotes(time) {
+    const marks = charts.get("price-chart")?.dailyPriceQuarters ?? [];
+    return marks.filter(mark => mark.start <= time && time < mark.end)
+        .map(mark => PLAN_RANK_NOTES[mark.extreme]);
+}
 /** Update each compact swatch from the individual series still visible in the plot. */
-function syncOptimizerKey(instance, groupKeys) {
+function syncChartKey(instance, groupKeys) {
     for (const {item, swatch, indexes} of groupKeys.values()) {
         const colors = [...new Set(indexes.filter(index => instance.isDatasetVisible(index))
             .map(index => instance.data.datasets[index].swatchColor))];
@@ -519,30 +547,28 @@ function syncOptimizerKey(instance, groupKeys) {
     }
 }
 
-/** Add one legend item per main Optimizer flow group. */
-function addOptimizerKey(legend, groupKeys, series, indexes) {
-    const group = OPTIMIZER_GROUPS[series.flowKey] || (series.deviceState != null ? OPTIMIZER_GROUPS.load : null);
-    if (group) {
-        if (!groupKeys.has(group)) {
-            const item = document.createElement("span"), keySwatch = document.createElement("span");
-            item.className = "planning-group"; keySwatch.className = "series-swatch";
-            keySwatch.setAttribute("aria-hidden", "true");
-            item.append(keySwatch, group);
-            legend.insertBefore(item, legend.querySelector("details"));
-            groupKeys.set(group, {item, swatch: keySwatch, indexes: []});
-        }
-        groupKeys.get(group).indexes.push(...indexes);
+/** Add a compact key for a named flow group or standalone series. */
+function addChartKey(legend, groupKeys, group, indexes) {
+    if (!group) return;
+    if (!groupKeys.has(group)) {
+        const item = document.createElement("span"), keySwatch = document.createElement("span");
+        item.className = "planning-group"; keySwatch.className = "series-swatch";
+        keySwatch.setAttribute("aria-hidden", "true");
+        item.append(keySwatch, group);
+        legend.insertBefore(item, legend.querySelector("details"));
+        groupKeys.set(group, {item, swatch: keySwatch, indexes: []});
     }
+    groupKeys.get(group).indexes.push(...indexes);
 }
 
 /** Explain the selected mark using the ranked contract rate or the spot preview's status. */
 function priceTooltipNotes(item, step, priceHoverTime) {
     const time = Number.isFinite(priceHoverTime) ? priceHoverTime : item.parsed.x;
+    if (priceInputPlanId) return [step?.priceStatus, ...planRankNotes(time)].filter(Boolean);
     const quarter = item.chart.dailyPriceQuarters?.find(quarter => quarter.start <= time && time < quarter.end);
-    const rank = quarter && (priceInputPlanId
-        ? (quarter.extreme === "cheapest" ? "Among the day's lowest import rates in this plan" : "Among the day's highest export rates in this plan")
-        : `${quarter.extreme === "cheapest" ? "One of this day's 12 cheapest spot-price quarters" : "One of this day's 12 most expensive spot-price quarters"}: ${optionLabel(quarter.status)}`);
-    return [priceInputPlanId ? step?.priceStatus : "", rank].filter(Boolean);
+    if (!quarter) return [];
+    const label = quarter.extreme === "cheapest" ? "12 cheapest spot-price quarters" : "12 most expensive spot-price quarters";
+    return [`One of this day's ${label}: ${optionLabel(quarter.status)}`];
 }
 
 /** Supply interval evidence and identify the applicable market or plan ranking. */
@@ -558,20 +584,22 @@ function chartTooltipNotes(items, {id, balance, axisTime, priceHoverTime}) {
     return step?.commands || [];
 }
 
-/** Build and synchronize a chart's checkbox controls and the Optimizer's compact key. */
+/** Build a compact chart key and shared series menu with persistent checkbox choices. */
 function createOverviewLegend(id, series, {preserveVisibility, signal, gridSteps, legend}) {
-    const compact = id === "plan-chart";
+    const planComparison = ["plan-chart", "reference-chart", "self-consumption-chart"].includes(id);
     // A retained immutable plan has the same legend group identities even after its labels change.
     const previousVisibility = preserveVisibility ? new Map([...legend.querySelectorAll("input")].map(input => [input.dataset.legendIdentity, input.checked])) : new Map();
-    const seriesOpen = preserveVisibility && legend.querySelector("details")?.open;
+    const seriesOpen = legend.querySelector("details")?.open;
+    legend.classList.add("compact-planning-legend");
     legend.replaceChildren();
     let seriesHost = legend;
     const groupKeys = new Map();
-    if (compact && series.length) {
+    if (series.length) {
         const disclosure = document.createElement("details");
         const summary = document.createElement("summary");
         const panel = document.createElement("div");
         seriesHost = document.createElement("div");
+        disclosure.name = "planning-chart-series";
         disclosure.open = Boolean(seriesOpen);
         summary.textContent = "Chart series";
         panel.className = "planning-series-options";
@@ -586,8 +614,15 @@ function createOverviewLegend(id, series, {preserveVisibility, signal, gridSteps
         }, {signal});
     }
     const legendEntries = [];
-    const planComparison = ["plan-chart", "reference-chart", "self-consumption-chart"].includes(id);
     let deviceKey = null, selectAll = null;
+    /** Apply a choice the same way for a single checkbox and the bulk action. */
+    function setLegendVisibility(result, {name, input, indexes}, checked) {
+        if (id === "price-chart") {
+            if (checked) hiddenPriceSeries.delete(name); else hiddenPriceSeries.add(name);
+        }
+        input.checked = checked;
+        for (const index of indexes) result.setDatasetVisibility(index, checked);
+    }
     /** Keep rounding eligibility separate from the user's checkbox selection. */
     function syncLegend(instance) {
         const minimum = instance.options.scales.x.min ?? -Infinity;
@@ -611,22 +646,19 @@ function createOverviewLegend(id, series, {preserveVisibility, signal, gridSteps
             selectAll.disabled = !eligible.length;
             selectAll.textContent = eligible.every(({input}) => input.checked) ? "Deselect all" : "Select all";
         }
-        syncOptimizerKey(instance, groupKeys);
+        syncChartKey(instance, groupKeys);
     }
     /** Attach controls after Chart.js has created the datasets. */
     function renderLegend(result) {
         const {datasets} = result.data;
-        if (planComparison) {
+        if (series.length) {
             selectAll = document.createElement("button");
             selectAll.type = "button"; selectAll.className = "secondary";
             selectAll.setAttribute("aria-controls", id);
             selectAll.addEventListener("click", () => {
                 const eligible = legendEntries.filter(({label}) => !label.hidden);
                 const checked = !eligible.every(({input}) => input.checked);
-                for (const {input, indexes} of eligible) {
-                    input.checked = checked;
-                    for (const index of indexes) result.setDatasetVisibility(index, checked);
-                }
+                for (const entry of eligible) setLegendVisibility(result, entry, checked);
                 applyRange();
             });
             seriesHost.append(selectAll);
@@ -643,17 +675,19 @@ function createOverviewLegend(id, series, {preserveVisibility, signal, gridSteps
             input.checked = previousVisibility.get(String(identity)) ?? indexes.every(index => result.isDatasetVisible(index));
             for (const index of indexes) result.setDatasetVisibility(index, input.checked);
             if (s.deviceState != null) input.setAttribute("aria-describedby", `${id}-device-key`);
+            const entry = {name: s.name, label, input, indexes, device: s.deviceState != null};
             input.addEventListener("change", () => {
-                if (id === "price-chart") {
-                    if (input.checked) hiddenPriceSeries.delete(s.name); else hiddenPriceSeries.add(s.name);
-                }
-                for (const index of indexes) result.setDatasetVisibility(index, input.checked);
+                setLegendVisibility(result, entry, input.checked);
                 applyRange();
             });
             const swatch = document.createElement("span"); swatch.className = "series-swatch"; swatch.style.backgroundColor = s.legendColor || datasets[indexes[0]].swatchColor; swatch.setAttribute("aria-hidden", "true");
             label.append(input, swatch, document.createTextNode(s.legendName || s.name)); seriesHost.append(label);
-            legendEntries.push({label, input, indexes, device: s.deviceState != null});
-            if (compact) addOptimizerKey(legend, groupKeys, s, indexes);
+            legendEntries.push(entry);
+            const name = s.legendName || s.name;
+            const group = planComparison
+                ? OPTIMIZER_GROUPS[s.flowKey] || (entry.device ? OPTIMIZER_GROUPS.load : null)
+                : name;
+            addChartKey(legend, groupKeys, group, indexes);
         }
         if (gridSteps) {
             const item = document.createElement("span"), swatch = document.createElement("span");
@@ -671,10 +705,6 @@ function createOverviewLegend(id, series, {preserveVisibility, signal, gridSteps
         }
         if (!datasets.some((d) => d.data.length)) {
             const empty = document.createElement("p"); empty.textContent = "No covered data available."; legend.append(empty);
-        }
-        if (id === "savings-chart") {
-            const points = series.flatMap((item) => item.points);
-            $("savings-chart-range").textContent = points.length ? `From ${axisTime(Math.min(...points.map((p) => p[0])))} to ${axisTime(Math.max(...points.map((p) => p[0])))}` : "";
         }
     }
     return {planningLegend: planComparison, syncLegend, renderLegend};
@@ -767,7 +797,7 @@ function chart(id, series, {utcDays = false, calendarDates = false, unit = "", m
             beforeUpdate: syncLegend
         }, {id: "ownedTooltip", afterDestroy() { hideTooltip(); tooltipEvents.abort(); tooltip.remove(); }}],
         options: {responsive: true, maintainAspectRatio: false, animation: false, parsing: false,
-            layout: {padding: {right: linked && !hasSoc ? LINKED_RIGHT_AXIS_PX : 0}},
+            layout: {padding: {right: linked && !hasSoc ? LINKED_RIGHT_AXIS_PX : 0, bottom: gridSteps ? GRID_MODE_STRIP_HEIGHT_PX : 0}},
             interaction: {mode: "nearest", axis: "x", intersect: false},
             onHover: (event, _elements, instance) => {
                 if (id === "price-chart") priceHoverTime = instance.scales.x.getValueForPixel(event.x);
@@ -787,7 +817,7 @@ function chart(id, series, {utcDays = false, calendarDates = false, unit = "", m
                 label: (item) => `${item.dataset.label}: ${valueText(item.parsed.y, item.dataset.unit)} ${item.dataset.unit}`,
                 afterBody: items => chartTooltipNotes(items, {id, balance, axisTime, priceHoverTime})
             }}},
-            scales: {x: {type: "linear", offset: false, grid: {display: false},
+            scales: {x: {type: "linear", offset: false, grid: {display: false}, display: id !== "plan-chart",
                 afterBuildTicks: utcDays ? undefined : (scale) => {
                     if (calendarDates) {
                         const boundaries = [...new Set(datasets.flatMap(dataset => dataset.data.map(point => point.x)))].sort((left, right) => left - right);
@@ -801,7 +831,7 @@ function chart(id, series, {utcDays = false, calendarDates = false, unit = "", m
                     scale.ticks = [];
                     for (let quarter = first; quarter <= last; quarter += stride) scale.ticks.push({value: quarter * QUARTER_MILLISECONDS});
                 },
-                ticks: {padding: gridSteps ? GRID_MODE_TICK_PADDING : 3, maxTicksLimit: MAX_TIME_AXIS_LABELS, maxRotation: 0, callback: (value) => utcDays || calendarDates ? axisTime(value) : calendarTime(value)},
+                ticks: {maxTicksLimit: MAX_TIME_AXIS_LABELS, maxRotation: 0, callback: (value) => utcDays || calendarDates ? axisTime(value) : calendarTime(value)},
                 title: {display: utcDays || calendarDates, text: "Calendar date"}},
                 y: {min: minimum ?? undefined, suggestedMin: balance ? 0 : undefined, stacked: balance, beginAtZero: id === "price-chart", title: {display: Boolean(unit), text: unit}, afterFit: linked ? scale => { scale.width = LINKED_LEFT_AXIS_PX; } : undefined, grid: {color: (context) => context.tick.value === 0 ? "#455d70" : "#edf1f5", lineWidth: (context) => context.tick.value === 0 ? 2 : 1}, ticks: {maxTicksLimit: 6, callback: (value) => unit === "W" ? number(value) : valueText(value, unit)}},
                 ...(hasSoc ? {soc: {position: "right", min: 0, max: 100, stacked: false, afterFit: linked ? scale => { scale.width = LINKED_RIGHT_AXIS_PX; } : undefined, title: {display: true, text: "SoC (%)"}, ticks: {callback: (value) => percentage(value, false)}, grid: {drawOnChartArea: false}}} : {})},
@@ -1284,6 +1314,7 @@ async function showPlan(signal, background = false) {
         $("overview-status").textContent = id ? "Loading selected plan…" : CONNECTED_MESSAGE;
         $("plan-description").textContent = id ? "Loading selected plan…" : "No plan selected.";
         inspectSteps = [];
+        clearLinkedInspection();
         clearBatteryPlan();
         for (const chartId of ["plan-chart", "reference-chart", "self-consumption-chart", "energy-chart", "forecast-chart", "price-chart"]) {
             if (chartId === "price-chart" && !clearPrices) continue;
@@ -1338,7 +1369,7 @@ async function showPlan(signal, background = false) {
             batteryLabels.set(battery.device_id, label);
         });
         inspectSteps = [];
-        selectLinkedInterval(null);
+        clearLinkedInspection();
         const intervals = plan.input_snapshot?.problem?.intervals || [];
         const inverterGroups = new Map((plan.input_snapshot?.problem?.inverters || []).map((inverter, index) =>
             [inverter.inverter_id, {id: inverter.inverter_id, title: plan.comparison_names?.[inverter.inverter_id] || `Inverter ${index + 1}`} ]));

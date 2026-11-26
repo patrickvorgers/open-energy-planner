@@ -10,7 +10,7 @@ from playwright.sync_api import expect
 
 from open_energy_planner.savings.evidence import evidence as plan_evidence
 from tests.frontend.browser.documentation_fixture import START
-from tests.frontend.browser.helpers import TOKEN, wait_for_product_reads
+from tests.frontend.browser.helpers import TOKEN, open_chart_series, wait_for_product_reads
 
 
 @pytest.mark.parametrize("app_site", ["documentation"], indirect=True)
@@ -87,10 +87,9 @@ def test_charts_precede_simulations_and_evidence_waits_for_disclosure(app_page):
     page.evaluate(
         "window.immediatePlanChart = Chart.getChart(document.getElementById('plan-chart'))"
     )
-    series = page.get_by_text("Chart series", exact=True)
-    series.click()
+    open_chart_series(page, "plan-chart")
     page.locator("#plan-chart-legend").get_by_label("Grid import: AC", exact=True).uncheck()
-    page.locator("#energy-chart-legend").get_by_label("Optimizer", exact=True).uncheck()
+    open_chart_series(page, "energy-chart").get_by_label("Optimizer", exact=True).uncheck()
     assert len(simulations) == 1
     simulations.pop().fulfill(response=simulations_response(page, url))
     expect(page.locator("#overview-status")).to_contain_text("Connected")
@@ -103,12 +102,12 @@ def test_charts_precede_simulations_and_evidence_waits_for_disclosure(app_page):
         page.locator("#plan-chart-legend").get_by_label("Grid import: AC", exact=True)
     ).not_to_be_checked()
     expect(
-        page.locator("#energy-chart-legend").get_by_label("Optimizer", exact=True)
+        open_chart_series(page, "energy-chart").get_by_label("Optimizer", exact=True)
     ).not_to_be_checked()
     assert evidence == []
     captures = Path("results/ci/progressive-planning")
     captures.mkdir(parents=True, exist_ok=True)
-    series.click()
+    series = open_chart_series(page, "plan-chart").get_by_text("Chart series", exact=True)
     page.locator("#plan-chart-legend").get_by_label("Grid import: AC", exact=True).check()
     series.press("Escape")
     page.locator(".optimizer-scenario").screenshot(
@@ -256,7 +255,7 @@ def test_late_supplement_never_changes_newly_selected_plan(app_page, stage, outc
         expect(page.locator("#overview-status")).to_contain_text("Loading simulations")
     page.wait_for_function("() => window.projectionRouteHeld")
     assert len(held) == 1
-    page.locator("#energy-chart-legend").get_by_label("Optimizer", exact=True).uncheck()
+    open_chart_series(page, "energy-chart").get_by_label("Optimizer", exact=True).uncheck()
     page.locator("#plan-version").select_option("selected-plan")
     expect(page.locator("#overview-status")).to_contain_text("Connected")
     expect(page.locator("#plan-version option:checked")).to_contain_text("Minimize consumption")
@@ -283,7 +282,7 @@ def test_late_supplement_never_changes_newly_selected_plan(app_page, stage, outc
     expect(page.locator("body")).not_to_contain_text("Old plan evidence")
     expect(page.locator("body")).not_to_contain_text("Old plan simulation")
     expect(
-        page.locator("#energy-chart-legend").get_by_label("Optimizer", exact=True)
+        open_chart_series(page, "energy-chart").get_by_label("Optimizer", exact=True)
     ).to_be_checked()
     assert page.locator("#ems-costs").inner_text() == before
 

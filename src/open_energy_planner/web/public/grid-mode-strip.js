@@ -1,8 +1,7 @@
 import {calendarTime} from "./chart_days.js";
 import {localDate, when} from "./display.js";
 
-// Chart.js adds the tick length above the labels as well as this padding.
-export const GRID_MODE_TICK_PADDING = 21;
+export const GRID_MODE_STRIP_HEIGHT_PX = 26;
 export const ZERO_GRID_LABEL = "Zero on the meter";
 
 /** Join adjacent active commands using the archived mode and exact elapsed timestamps. */

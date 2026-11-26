@@ -4,7 +4,7 @@ from copy import deepcopy
 
 import pytest
 
-from tests.frontend.browser.helpers import balances
+from tests.frontend.browser.helpers import balances, open_chart_series
 
 
 def mixed_solar_plan():
@@ -235,9 +235,7 @@ def _assert_independent_solar_controls(page, identity):
     """Toggle DC and AC independently through each chart’s available legend controls."""
     from playwright.sync_api import expect
 
-    legend = page.locator(f"#{identity}-legend")
-    if identity == "plan-chart":
-        legend.get_by_text("Chart series", exact=True).click()
+    legend = open_chart_series(page, identity)
     dc = legend.get_by_role("checkbox", name="Solar production: DC", exact=True)
     ac = legend.get_by_role("checkbox", name="Solar production: AC", exact=True)
     dc.focus()
