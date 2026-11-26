@@ -750,6 +750,7 @@ def test_device_forecasts_share_daily_quality_without_replacing_midnight_evidenc
     """Keep midnight evidence and separate complete measurements from comparison eligibility on desktop/mobile and ingress."""
     page, url = app_page
     start = datetime(2026, 10, 25, 23, tzinfo=UTC)
+    page.clock.set_fixed_time(start + timedelta(minutes=30))
     rows = [
         {
             "start": (start + timedelta(hours=interval_index)).isoformat(),
@@ -843,7 +844,11 @@ def test_device_forecasts_share_daily_quality_without_replacing_midnight_evidenc
     page.route(
         "**/v1/forecast-quality/days",
         lambda route: route.fulfill(
-            json={"days": ["2026-10-26", "2026-10-25"], "next_before": None}
+            json={
+                "days": ["2026-10-26", "2026-10-25"],
+                "next_before": None,
+                "timezone": "Europe/Amsterdam",
+            }
         ),
     )
     page.route("**/v1/forecast-quality/days/2026-10-26", lambda route: route.fulfill(json=body))
@@ -864,7 +869,8 @@ def test_device_forecasts_share_daily_quality_without_replacing_midnight_evidenc
     expect(
         page.get_by_role("navigation").get_by_role("link", name="Device forecasts", exact=True)
     ).to_have_count(0)
-    expect_day(page, "2026-10-26")
+    expect_day(page, "2026-10-25")
+    choose_day(page, "2026-10-26")
     page.get_by_role("button", name="Devices", exact=True).click()
     expect(page.locator("#quality-charts canvas")).to_have_count(1)
     page.get_by_label("Device", exact=True).select_option("heat")
@@ -950,6 +956,7 @@ def test_solar_satellite_reference_units_coverage_and_shared_subject_selection(a
     errors = []
     page.on("pageerror", lambda error: errors.append(str(error)))
     start = datetime(2026, 10, 25, 23, tzinfo=UTC)
+    page.clock.set_fixed_time(start + timedelta(hours=28))
     predicted = (
         0,
         0,
@@ -1188,6 +1195,8 @@ def test_solar_satellite_reference_units_coverage_and_shared_subject_selection(a
     expect(evidence).to_contain_text("Measured: Unavailable kWh")
     expect(evidence).to_contain_text("ML forecast: Original choice: 0.900 kWh")
     expect(evidence).to_contain_text("PVWatts: 1.062 kWh")
+    expect(evidence).to_contain_text("Forecast irradiance: 405.000 W/m²")
+    expect(evidence).to_contain_text("Actual irradiance (satellite): Unavailable W/m²")
     expect(evidence).to_contain_text("Evaluation: Incomplete measurements")
     expect(evidence).to_contain_text("Forecast version: " + "a" * 64)
     expect(evidence).to_contain_text("Measurement boundary: AC")
@@ -1224,7 +1233,7 @@ def test_solar_satellite_reference_units_coverage_and_shared_subject_selection(a
     )
     expect(page.locator(".quality-radiation-status")).to_contain_text("Coverage: 23 of 24 hours")
     expect(page.locator(".quality-radiation-source")).to_contain_text(
-        "not a local sensor measurement"
+        "Actual irradiance is estimated from"
     )
     comparison = page.get_by_role("region", name="Model comparison for this day", exact=True)
     before = comparison.inner_text()
@@ -1236,10 +1245,12 @@ def test_solar_satellite_reference_units_coverage_and_shared_subject_selection(a
         "active": [],
         "alternative": [8, 4],
         "outline": 0,
-        "right": False,
+        "right": True,
     }
-    page.get_by_role("checkbox", name="Forecast irradiance", exact=True).check()
-    page.get_by_role("checkbox", name="Satellite estimate", exact=True).check()
+    forecast_line = page.get_by_role("checkbox", name="Forecast irradiance", exact=True)
+    satellite_line = page.get_by_role("checkbox", name="Actual irradiance (satellite)", exact=True)
+    expect(forecast_line).to_be_checked()
+    expect(satellite_line).to_be_checked()
     assert page.locator("#quality-chart-0").evaluate(
         """canvas => {const chart=Chart.getChart(canvas);return chart.options.scales.radiation.display && chart.options.scales.radiation.title.text.includes('W/m²') && chart.data.datasets[3].borderColor !== chart.data.datasets[4].borderColor && chart.data.datasets[4].data[0].y === 0 && chart.data.datasets[4].data[12].y === null && chart.data.datasets[4].spanGaps === false;}"""
     )
@@ -1249,6 +1260,11 @@ def test_solar_satellite_reference_units_coverage_and_shared_subject_selection(a
     page.screenshot(
         path=f"results/ci/satellite-reference-{width}-{'ingress' in url}.png", full_page=True
     )
+    forecast_line.uncheck()
+    satellite_line.uncheck()
+    assert not canvas.evaluate("canvas => Chart.getChart(canvas).options.scales.radiation.display")
+    satellite_line.check()
+    assert canvas.evaluate("canvas => Chart.getChart(canvas).options.scales.radiation.display")
     assert page.evaluate("document.documentElement.scrollWidth <= window.innerWidth")
     assert (
         solar.evaluate("button => getComputedStyle(button).backgroundColor") == "rgba(0, 0, 0, 0)"

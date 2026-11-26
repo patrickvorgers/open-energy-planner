@@ -484,6 +484,15 @@ The app supplies validity conditions. HA checks them locally during app loss. A 
 
 The integration initiates authenticated HTTP/JSON requests without an inbound HA callback. Command delivery and receipts are independent of live measurement pushes and Recorder history transfers. Slow native work must not block HTTP or Home Assistant's event loop.
 
+Home Assistant lifecycle hints are advisory. The integration reports a normal
+Core shutdown, distinguishing a confirmed restart exit code, and reports when
+Core is running again. The app expires the in-memory indication after five
+minutes or clears it on startup. Planning diagnostics use the hint for wording
+without changing command authority, measurement validation or publication. When
+a current report identifies a required source problem, the notification shows
+one sensor and retains that explanation across a recovered report until planning
+can publish again.
+
 | Operation | Purpose |
 |---|---|
 | Status | Release/readiness/data availability/reasons |

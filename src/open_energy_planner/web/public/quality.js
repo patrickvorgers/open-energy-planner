@@ -1,7 +1,7 @@
-import {createPeriodSelector} from "./period-selector.js";
+import {createPeriodSelector, shiftDay} from "./period-selector.js";
 import "./chart_theme.js";
 import {qualityChart} from "./quality-chart.js";
-import {when, dateLabel, useHomeAssistantTimezone, watchSourceNames} from "./display.js";
+import {when, dateLabel, localDate, useHomeAssistantTimezone, watchSourceNames} from "./display.js";
 import {bindSettingsActions, sessionResponse} from "./settings-actions.js";
 import {currentModelRows, renderCurrentModel} from "./quality-models.js";
 bindSettingsActions();
@@ -146,8 +146,11 @@ async function load(older = false) {
         const page = await api("v1/forecast-quality/days" + (older && cursor ? `?before=${encodeURIComponent(cursor)}` : ""));
         if (version !== historyVersion) return;
         const previous = qualityDay.value.start;
+        if (page.timezone) useHomeAssistantTimezone(page.timezone);
+        const yesterday = shiftDay(localDate(), -1);
         qualityDays = [...new Set([...page.days, ...(older ? qualityDays : []), ...(previous ? [previous] : [])])].sort().reverse();
-        qualityDay.set({start: qualityDays.includes(previous) ? previous : qualityDays[0] || null, availableDays: qualityDays, min: qualityDays.at(-1), max: qualityDays[0], enabled: qualityDays.length > 0});
+        const initialDay = qualityDays.find(day => day <= yesterday) || qualityDays[0] || null;
+        qualityDay.set({start: previous || initialDay, availableDays: qualityDays, min: qualityDays.at(-1), max: qualityDays[0], enabled: qualityDays.length > 0});
         indexData = page;
         cursor = page.next_before; find("quality-older").disabled = !cursor; find("quality-older").hidden = !cursor;
         await show();

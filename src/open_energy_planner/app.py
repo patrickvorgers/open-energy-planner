@@ -65,7 +65,6 @@ from .prices.api import register as register_prices
 from .prices.daily import DailyPrices
 from .runtime.diagnostics.planning_notifications import (
     PlanningStatus,
-    explain_planning_problem,
     planning_notifications,
 )
 from .runtime.settings_reads import NO_COMMANDS, ApplicationStateLock, mark_command_free
@@ -266,6 +265,11 @@ def create_app(
 
     notification_center = NotificationCenter()
 
+    from .home_assistant.lifecycle import HomeAssistantLifecycle
+    from .home_assistant.notifications import MEASUREMENT_CAUSES
+
+    ha_lifecycle = HomeAssistantLifecycle()
+
     def planning_status():
         """Share immutable coordinator evidence with notification providers, never its mutation methods."""
         return PlanningStatus(
@@ -274,31 +278,37 @@ def create_app(
             planner.blocked_since,
             planner.block_reason,
             has_published=planner.published is not None,
+            block_text=planner.block_text,
         )
-
-    def explain_problem(reason):
-        """Let the responsible module explain a propagated cause for deduplicated planner logging."""
-        return notification_center.explain(reason) or explain_planning_problem(reason)
 
     def explain_live_problem(reason, _detail=None):
         """Keep source-specific actionable context in both planning notices and transition logs."""
         from .appliances.ev.notifications import explain_problem as explain_ev_problem
         from .home_assistant.notifications import explain_live_problem as explain_measurements
 
-        return (
-            explain_ev_problem(reason)
-            or explain_measurements(live, reason, setup_catalogue.value)
-            or explain_planning_problem(reason)
+        return explain_ev_problem(reason) or explain_measurements(
+            live, reason, setup_catalogue.value
         )
+
+    def current_planning_notices():
+        """Prefer confirmed HA lifecycle evidence over measurement symptoms during shutdown."""
+        state = planning_status()
+        notice = ha_lifecycle.notice()
+        if notice and state.status != "calculating" and state.cause in MEASUREMENT_CAUSES:
+            return (notice,)
+        notices = planning_notifications(state, notification_center.explain)
+        if notice:
+            return (*(notices or ()), notice)
+        return notices
 
     from .optimization.performance import register as register_performance
 
     planner = PlanningCoordinator(
-        PlanningService(solver or ProcessSolver()), publish, explain=explain_problem
+        PlanningService(solver or ProcessSolver()), publish, explain=notification_center.explain
     )
     notification_center.register(
         "planning",
-        lambda: planning_notifications(planning_status(), notification_center.explain),
+        current_planning_notices,
         explain=explain_live_problem,
         fallback=True,
     )
@@ -395,6 +405,7 @@ def create_app(
 
     register_notifications(app, notification_center)
     register_build_info(app)
+    ha_lifecycle.register(app, mark_command_free)
     if source == "home_assistant":
         from .build_info import BUILD_STATUS
         from .runtime.diagnostics.version_notifications import version_notifications
