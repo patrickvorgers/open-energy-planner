@@ -301,8 +301,47 @@ function render(payload, warning = "") {
     focusDetail();
 }
 
-/** Preserve stale evidence on failed reads. Focus fresh notices only after an explicit user action. */
-export async function refreshNotifications(session, focus = false) {
+function invalidNotificationText(item) {
+    return [item.code, item.title, item.message].some(value => typeof value !== "string") ||
+        [item.action_path, item.action_label, item.detail].some(value => value != null && typeof value !== "string") ||
+        [item.key, item.owner].some(value => value != null && (typeof value !== "string" || !value.trim()));
+}
+
+function invalidNotificationState(item) {
+    return (item.level != null && !["info", "warning", "error"].includes(item.level)) ||
+        (item.state != null && !["active", "recovering"].includes(item.state)) ||
+        (item.blocks != null && (!Array.isArray(item.blocks) || item.blocks.some(value => typeof value !== "string" || !value.trim()))) ||
+        (item.stale != null && typeof item.stale !== "boolean") ||
+        (item.auto_clear_minutes != null && (!Number.isSafeInteger(item.auto_clear_minutes) || item.auto_clear_minutes <= 0)) ||
+        (item.fallback != null && typeof item.fallback !== "boolean") ||
+        (item.since != null && (typeof item.since !== "string" || !Number.isFinite(Date.parse(item.since))));
+}
+
+function validateNotificationDocument(result) {
+    if (!Array.isArray(result.notifications) || result.notifications.some(item => !item || invalidNotificationText(item) || invalidNotificationState(item))) {
+        throw new Error("Invalid planning status");
+    }
+    const unavailable = result.unavailable_sources ?? [];
+    if (!Array.isArray(unavailable) || unavailable.some(value => typeof value !== "string" || !value.trim())) throw new Error("Invalid notification sources");
+    const keys = result.notifications.flatMap(notice => notice.key ? [notice.key] : []);
+    if (new Set(keys).size !== keys.length) throw new Error("Duplicate notification causes");
+    return unavailable;
+}
+
+function mergeNotifications(result, unavailable, previousDocument) {
+    const retained = new Map(result.notifications.map(notice => [notice.key || notice.code, notice]));
+    for (const previous of previousDocument?.notifications || []) {
+        const key = previous.key || previous.code;
+        const current = retained.get(key);
+        if (unavailable.includes(previous.owner) &&
+            (!current || previous.fallback !== true && current.fallback === true)) {
+            retained.set(key, {...previous, stale: true});
+        }
+    }
+    return {...result, notifications: [...retained.values()]};
+}
+
+function beginNotificationRead(session, focus) {
     if (!banner) return;
     if (session) metadata = session;
     // Pending session discovery is not confirmed authentication loss during workspace navigation.
@@ -319,6 +358,13 @@ export async function refreshNotifications(session, focus = false) {
     }
     controller = new AbortController();
     if (focus) focusedReadGeneration = requestGeneration;
+    return requestGeneration;
+}
+
+/** Preserve stale evidence on failed reads. Focus fresh notices only after an explicit user action. */
+export async function refreshNotifications(session, focus = false) {
+    const requestGeneration = beginNotificationRead(session, focus);
+    if (requestGeneration === undefined) return;
     try {
         const base = new URL(document.querySelector('meta[name="oep-api-base"]').content, location.href);
         const response = await fetch(new URL("v1/notifications", base), {
@@ -335,31 +381,8 @@ export async function refreshNotifications(session, focus = false) {
         const result = await response.json();
         if (requestGeneration !== generation) return;
         connectEvents(document.querySelector('meta[name="oep-api-base"]').content, token);
-        if (!Array.isArray(result.notifications) || result.notifications.some(item => !item ||
-            [item.code, item.title, item.message].some(value => typeof value !== "string") ||
-            [item.action_path, item.action_label, item.detail].some(value => value != null && typeof value !== "string") ||
-            [item.key, item.owner].some(value => value != null && (typeof value !== "string" || !value.trim())) ||
-            (item.level != null && !["info", "warning", "error"].includes(item.level)) ||
-            (item.state != null && !["active", "recovering"].includes(item.state)) ||
-            (item.blocks != null && (!Array.isArray(item.blocks) || item.blocks.some(value => typeof value !== "string" || !value.trim()))) ||
-            (item.stale != null && typeof item.stale !== "boolean") ||
-            (item.auto_clear_minutes != null && (!Number.isSafeInteger(item.auto_clear_minutes) || item.auto_clear_minutes <= 0)) ||
-            (item.fallback != null && typeof item.fallback !== "boolean") ||
-            (item.since != null && (typeof item.since !== "string" || !Number.isFinite(Date.parse(item.since)))))) throw new Error("Invalid planning status");
-        const unavailable = result.unavailable_sources ?? [];
-        if (!Array.isArray(unavailable) || unavailable.some(value => typeof value !== "string" || !value.trim())) throw new Error("Invalid notification sources");
-        const keys = result.notifications.flatMap(notice => notice.key ? [notice.key] : []);
-        if (new Set(keys).size !== keys.length) throw new Error("Duplicate notification causes");
-        const retained = new Map(result.notifications.map(notice => [notice.key || notice.code, notice]));
-        for (const previous of lastDocument?.notifications || []) {
-            const key = previous.key || previous.code;
-            const current = retained.get(key);
-            if (unavailable.includes(previous.owner) &&
-                (!current || previous.fallback !== true && current.fallback === true)) {
-                retained.set(key, {...previous, stale: true});
-            }
-        }
-        lastDocument = {...result, notifications: [...retained.values()]};
+        const unavailable = validateNotificationDocument(result);
+        lastDocument = mergeNotifications(result, unavailable, lastDocument);
         const stale = lastDocument.notifications.some(notice => notice.stale);
         const warning = stale
             ? "Some notification sources are unavailable. Their last known notifications are retained."
