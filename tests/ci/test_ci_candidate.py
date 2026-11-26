@@ -29,7 +29,7 @@ def candidate():
         "draft": False,
         "base": {"sha": BASE},
         "head": {"sha": HEAD},
-        "user": {"login": "developer"},
+        "user": {"login": "developer", "id": 99, "type": "User"},
         "changed_files": 3,
     }
     checks = [
@@ -46,6 +46,7 @@ def candidate():
             (2, "GitHub Verified PR commits", 15368),
             (3, "CodeRabbit", 347564),
             (4, "CodeQL", 57789),
+            (9001, "Repowise review", 3768688),
         )
     ]
     checks[2]["output"] = {
@@ -83,6 +84,19 @@ class Evidence:
         """Keep independent current identities and test-controlled check rows."""
         self.current = current
         self.comments = []
+        self.repowise = [
+            {
+                "id": 301,
+                "user": {"login": "repowise-bot[bot]", "type": "Bot", "id": 286013898},
+                "performed_via_github_app": {"id": 3768688},
+                "body": f'<!-- repowise-bot:v4 {{"head":"{HEAD}","base":"{BASE}","run":9001}} -->',
+            },
+            {
+                "id": 302,
+                "user": {"type": "User", "id": 99},
+                "body": f"<!-- oep-repowise-disposition:{HEAD}:{BASE}:9001 -->\nReviewed the current signals.",
+            },
+        ]
         self.checks = checks
         self.changed = changed
         self.pr_reads = 0
@@ -143,7 +157,8 @@ class Evidence:
         """Return every changed file without concealing additions, removals or binary changes."""
         if "/issues/12/comments?" in path:
             page = int(path.rsplit("=", 1)[1])
-            return deepcopy(self.comments[(page - 1) * 100 : page * 100])
+            comments = self.repowise + self.comments
+            return deepcopy(comments[(page - 1) * 100 : page * 100])
         assert path == "repos/owner/planner/pulls/12/files?per_page=100&page=1"
         return [{"filename": f"file-{index}.py"} for index in range(3)]
 
@@ -163,9 +178,12 @@ def test_candidate_file_limit_cannot_be_bypassed_by_a_manual_review(candidate, c
     current["changed_files"] = count
     client = Evidence(current, checks)
     files = [{"filename": f"file-{index}.bin", "status": "removed"} for index in range(150)]
+    original_listing = client.get_list
 
     def listing(path):
         """Page the independent inventory without omitting binary or deleted changes."""
+        if "/comments?" in path:
+            return original_listing(path)
         page = int(path.rsplit("=", 1)[1])
         return files[(page - 1) * 100 : page * 100]
 
@@ -175,6 +193,54 @@ def test_candidate_file_limit_cannot_be_bypassed_by_a_manual_review(candidate, c
             check(event, REPOSITORY, client)
     else:
         assert check(event, REPOSITORY, client) == HEAD
+
+
+@pytest.mark.parametrize(
+    "fault",
+    [
+        "missing-scan",
+        "pending",
+        "skipped",
+        "wrong-app",
+        "stale-scan",
+        "stale-base",
+        "spoofed-report",
+        "missing-disposition",
+        "empty-disposition",
+        "wrong-actor",
+        "old-disposition",
+    ],
+)
+def test_candidate_requires_fresh_repowise_disposition(candidate, fault):
+    """No stale report or attestation can accompany a substantively reviewed candidate."""
+    event, current, checks = candidate
+    client = Evidence(current, checks)
+    scan = checks[-1]
+    report, disposition = client.repowise
+    if fault == "missing-scan":
+        checks.pop()
+    elif fault == "pending":
+        scan.update(status="in_progress", conclusion=None)
+    elif fault == "skipped":
+        scan["conclusion"] = "skipped"
+    elif fault == "wrong-app":
+        scan["app"]["id"] = 1
+    elif fault == "stale-scan":
+        scan["id"] = 9002
+    elif fault == "stale-base":
+        report["body"] = report["body"].replace(BASE, "3" * 40)
+    elif fault == "spoofed-report":
+        report["user"]["id"] = 99
+    elif fault == "missing-disposition":
+        client.repowise.pop()
+    elif fault == "empty-disposition":
+        disposition["body"] = disposition["body"].partition("\n")[0]
+    elif fault == "wrong-actor":
+        disposition["user"]["id"] = 100
+    else:
+        disposition["body"] = disposition["body"].replace(":9001", ":9000")
+    with pytest.raises(VerificationError, match="RepoWise"):
+        check(event, REPOSITORY, client)
 
 
 @pytest.mark.parametrize("check_index", [0, 1, 2, 3])

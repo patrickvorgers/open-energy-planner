@@ -249,6 +249,7 @@ def test_ready_and_manual_retry_use_the_same_current_head_gate(action):
         "draft": False,
         "head": {"sha": "2" * 40},
         "base": {"sha": "1" * 40},
+        "user": {"login": "developer", "type": "User", "id": 99},
         "changed_files": 3,
     }
     checks = [
@@ -265,6 +266,7 @@ def test_ready_and_manual_retry_use_the_same_current_head_gate(action):
             (2, "GitHub Verified PR commits", 15368),
             (3, "CodeRabbit", 347564),
             (4, "CodeQL", 57789),
+            (9001, "Repowise review", 3768688),
         ]
     ]
     checks[2]["output"] = {

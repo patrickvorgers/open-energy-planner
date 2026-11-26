@@ -21,6 +21,10 @@ CODEX_APP_ID = 1144995
 CODEX_BOT_ID = 199175422
 MAX_CODEX_STATE_CHARACTERS = 10000
 CODEQL_APP_ID = 57789
+REPOWISE_APP_ID = 3768688
+REPOWISE_BOT_ID = 286013898
+REPOWISE_STATE_PREFIX = "<!-- repowise-bot:v4 "
+MAX_REPOWISE_STATE_CHARACTERS = 10000
 MAX_PR_FILES = 150
 PREREQUISITE_CHECKS = (
     ("Quick checks", GITHUB_ACTIONS_APP_ID),
@@ -209,6 +213,69 @@ def provider_comment(comment, login, bot_id, app_id):
     )
 
 
+def repowise_summary_matches(comment, head, base, check_id):
+    """Bind an authentic RepoWise publication to the checked revision and exact scan."""
+    if not provider_comment(comment, "repowise-bot[bot]", REPOWISE_BOT_ID, REPOWISE_APP_ID):
+        return False
+    line = comment["body"].split("\n", 1)[0].rstrip("\r")
+    if not line.startswith(REPOWISE_STATE_PREFIX) or not line.endswith(" -->"):
+        return False
+    state_json = line[len(REPOWISE_STATE_PREFIX) : -len(" -->")]
+    if len(state_json) > MAX_REPOWISE_STATE_CHARACTERS:
+        return False
+    try:
+        state = json.loads(state_json)
+    except ValueError:
+        return False
+    if not isinstance(state, dict) or type(state.get("run")) is not int:
+        return False
+    return (state.get("head"), state.get("base"), state["run"]) == (
+        head,
+        base,
+        check_id,
+    )
+
+
+def recorded_repowise_disposition(comment, marker, author_ids):
+    """Accept explanatory text with the exact scan marker from an identified human author."""
+    author = comment.get("user")
+    if not isinstance(author, dict) or author.get("type") != "User":
+        return False
+    author_id = author.get("id")
+    if type(author_id) is not int or author_id <= 0 or author_id not in author_ids:
+        return False
+    first, _, explanation = comment["body"].partition("\n")
+    return first.rstrip("\r") == marker and bool(explanation.strip())
+
+
+def require_repowise_disposition(checks, repository, number, current, client):
+    """Require an actual current scan and a matching disposition from the PR author or repo owner."""
+    latest = latest_check(checks, "Repowise review", REPOWISE_APP_ID)
+    if not latest or (latest.get("status"), latest.get("conclusion")) != ("completed", "success"):
+        raise VerificationError("Wait for the current-head RepoWise scan to finish successfully")
+    head, base = current["head"]["sha"], current["base"]["sha"]
+    comments = review_comments(repository, number, client)
+    summaries = [
+        comment
+        for comment in comments
+        if repowise_summary_matches(comment, head, base, latest["id"])
+    ]
+    if len(summaries) != 1:
+        raise VerificationError("Missing or ambiguous RepoWise publication for this head and base")
+    repo = current["base"].get("repo")
+    owner = repo.get("owner") if isinstance(repo, dict) else None
+    author_ids = [
+        actor.get("id")
+        for actor in (current.get("user"), owner)
+        if isinstance(actor, dict) and type(actor.get("id")) is int
+    ]
+    marker = f"<!-- oep-repowise-disposition:{head}:{base}:{latest['id']} -->"
+    if not any(recorded_repowise_disposition(comment, marker, author_ids) for comment in comments):
+        raise VerificationError(
+            "Record the RepoWise disposition for the current head, base and scan"
+        )
+
+
 def codex_review_state(comments, head):
     """Read Codex's published code-review state, never treating reactions as completion.
 
@@ -355,6 +422,7 @@ def check(event, repository, client):
     require_prerequisites(checks)
     if current.get("user", {}).get("login") != "dependabot[bot]":
         require_automated_review(checks, repository, number, head, client)
+        require_repowise_disposition(checks, repository, number, current, client)
     require_resolved_threads(repository, number, client)
     require_clear_formal_reviews(repository, number, head, base, client)
     final_count = current_pr().get("changed_files")
