@@ -39,6 +39,10 @@ Daily baselines reference the existing immutable household, same-issue individua
 
 The authenticated `/v1/forecast-quality/days` index and `/v1/forecast-quality/days/{day}` view serve the daily page. The historical `/v1/forecast-quality/{plan_id}` endpoint remains read-only for existing consumers and original-plan investigation. Its hourly output is not used for daily scoring.
 
+On first load the page selects yesterday in the installation timezone if it is
+retained. It otherwise prefers the newest retained past day, then the newest
+available day. Refresh and history pagination preserve the selected date.
+
 Appliance scheduling and charger-baseline exclusion preserve the original `demand_evidence` archive references. Copies of their input baseline forecasts remain in `appliance_evidence`. The derived residual interval loads are stored in the physical problem. A digest of those inputs is not a separately archived household prediction. Controlled forecasts stay visible through their original archives, with accuracy withheld where control changes consumption timing.
 
 The integration reuses its existing Recorder transport. It sends cumulative hourly endpoints for the latest three days, with a ten-minute recording delay. The app refreshes each source once per hour and retries failures after fifteen minutes. A failed source does not block the remaining sources. Startup refresh recovers recent missed hours. Longer outages leave gaps. Data is retained after receipt without an automatic retention cutoff. This is an accuracy archive, not a new HA connection or direct Recorder database reader. Current control decisions are accepted and projected before optional quality-history capture and transfer. A slow or failed Recorder read cannot postpone a received pause or revocation, and completing it cannot reapply an older control response.
@@ -111,14 +115,15 @@ controls and Home Assistant timezone on standalone and ingress routes.
 
 ## Irradiance reference
 
-Solar graphs offer two optional lines on a separately labelled W/m² right axis.
+Solar graphs show both available irradiance series by default on a separately
+labelled W/m² right axis. Each series can be hidden independently.
 Forecast irradiance is the original Open-Meteo global horizontal irradiance from
 the exact weather manifest referenced by the frozen solar forecast. Only values
 received by forecast issuance are admitted. Later model history never replaces
 this expectation. A Home Assistant production forecast built without weather
 has no inferred irradiance forecast.
 
-Satellite estimate comes from the Open-Meteo Satellite Radiation API, explicitly
+**Actual irradiance (satellite)** comes from the Open-Meteo Satellite Radiation API, explicitly
 selecting DWD / EUMETSAT MTG (`dwd_sis_europe_africa_v4`). It is an estimate for a
 satellite grid cell, not a measurement by a local ground sensor or KNMI station.
 The provider describes approximately 20 minutes of latency and an archive from
@@ -131,7 +136,7 @@ Both lines use preceding-hour mean global horizontal irradiance. End-labelled
 provider hours become UTC start/end intervals. The installation timezone controls
 display and 23/25-hour calendar boundaries. No incomplete edge hour is invented.
 The legend distinguishes orange dashed forecast irradiance from the red solid
-satellite estimate. Irradiance stays hidden until explicitly selected.
+satellite estimate. The right axis is hidden when both series are turned off.
 
 Satellite data complete through reports the end of the last contiguous observed
 hour from the selected day's start. It stops at the first missing hour even when

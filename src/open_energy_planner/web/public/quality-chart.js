@@ -30,8 +30,8 @@ export function qualityChart(canvas, plot, source, day, evidenceTime) {
     const radiation = source.radiation;
     const radiationOffset = datasets.length;
     if (radiation) {
-        for (const [label, field, color, dash] of [["Forecast irradiance", "forecast_w_m2", "#b75c00", [8, 4]], ["Satellite estimate", "satellite_w_m2", "#bd3449", []]]) {
-            datasets.push({label, type: "line", order: 0, borderColor: color, backgroundColor: color, borderWidth: 2.8, borderDash: dash, pointRadius: 0, pointHitRadius: 8, fill: false, spanGaps: false, tension: 0, yAxisID: "radiation", hidden: true, data: points(radiation.rows, field)});
+        for (const [label, field, color, dash] of [["Forecast irradiance", "forecast_w_m2", "#b75c00", [8, 4]], ["Actual irradiance (satellite)", "satellite_w_m2", "#bd3449", []]]) {
+            datasets.push({label, type: "line", order: 0, borderColor: color, backgroundColor: color, borderWidth: 2.8, borderDash: dash, pointRadius: 0, pointHitRadius: 8, fill: false, spanGaps: false, tension: 0, yAxisID: "radiation", data: points(radiation.rows, field)});
         }
     }
     /** Keep each model and reference on its own original evidence intervals. */
@@ -115,7 +115,7 @@ export function qualityChart(canvas, plot, source, day, evidenceTime) {
     const chart = new Chart(canvas, {type: "bar", plugins: [intervals, calendarDays], data: {datasets}, options: {responsive: true, maintainAspectRatio: false, parsing: false, animation: false, interaction: {mode: "nearest", axis: "x", intersect: false}, scales: {
         x: {type: "linear", offset: false, min: Date.parse(day.start), max: Date.parse(day.end), afterBuildTicks: scale => {const first = Math.ceil(scale.min / HOUR_MILLISECONDS), last = Math.floor(scale.max / HOUR_MILLISECONDS), stride = Math.max(1, Math.ceil((last - first) / (MAX_TIME_LABELS - 1))); scale.ticks = []; for (let hour = first; hour <= last; hour += stride) scale.ticks.push({value: hour * HOUR_MILLISECONDS});}, ticks: {stepSize: HOUR_MILLISECONDS, maxTicksLimit: MAX_TIME_LABELS, callback: calendarTime}},
         y: {min: 0, title: {display: true, text: "Energy per hour (kWh)"}},
-        ...(radiation ? {radiation: {display: false, position: "right", min: 0, grid: {drawOnChartArea: false}, title: {display: true, text: "Global horizontal irradiance (W/m²)"}}} : {}),
+        ...(radiation ? {radiation: {display: true, position: "right", min: 0, grid: {drawOnChartArea: false}, title: {display: true, text: "Global horizontal irradiance (W/m²)"}}} : {}),
     }, plugins: {legend: {display: false}, tooltip: {enabled: false, animation: false, external: showEvidence, bodyFont: {family: "monospace"}, callbacks: {
         title: items => {const row = datasetRows(items[0].datasetIndex)[items[0].dataIndex]; return `${evidenceTime(row.start)} to ${evidenceTime(row.end, {hour: "2-digit", minute: "2-digit"})}`;},
         label: item => `${item.dataset.label}: ${item.parsed.y == null ? "Unavailable" : item.parsed.y.toFixed(3)} ${item.dataset.yAxisID === "radiation" ? "W/m²" : "kWh"}`,
@@ -165,7 +165,7 @@ export function qualityChart(canvas, plot, source, day, evidenceTime) {
         const status = document.createElement("p"); status.className = "quality-radiation-status";
         status.textContent = `Satellite data complete through: ${radiation.complete_until ? when(radiation.complete_until) : "Unavailable"}: Coverage: ${radiation.observed_hours} of ${radiation.hours} hours`;
         const details = document.createElement("p"); details.className = "quality-radiation-source";
-        details.textContent = `${radiation.source}: Satellite estimate, not a local sensor measurement. Last fetched: ${radiation.received_at ? when(radiation.received_at) : "Unavailable"}. Both irradiance series use the right axis in W/m².${radiation.issue ? ` ${radiation.issue}` : ""}`;
+        details.textContent = `Actual irradiance is estimated from ${radiation.source} satellite observations. Last fetched: ${radiation.received_at ? when(radiation.received_at) : "Unavailable"}. Compare both irradiance lines on the right axis (W/m²) to see if the weather forecast may explain a production difference.${radiation.issue ? ` ${radiation.issue}` : ""}`;
         plot.after(status, details);
     }
     return chart;
