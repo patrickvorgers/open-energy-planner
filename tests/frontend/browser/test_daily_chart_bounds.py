@@ -223,10 +223,9 @@ def test_daily_bounds_and_optional_calculations(app_page, day, hours, timezone, 
         for index in range(ceil(hours))
     ]
     if solar_reference:
-        for label in ("Forecast irradiance", "Satellite estimate"):
+        for label in ("Forecast irradiance", "Actual irradiance (satellite)"):
             control = page.get_by_role("checkbox", name=label, exact=True)
-            expect(control).not_to_be_checked()
-            control.check()
+            expect(control).to_be_checked()
 
     def check_intervals():
         """Check independent single-bar widths and clipped centres without changing the original evidence."""
@@ -256,7 +255,7 @@ def test_daily_bounds_and_optional_calculations(app_page, day, hours, timezone, 
             references = canvas.evaluate("""canvas => {
                 const chart=Chart.getChart(canvas);
                 return {unit:chart.options.scales.radiation.title.text,
-                    series:chart.data.datasets.filter(dataset=>['Alternative','Forecast irradiance','Satellite estimate'].includes(dataset.label)).map(dataset=>({
+                    series:chart.data.datasets.filter(dataset=>['Alternative','Forecast irradiance','Actual irradiance (satellite)'].includes(dataset.label)).map(dataset=>({
                         label:dataset.label, axis:dataset.yAxisID, points:dataset.data,
                         centres:chart.getDatasetMeta(chart.data.datasets.indexOf(dataset)).data.map(point=>point.x)
                     }))};
@@ -265,7 +264,7 @@ def test_daily_bounds_and_optional_calculations(app_page, day, hours, timezone, 
             assert {reference["label"] for reference in references["series"]} == {
                 "Alternative",
                 "Forecast irradiance",
-                "Satellite estimate",
+                "Actual irradiance (satellite)",
             }
             for reference in references["series"]:
                 alternative = reference["label"] == "Alternative"

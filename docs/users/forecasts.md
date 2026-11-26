@@ -203,8 +203,11 @@ forecast fixed before a selected day are separate evidence.
 
 ## Read Forecast quality
 
-Open **Insights > Forecast quality** and choose a day above the **Household**,
-**Solar** and **Devices** tabs. The same day applies to all three views. Solar and
+Open **Insights > Forecast quality**. It opens on yesterday in the Home Assistant
+timezone when that day is available. Otherwise it opens on the most recent
+available past day, or today if that is the only day with history. Use the day
+selector above the **Household**, **Solar** and **Devices** tabs to choose another
+day. Refresh keeps your selection. The same day applies to all three views. Solar and
 Devices each show one selected source at a time. The page compares the original
 midnight forecast with received hourly measurements for that same Home Assistant
 calendar day. Measured energy uses fill-only bars. The originally selected model
@@ -236,11 +239,19 @@ A zero measured total has no meaningful relative percentage. Controlled applianc
 
 ## Compare irradiance separately
 
-For Solar, optionally enable **Forecast irradiance** and **Satellite estimate**.
-These use the right-hand W/m² axis, separate from production in kWh. Forecast
-irradiance comes from the weather retained with the original prediction.
-Satellite irradiance estimates sunlight from satellite observations. It is not
-a sensor on your roof. The named DWD / EUMETSAT MTG source has approximately
+The Solar chart shows **Forecast irradiance** and **Actual irradiance (satellite)**
+by default when irradiance evidence is available. Both lines use the right-hand
+W/m² axis. Predicted and measured production use the left-hand kWh axis.
+Each line can be hidden in the legend.
+
+Compare the predicted production with the irradiance forecast retained at
+midnight. Then compare measured production with the satellite estimate of the
+sunlight that actually reached the area. If the irradiance lines differ at the
+same hours as production, the original weather forecast may explain part of the
+production error. A satellite estimate represents the area around the site. A
+rooftop sensor would measure irradiance at the panels themselves.
+
+The named DWD / EUMETSAT MTG source has approximately
 20 minutes of provider delay and historical coverage from February 2026.
 Actual availability depends on the response. Older or missing data stays unavailable.
 
