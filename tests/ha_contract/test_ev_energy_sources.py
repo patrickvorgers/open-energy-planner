@@ -76,6 +76,27 @@ def test_energy_power_link_is_required_and_cannot_be_overridden(linked_power):
         )
 
 
+def test_ev_configuration_normalizes_vehicle_sources_and_selects_the_charge_meter():
+    """A valid replacement preserves charge-point settings and adds its forecast membership."""
+    discovery = catalogue()
+    request = settings()
+    consumers = SimpleNamespace(options=discovery["suggestions"]["consumers"], selected=[])
+    configured, selected = configuration(
+        request,
+        discovery,
+        consumers,
+        SimpleNamespace(state={"devices": {}}),
+        previous_points=(),
+    )
+    assert configured["points"] == request["points"]
+    assert [vehicle["id"] for vehicle in configured["vehicles"]] == [
+        vehicle["id"] for vehicle in request["vehicles"]
+    ]
+    assert configured["vehicles"][0]["connected_entity"] is None
+    assert configured["vehicles"][0]["soc_timestamp_attribute"] is None
+    assert selected == ({"entity_id": "sensor.charger_energy", "weather_sensitive": False},)
+
+
 def test_missing_energy_meter_is_rejected_by_membership_validation():
     """Valid sensor metadata cannot admit a charge point whose meter is absent from Energy."""
     consumers = SimpleNamespace(options=[], selected=[])
