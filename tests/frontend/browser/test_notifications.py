@@ -633,6 +633,17 @@ def test_malformed_status_cannot_clear_last_known_notice_or_follow_external_acti
             page.clock.fast_forward(16000)
         expect(popup).to_contain_text("last known notifications")
         expect(popup.locator(".notification-expiry")).to_have_count(0)
+    notice = result["notifications"][0]
+    del notice["auto_clear_minutes"]
+    notice["key"] = "contract:bonus"
+    with page.expect_response("**/v1/notifications"):
+        page.clock.fast_forward(16000)
+    expect(popup).not_to_contain_text("last known notifications")
+    result["notifications"].append({**notice, "title": "Conflicting bonus notice"})
+    with page.expect_response("**/v1/notifications"):
+        page.clock.fast_forward(16000)
+    expect(popup).to_contain_text("last known notifications")
+    expect(popup).not_to_contain_text("Conflicting bonus notice")
     result["notifications"] = None
     page.clock.fast_forward(16000)
     expect(popup).to_contain_text("last known notifications")

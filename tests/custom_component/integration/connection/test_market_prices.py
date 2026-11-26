@@ -74,6 +74,12 @@ def test_discovery_availability_retry_and_transfer_ownership(tmp_path):
         ]
         await bridge.capture(request, now + timedelta(minutes=1))
         assert len(calls) == 1
+        invalid = {**request, "days": [*request["days"], *request["days"]]}
+        with pytest.raises(ValueError, match="Duplicate market price day"):
+            await bridge.capture(invalid, now + timedelta(minutes=1))
+        cached = await bridge.capture(request, now + timedelta(minutes=1))
+        assert cached["responses"] == first["responses"]
+        assert len(calls) == 1
         capture = bridge.capture
         bridge.capture = AsyncMock(return_value=first)
         client = SimpleNamespace(request=AsyncMock(side_effect=TimeoutError))

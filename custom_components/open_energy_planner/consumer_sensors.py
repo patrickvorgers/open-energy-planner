@@ -44,6 +44,18 @@ def validate(value):
     if not isinstance(value, dict):
         raise TypeError("Invalid consumer forecasts")
     options, selected = value.get("options", []), value.get("selected", [])
+    _validate_selection(options, selected)
+    result = value.get("result")
+    if result is None:
+        return value
+    if not isinstance(result, dict) or result.get("status") not in FORECAST_STATUSES:
+        raise ValueError("Invalid consumer status")
+    _validate_records(result.get("devices", []), {item["entity_id"] for item in selected})
+    return value
+
+
+def _validate_selection(options, selected):
+    """Check source identities and metadata before reading any forecast payload."""
     if not isinstance(options, list) or not isinstance(selected, list):
         raise TypeError("Invalid consumer selection")
     for item in (*options, *selected):
@@ -66,12 +78,10 @@ def validate(value):
             raise ValueError("Invalid consumer power sensor")
     if any(type(item.get("weather_sensitive")) is not bool for item in selected):
         raise ValueError("Invalid consumer weather setting")
-    result = value.get("result")
-    if result is None:
-        return value
-    if not isinstance(result, dict) or result.get("status") not in FORECAST_STATUSES:
-        raise ValueError("Invalid consumer status")
-    records = result.get("devices", [])
+
+
+def _validate_records(records, selected_ids):
+    """Accept at most one forecast per selected source."""
     if not isinstance(records, list):
         raise TypeError("Invalid consumer forecast list")
     seen = set()
@@ -79,39 +89,42 @@ def validate(value):
         if (
             not isinstance(item, dict)
             or not isinstance(item.get("entity_id"), str)
-            or item.get("entity_id") not in {row["entity_id"] for row in selected}
+            or item.get("entity_id") not in selected_ids
             or item["entity_id"] in seen
         ):
             raise ValueError("Unexpected or duplicated consumer forecast")
         if "status" in item and item["status"] not in FORECAST_STATUSES:
             raise ValueError("Invalid individual consumer status")
         seen.add(item["entity_id"])
-        forecast = item["forecast"]
+        _validate_forecast(item["forecast"])
+
+
+def _validate_forecast(forecast):
+    """Bound forecast metadata, time validity and every interval's quantities."""
+    if (
+        not isinstance(forecast, dict)
+        or not isinstance(forecast.get("model"), str)
+        or len(forecast["model"]) > MAX_METADATA_TEXT_LENGTH
+        or forecast.get("unit") != "kWh"
+        or not isinstance(forecast.get("steps"), list)
+    ):
+        raise ValueError("Invalid consumer forecast")
+    issued_at = timestamp(forecast["issued_at"])
+    if "valid_until" in forecast and timestamp(forecast["valid_until"]) < issued_at:
+        raise ValueError("Consumer forecast deadline precedes issue")
+    if len(forecast["steps"]) > MAX_STEPS:
+        raise ValueError("Too many forecast steps")
+    for step in forecast["steps"]:
+        timestamp(step["start"])
         if (
-            not isinstance(forecast, dict)
-            or not isinstance(forecast.get("model"), str)
-            or len(forecast["model"]) > MAX_METADATA_TEXT_LENGTH
-            or forecast.get("unit") != "kWh"
-            or not isinstance(forecast.get("steps"), list)
+            any(
+                type(step[key]) not in (int, float) or not isfinite(step[key])
+                for key in ("kwh", "duration_h")
+            )
+            or step["kwh"] < 0
+            or step["duration_h"] not in SUPPORTED_DURATIONS_HOURS
         ):
-            raise ValueError("Invalid consumer forecast")
-        issued_at = timestamp(forecast["issued_at"])
-        if "valid_until" in forecast and timestamp(forecast["valid_until"]) < issued_at:
-            raise ValueError("Consumer forecast deadline precedes issue")
-        if len(forecast["steps"]) > MAX_STEPS:
-            raise ValueError("Too many forecast steps")
-        for step in forecast["steps"]:
-            timestamp(step["start"])
-            if (
-                any(
-                    type(step[key]) not in (int, float) or not isfinite(step[key])
-                    for key in ("kwh", "duration_h")
-                )
-                or step["kwh"] < 0
-                or step["duration_h"] not in SUPPORTED_DURATIONS_HOURS
-            ):
-                raise ValueError("Invalid consumer forecast quantity")
-    return value
+            raise ValueError("Invalid consumer forecast quantity")
 
 
 class ConsumerSensor(PlannerEntity, SensorEntity):

@@ -18,6 +18,35 @@ MAX_REQUEST_DAYS = 2
 _LOGGER = logging.getLogger(__name__)
 
 
+def _price_request(request, now):
+    """Validate requested Nord Pool days in the market's local calendar."""
+    if not isinstance(request, dict) or set(request) != {"market_area", "currency", "days"}:
+        raise ValueError("Invalid market price request")
+    area, currency = request["market_area"], request["currency"]
+    days = request["days"]
+    if not isinstance(area, str) or not area or currency != "EUR":
+        raise ValueError("Invalid market price identity")
+    if not isinstance(days, list) or len(days) > MAX_REQUEST_DAYS:
+        raise ValueError("Invalid market price days")
+    requests = {}
+    for day_request in days:
+        if (
+            not isinstance(day_request, dict)
+            or set(day_request) != {"date", "request_id"}
+            or not isinstance(day_request["request_id"], str)
+            or len(day_request["request_id"]) != 32
+        ):
+            raise ValueError("Invalid market price day request")
+        requested_day = date.fromisoformat(day_request["date"])
+        if requested_day in requests:
+            raise ValueError("Duplicate market price day")
+        requests[requested_day] = day_request["request_id"]
+    local = now.astimezone(ZoneInfo("Europe/Oslo"))
+    if any(not 0 <= (day - local.date()).days <= 1 for day in requests):
+        raise ValueError("Market price days outside the supported window")
+    return area, currency, local, requests
+
+
 class MarketPriceBridge:
     """Translate app day requests to supported public HA actions with bounded retries.
 
@@ -70,53 +99,9 @@ class MarketPriceBridge:
 
     async def capture(self, request, now):
         """Discover Nord Pool and return an explicit report without unrequested network calls."""
-        if not isinstance(request, dict) or set(request) != {"market_area", "currency", "days"}:
-            raise ValueError("Invalid market price request")
-        area, currency = request["market_area"], request["currency"]
-        days = request["days"]
-        if not isinstance(area, str) or not area or currency != "EUR":
-            raise ValueError("Invalid market price identity")
-        if not isinstance(days, list) or len(days) > MAX_REQUEST_DAYS:
-            raise ValueError("Invalid market price days")
-        requests = {}
-        for day_request in days:
-            if (
-                not isinstance(day_request, dict)
-                or set(day_request) != {"date", "request_id"}
-                or not isinstance(day_request["request_id"], str)
-                or len(day_request["request_id"]) != 32
-            ):
-                raise ValueError("Invalid market price day request")
-            requested_day = date.fromisoformat(day_request["date"])
-            if requested_day in requests:
-                raise ValueError("Duplicate market price day")
-            requests[requested_day] = day_request["request_id"]
-        days = tuple(requests)
-        local = now.astimezone(ZoneInfo("Europe/Oslo"))
-        if any(not 0 <= (day - local.date()).days <= 1 for day in days):
-            raise ValueError("Market price days outside the supported window")
-        entries = self.hass.config_entries.async_entries("nordpool")
-        compatible = [
-            entry
-            for entry in entries
-            if (area in entry.data.get("areas", ()) and entry.data.get("currency") == currency)
-        ]
-        loaded = [entry for entry in compatible if entry.state == ConfigEntryState.LOADED]
-        available = len(loaded) == 1 and self.hass.services.has_service(
-            "nordpool", "get_prices_for_date"
-        )
-        reason = (
-            "ready"
-            if available
-            else "not_configured"
-            if not entries
-            else "incompatible"
-            if not compatible
-            else "ambiguous"
-            if len(loaded) > 1
-            else "not_loaded"
-        )
-        identity = (area, currency, loaded[0].entry_id if available else None)
+        area, currency, local, requests = _price_request(request, now)
+        entry, reason = self._price_source(area, currency)
+        identity = (area, currency, entry.entry_id if entry is not None else None)
         if identity != self.identity:
             self.attempts, self.replies, self.identity = {}, {}, identity
         self.replies = {
@@ -127,56 +112,81 @@ class MarketPriceBridge:
         self.attempts = {
             day: attempt for day, attempt in self.attempts.items() if day >= local.date()
         }
-        if available:
-            registry = er.async_get(self.hass)
-            sensor = registry.async_get_entity_id(
-                "binary_sensor", "nordpool", f"{area}-tomorrow_price_available"
-            )
-            availability = self.hass.states.get(sensor) if sensor else None
-            for day in days:
-                if day in self.replies:
-                    continue
-                if day > local.date() and (
-                    availability is not None
-                    and availability.state != "on"
-                    or availability is None
-                    and local.time() < UNKNOWN_AVAILABILITY_FETCH_TIME
-                ):
-                    reason = "waiting_for_publication"
-                    continue
-                previous = self.attempts.get(day)
-                if previous is not None and now - previous < PRICE_RETRY:
-                    reason = "request_failed"
-                    continue
-                self.attempts[day] = now
-                try:
-                    async with asyncio.timeout(ACTION_TIMEOUT_SECONDS):
-                        response = await self.hass.services.async_call(
-                            "nordpool",
-                            "get_prices_for_date",
-                            {
-                                "config_entry": loaded[0].entry_id,
-                                "date": day.isoformat(),
-                                "areas": [area],
-                                "currency": currency,
-                            },
-                            blocking=True,
-                            return_response=True,
-                        )
-                    if not isinstance(response, dict) or not response.get(area):
-                        reason = "waiting_for_publication"
-                        continue
-                    self.replies[day] = {
-                        "date": day.isoformat(),
-                        "request_id": requests[day],
-                        "data": response,
-                    }
-                except (HomeAssistantError, TimeoutError):
-                    reason = "request_failed"
+        if entry is not None:
+            reason = await self._fetch_days(entry, area, currency, requests, now, local)
         return {
             "market_area": area,
             "currency": currency,
-            "available": available,
+            "available": entry is not None,
             "reason": reason,
             "responses": list(self.replies.values()),
         }
+
+    def _price_source(self, area, currency):
+        """Resolve one loaded official entry, or the reason it cannot be used."""
+        entries = self.hass.config_entries.async_entries("nordpool")
+        compatible = [
+            entry
+            for entry in entries
+            if (area in entry.data.get("areas", ()) and entry.data.get("currency") == currency)
+        ]
+        loaded = [entry for entry in compatible if entry.state == ConfigEntryState.LOADED]
+        if len(loaded) == 1 and self.hass.services.has_service("nordpool", "get_prices_for_date"):
+            return loaded[0], "ready"
+        if not entries:
+            return None, "not_configured"
+        if not compatible:
+            return None, "incompatible"
+        if len(loaded) > 1:
+            return None, "ambiguous"
+        return None, "not_loaded"
+
+    async def _fetch_days(self, entry, area, currency, requests, now, local):
+        """Fetch only eligible requested days, retaining retry and publication state."""
+        reason = "ready"
+        registry = er.async_get(self.hass)
+        sensor = registry.async_get_entity_id(
+            "binary_sensor", "nordpool", f"{area}-tomorrow_price_available"
+        )
+        availability = self.hass.states.get(sensor) if sensor else None
+        for day in requests:
+            if day in self.replies:
+                continue
+            if day > local.date() and (
+                availability is not None
+                and availability.state != "on"
+                or availability is None
+                and local.time() < UNKNOWN_AVAILABILITY_FETCH_TIME
+            ):
+                reason = "waiting_for_publication"
+                continue
+            previous = self.attempts.get(day)
+            if previous is not None and now - previous < PRICE_RETRY:
+                reason = "request_failed"
+                continue
+            self.attempts[day] = now
+            try:
+                async with asyncio.timeout(ACTION_TIMEOUT_SECONDS):
+                    response = await self.hass.services.async_call(
+                        "nordpool",
+                        "get_prices_for_date",
+                        {
+                            "config_entry": entry.entry_id,
+                            "date": day.isoformat(),
+                            "areas": [area],
+                            "currency": currency,
+                        },
+                        blocking=True,
+                        return_response=True,
+                    )
+                if not isinstance(response, dict) or not response.get(area):
+                    reason = "waiting_for_publication"
+                    continue
+                self.replies[day] = {
+                    "date": day.isoformat(),
+                    "request_id": requests[day],
+                    "data": response,
+                }
+            except (HomeAssistantError, TimeoutError):
+                reason = "request_failed"
+        return reason
