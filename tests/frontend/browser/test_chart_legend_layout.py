@@ -53,7 +53,7 @@ def test_shared_legends_use_full_plot_width_and_keep_controls(app_page):
         };
     }""")
     assert spacing["stripGap"] >= 0, spacing
-    assert 0 < spacing["headingGap"] <= 36, spacing
+    assert 0 < spacing["headingGap"] <= 30, spacing
     scales = page.evaluate("""() => ["plan-chart", "price-chart"].map(id => {
         const chart = Chart.getChart(id);
         return [chart.scales.x.min, chart.scales.x.max, chart.chartArea.left, chart.chartArea.right];
