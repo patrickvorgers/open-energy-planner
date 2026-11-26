@@ -8,8 +8,9 @@ import pytest
 from custom_components.open_energy_planner.protocol import Plan
 from open_energy_planner.appliances.ev.fallback import uncontrolled_snapshot
 from open_energy_planner.demand.calculation.composition import LoadComponent, LoadStep
+from open_energy_planner.installation.validation import validate
 from open_energy_planner.optimization.adapters.highs import HighsSolver
-from open_energy_planner.optimization.adapters.process.worker import solve_with_ev_fallback_in_child
+from open_energy_planner.optimization.adapters.process import worker
 from open_energy_planner.optimization.domain import Battery, Interval, SolveResult, Status, Strategy
 from open_energy_planner.planning import PlanningCoordinator, PlanningService
 from open_energy_planner.runtime.diagnostics.planning_notifications import (
@@ -75,7 +76,8 @@ def test_fallback_restores_load_and_protects_both_directions():
     )
 
 
-def test_verified_fallback_publishes_and_has_no_ev_permissions(monkeypatch):
+@pytest.mark.parametrize("reject", [False, True])
+def test_verified_fallback_publishes_and_has_no_ev_permissions(monkeypatch, reject):
     """Use the real fallback optimizer after an injected EV proof failure, then validate the HA plan."""
     original_solve = HighsSolver.solve
 
@@ -87,25 +89,23 @@ def test_verified_fallback_publishes_and_has_no_ev_permissions(monkeypatch):
         assert 0 < options.time_limit_s <= 120
         return original_solve(solver, inputs, options)
 
-    class Solver:
-        """Run the actual child entry point inline for the injected failure."""
+    def run_child(target, primary, timeout, *options):
+        """Run both sides of the worker contract without crossing a process boundary."""
+        assert timeout == 125
+        received = []
 
-        async def solve_with_ev_fallback(self, primary, fallback, *, strategy):
-            """Capture the result and selected inputs without a spawned test process."""
-            received = []
+        class Sender:
+            """Collect a single worker response."""
 
-            class Sender:
-                """Collect a single worker response."""
+            def send(self, value):
+                """Collect the transmitted result."""
+                received.append(value)
 
-                def send(self, value):
-                    """Collect the transmitted result."""
-                    received.append(value)
+            def close(self):
+                """Complete the in-memory worker channel."""
 
-                def close(self):
-                    """Complete the in-memory worker channel."""
-
-            solve_with_ev_fallback_in_child(primary, Sender(), 120, strategy, fallback)
-            return received[0]
+        target(primary, Sender(), *options)
+        return received[0]
 
     async def scenario():
         """Publish through the coordinator using the independent validation path."""
@@ -115,9 +115,25 @@ def test_verified_fallback_publishes_and_has_no_ev_permissions(monkeypatch):
             """Collect the exact candidate approved for publication."""
             documents.append(document)
 
-        coordinator = PlanningCoordinator(PlanningService(Solver(), clock=lambda: START), publish)
+        def validate_candidate(inputs, plan):
+            """Use independent validation and allow a deliberate candidate rejection."""
+            if reject:
+                raise ValueError("Grid bound")
+            return validate(inputs, plan)
+
+        coordinator = PlanningCoordinator(
+            PlanningService(
+                worker.ProcessSolver(), clock=lambda: START, validator=validate_candidate
+            ),
+            publish,
+        )
         coordinator.submit(snapshot())
         await coordinator.wait()
+        if reject:
+            assert coordinator.status == "failed"
+            assert coordinator.reason == "ev_service_unproven"
+            assert not documents
+            return
         assert coordinator.status == "ready"
         assert coordinator.reason == "ev_control_deferred"
         (document,) = documents
@@ -132,6 +148,7 @@ def test_verified_fallback_publishes_and_has_no_ev_permissions(monkeypatch):
         )
 
     monkeypatch.setattr(HighsSolver, "solve", solve)
+    monkeypatch.setattr(worker, "run_child", run_child)
     asyncio.run(scenario())
 
 
@@ -156,7 +173,7 @@ def test_unrelated_solver_failure_does_not_remove_charging(monkeypatch):
             """Complete the in-memory worker channel."""
 
     monkeypatch.setattr(HighsSolver, "solve", solve)
-    solve_with_ev_fallback_in_child(inputs, Sender(), 120, Strategy.COST, inputs)
+    worker.solve_with_ev_fallback_in_child(inputs, Sender(), 120, Strategy.COST, inputs)
 
 
 def test_wait_notice_distinguishes_an_active_plan_from_a_blocker():

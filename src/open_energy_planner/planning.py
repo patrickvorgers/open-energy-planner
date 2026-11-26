@@ -273,6 +273,20 @@ class PlanningService:
         self.validator = validator if validator is not None else validate
         self.clock = clock or (lambda: datetime.now(UTC))
 
+    async def _solve(self, snapshot):
+        """Return the chosen result with the exact fallback input if the worker used it."""
+        solve_with_fallback = getattr(self.solver, "solve_with_ev_fallback", None)
+        if solve_with_fallback and snapshot.ev_power_bounds:
+            fallback = await asyncio.to_thread(uncontrolled_snapshot, snapshot)
+            if fallback is not None:
+                result, deferred = await solve_with_fallback(
+                    snapshot.problem, fallback.problem, strategy=snapshot.strategy
+                )
+                return result, fallback if deferred else None
+        if snapshot.strategy == Strategy.COST:
+            return await self.solver.solve(snapshot.problem), None
+        return await self.solver.solve(snapshot.problem, strategy=Strategy.CONSUMPTION), None
+
     async def calculate(self, snapshot: InputSnapshot) -> PlanningOutcome:
         """Reject stale/unsupported input and invalid candidates before returning a full document.
 
@@ -284,24 +298,10 @@ class PlanningService:
         if not snapshot.current_at(self.clock()):
             return PlanningOutcome(None, "stale_input")
         result = None
-        deferred = False
+        fallback = None
         try:
-            solve_with_fallback = getattr(self.solver, "solve_with_ev_fallback", None)
-            fallback = (
-                await asyncio.to_thread(uncontrolled_snapshot, snapshot)
-                if solve_with_fallback and snapshot.ev_power_bounds
-                else None
-            )
-            if fallback is not None:
-                result, deferred = await solve_with_fallback(
-                    snapshot.problem, fallback.problem, strategy=snapshot.strategy
-                )
-                if deferred:
-                    snapshot = fallback
-            elif snapshot.strategy == Strategy.COST:
-                result = await self.solver.solve(snapshot.problem)
-            else:
-                result = await self.solver.solve(snapshot.problem, strategy=Strategy.CONSUMPTION)
+            result, fallback = await self._solve(snapshot)
+            snapshot = fallback or snapshot
             if result.status not in (Status.OPTIMAL, Status.FEASIBLE) or result.plan is None:
                 return PlanningOutcome(None, result.stop_reason, result)
             costs = await asyncio.to_thread(self.validator, snapshot.problem, result.plan)
@@ -328,9 +328,9 @@ class PlanningService:
                     "tolerance_kwh": CONSUMPTION_PRIORITY_TOLERANCE_KWH,
                     "terminal_method": "initial_stock_grid_replacement",
                 }
-            if deferred:
+            if fallback is not None:
                 document["ev_control_deferred"] = True
-                return PlanningOutcome(document, EV_CONTROL_DEFERRED, result, snapshot)
+                return PlanningOutcome(document, EV_CONTROL_DEFERRED, result, fallback)
             return PlanningOutcome(document, "validated", result)
         except ValueError as error:
             _LOGGER.warning(
@@ -344,14 +344,14 @@ class PlanningService:
                 failure_trace(error),
             )
             return PlanningOutcome(
-                None, EV_SERVICE_UNPROVEN if deferred else "candidate_rejected", result
+                None, EV_SERVICE_UNPROVEN if fallback is not None else "candidate_rejected", result
             )
         except (TypeError, RuntimeError, IndexError, KeyError):
             _LOGGER.exception(
                 "Plan calculation failed unexpectedly. No partial plan will be published. Check the solver diagnostics."
             )
             return PlanningOutcome(
-                None, EV_SERVICE_UNPROVEN if deferred else "candidate_rejected", result
+                None, EV_SERVICE_UNPROVEN if fallback is not None else "candidate_rejected", result
             )
 
 
