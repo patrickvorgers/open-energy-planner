@@ -167,7 +167,7 @@ def test_ordinary_settings_reads_are_bounded_safe_and_independently_retryable(
         expect(
             page.get_by_role(
                 "button",
-                name="Add vehicle or charge point" if editor == "ev" else "Add electric boiler",
+                name="Add vehicle or charge point" if editor == "ev" else "Add application",
                 exact=True,
             )
         ).to_be_visible()
@@ -188,7 +188,7 @@ def test_rejected_installation_token_explains_recovery_and_accepts_correct_token
     expect(
         page.get_by_role(
             "button",
-            name="Add vehicle or charge point" if editor == "ev" else "Add electric boiler",
+            name="Add vehicle or charge point" if editor == "ev" else "Add application",
             exact=True,
         )
     ).to_be_visible()
