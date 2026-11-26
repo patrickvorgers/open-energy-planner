@@ -86,6 +86,14 @@ the Python app tests in `tests/app`.
 The existing candidate workflow remains responsible for merge evidence and
 required checks.
 
+If the app test step fails for a same-repository pull request, a trusted `main`
+workflow checks the failed attempt and cancels any active `Checks` candidate
+for the same open PR, head and base. The candidate must have been requested
+before the failure and its head must include the base. Retries started after
+the failure are left alone. Installation, report packaging and upload failures
+do not trigger candidate cancellation. The cancellation job reads GitHub
+metadata and does not download reports or execute PR source.
+
 ## Follow the intended merge order
 
 Develop Drafts and run builder checks in parallel. Agree on one

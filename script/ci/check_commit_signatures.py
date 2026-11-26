@@ -53,7 +53,11 @@ class GitHub:
             raise VerificationError("Invalid GitHub API response")
         return result
 
-    def _read(self, path, payload=None):
+    def cancel_workflow_run(self, repository, run_id):
+        """Request normal cancellation of a separately verified workflow run."""
+        self._read(f"repos/{repository}/actions/runs/{run_id}/cancel", {}, status=202)
+
+    def _read(self, path, payload=None, *, status=200):
         """Decode one bounded JSON response without exposing credentials or provider errors."""
         request = Request(
             "https://api.github.com/" + path,
@@ -67,8 +71,10 @@ class GitHub:
         )
         try:
             with self._opener.open(request, timeout=20) as response:
-                if response.status != 200:
+                if response.status != status:
                     raise VerificationError("GitHub verification request failed")
+                if status == 202:
+                    return None
                 data = response.read(2_000_001)
                 if len(data) > 2_000_000:
                     raise VerificationError("GitHub verification response exceeds limit")

@@ -1,0 +1,30 @@
+name: Cancel candidate after an app test failure
+on:
+  workflow_run:
+    workflows: [Repowise CI reports]
+    types: [completed]
+
+permissions: {}
+
+jobs:
+  cancel:
+    if: >-
+      github.repository == 'patrickvorgers/open-energy-planner' &&
+      github.ref == 'refs/heads/main' &&
+      github.event.workflow_run.event == 'pull_request' &&
+      github.event.workflow_run.conclusion == 'failure'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      actions: write
+      contents: read
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Cancel only matching candidates after the app test step fails
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: python3 -m script.ci.cancel_failed_app_candidate
