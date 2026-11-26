@@ -139,7 +139,10 @@ def test_forecast_quality_daily_baseline_missing_data_and_model_decision_separat
     expect(page.locator("#quality-charts .quality-current-summary")).to_contain_text(
         "Current ML model"
     )
-    expect(page.locator("#quality-charts .quality-current-model")).to_contain_text(
+    current_details = page.locator("#quality-charts .quality-current-model")
+    expect(current_details.locator("summary")).to_have_text("Current model and learning")
+    expect(current_details).to_contain_text("The graph retains the original model")
+    expect(current_details).to_contain_text(
         re.compile(r"Simulated baseline cost: 1[.,]23 EUR: Candidate: 0[.,]12 EUR")
     )
     expect(page.locator("#quality-charts .quality-current-model")).to_contain_text(
