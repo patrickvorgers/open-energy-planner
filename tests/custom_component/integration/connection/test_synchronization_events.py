@@ -3,6 +3,7 @@
 import asyncio
 
 from aiohttp import ClientConnectionError, ClientSession
+from homeassistant.const import EVENT_HOMEASSISTANT_STOP, RESTART_EXIT_CODE
 
 from custom_components.open_energy_planner import coordinator as coordinator_module
 from custom_components.open_energy_planner import observation_push
@@ -10,6 +11,41 @@ from custom_components.open_energy_planner.client import LocalClient
 from open_energy_planner.home_assistant import plan_status_watch
 from open_energy_planner.planning import PlanningService
 from tests.custom_component.support.chain import TOKEN, find, running_chain
+
+
+def test_home_assistant_lifecycle_hints_follow_core_events_over_the_paired_gateway():
+    """An actual Core start and its restart event clear and replace the advisory across pinned TLS."""
+
+    async def scenario():
+        async with ClientSession() as session:
+
+            async def seed_shutdown(_hass, _entry, url):
+                admin = LocalClient(session, url, TOKEN)
+                await admin.request("POST", "/v1/ha/lifecycle", {"state": "stopping"})
+                notices = (await admin.request("GET", "/v1/notifications"))["notifications"]
+                assert any(notice["code"] == "home_assistant_stopping" for notice in notices)
+
+            async with running_chain(live=True, peer_gateway=True, before_start=seed_shutdown) as (
+                hass,
+                _entry,
+                url,
+                _root,
+            ):
+                admin = LocalClient(session, url, TOKEN)
+                notices = (await admin.request("GET", "/v1/notifications"))["notifications"]
+                assert not any(notice["code"] == "home_assistant_stopping" for notice in notices)
+
+                hass.exit_code = RESTART_EXIT_CODE
+                hass.bus.async_fire(EVENT_HOMEASSISTANT_STOP)
+                await hass.async_block_till_done()
+                notices = (await admin.request("GET", "/v1/notifications"))["notifications"]
+                restart = next(
+                    notice for notice in notices if notice["code"] == "home_assistant_restarting"
+                )
+                assert restart["title"] == "Home Assistant is restarting"
+                assert restart["blocks"] == []
+
+    asyncio.run(scenario())
 
 
 async def wait_for_projection(coordinator, ready):

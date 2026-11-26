@@ -419,6 +419,7 @@ class PlanningCoordinator:
         self.status, self.reason = "not_ready", None
         self.blocked_since = None
         self.block_reason = None
+        self.block_text = None
 
     def _set_status(self, status, reason=None):
         """Overwrite status and reason, logging changed blockers once.
@@ -428,11 +429,15 @@ class PlanningCoordinator:
         clears it after successful publication. Diagnostic state is not persisted.
         """
         now = self.clock()
+        text = None
         if status in {"not_ready", "failed"} and reason:
+            evidence = self.explain(reason)
+            if evidence is not None or reason != self.block_reason:
+                self.block_text = evidence
+            text = self.block_text or explain_planning_problem(reason)
             if reason != self.block_reason:
                 previous = self.block_reason
                 self.blocked_since = self.blocked_since or now
-                text = self.explain(reason)
                 _LOGGER.info(
                     "Planning blocked: %s (previous: %s). %s Action: %s",
                     reason,
@@ -447,7 +452,7 @@ class PlanningCoordinator:
                 max(0, (now - self.blocked_since).total_seconds()),
                 self.block_reason,
             )
-            self.block_reason = self.blocked_since = None
+            self.block_reason = self.blocked_since = self.block_text = None
         self.status, self.reason = status, reason
         if self.events and status != "calculating":
             from .activities.events import Health
@@ -462,8 +467,8 @@ class PlanningCoordinator:
                 else Health.UNKNOWN
             )
             detail = (
-                self.explain(reason).message
-                if reason and status in {"not_ready", "failed"}
+                text.message
+                if text is not None
                 else "A validated plan is available."
                 if status == "ready"
                 else "Waiting for a validated plan. Existing commands retain their original validity."

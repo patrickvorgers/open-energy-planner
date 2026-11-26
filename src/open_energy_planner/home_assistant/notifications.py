@@ -4,6 +4,13 @@ from open_energy_planner.notifications.model import NoticeText
 
 from .observations import MAX_OBSERVATION_AGE_SECONDS, capture_deadline
 
+MEASUREMENT_CAUSES = {
+    "required_measurement_unavailable",
+    "required_measurement_expired",
+    "report_expired",
+    "waiting_for_measurements",
+}
+
 _SOURCE_PROBLEMS = {
     "missing_entity": "The configured sensor does not exist in Home Assistant.",
     "unavailable": "Home Assistant reports unknown or unavailable instead of a usable value.",
@@ -19,7 +26,7 @@ _SOURCE_PROBLEMS = {
 
 
 def explain_measurement_problem(reason, configuration, report, now, names=None):
-    """Identify each affected required source from accepted current evidence, without changing admission.
+    """Identify one affected required source from accepted current evidence, without changing admission.
 
     HA timestamps alone never establish communication failure. Sensor provenance
     remains distinct from the integration's current capture deadline.
@@ -27,12 +34,7 @@ def explain_measurement_problem(reason, configuration, report, now, names=None):
     Optional names are current validated catalogue labels. They supplement exact
     sensor IDs and never participate in measurement admission.
     """
-    if reason not in {
-        "required_measurement_unavailable",
-        "required_measurement_expired",
-        "report_expired",
-        "waiting_for_measurements",
-    }:
+    if reason not in MEASUREMENT_CAUSES:
         return None
     if report is None or reason == "report_expired":
         return NoticeText(
@@ -49,7 +51,6 @@ def explain_measurement_problem(reason, configuration, report, now, names=None):
         return None
     issues = {issue.key: issue.reason for issue in report.issues}
     readings = {reading.key: reading for reading in report.readings}
-    problems = []
     for spec in configuration.bindings:
         if not spec.required:
             continue
@@ -68,16 +69,15 @@ def explain_measurement_problem(reason, configuration, report, now, names=None):
             identity = (
                 f"{name} ({spec.entity_id})" if name and name != spec.entity_id else spec.entity_id
             )
-            problems.append(f"{identity}: {problem}")
-    if not problems:
-        return None
-    return NoticeText(
-        "Required measurements are unavailable",
-        "Check these sensors in Home Assistant and their selection in Installation settings. "
-        "Planning retries automatically when usable readings arrive.\n\n" + "\n\n".join(problems),
-        "Check installation",
-        "/setup",
-    )
+            return NoticeText(
+                "Required measurement is unavailable",
+                f"{identity}: {problem}\n\n"
+                "Check this sensor in Home Assistant and its selection in Installation settings. "
+                "Planning retries automatically when usable readings arrive.",
+                "Check installation",
+                "/setup",
+            )
+    return None
 
 
 def explain_live_problem(live, reason, catalogue):
