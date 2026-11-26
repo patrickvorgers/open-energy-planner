@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 from playwright.sync_api import expect
 
-from tests.frontend.browser.helpers import TOKEN, wait_for_product_reads
+from tests.frontend.browser.helpers import TOKEN, open_chart_series, wait_for_product_reads
 
 
 @pytest.mark.parametrize(
@@ -27,7 +27,7 @@ def test_three_planning_charts_show_expected_and_scheduled_devices(app_page, req
     )
     assert sorted({round(value, 4) for value in original_rates}) == [0.45, 2.2, 2.7]
     for identity in ("plan-chart", "self-consumption-chart", "reference-chart"):
-        legend = page.locator("#" + identity + "-legend")
+        legend = open_chart_series(page, identity)
         for name in ("Washing machine", "Dryer", "Charge point"):
             expect(legend.get_by_role("checkbox", name=name, exact=True)).to_have_count(1)
         expect(legend.locator("label").filter(has_text="Dishwasher")).not_to_be_visible()
@@ -45,6 +45,7 @@ def test_three_planning_charts_show_expected_and_scheduled_devices(app_page, req
             identity,
         )
         washer.press("Space")
+        legend.get_by_text("Chart series", exact=True).press("Enter")
         data = page.evaluate(
             """id => {
             const chart = Chart.getChart(document.getElementById(id));
@@ -82,7 +83,8 @@ def test_three_planning_charts_show_expected_and_scheduled_devices(app_page, req
         )
         assert any(value < 0 for value in scheduled["values"])
         assert any(value == 0 for value in scheduled["values"])
-        page.locator("#" + identity).scroll_into_view_if_needed()
+        canvas = page.locator("#" + identity)
+        canvas.evaluate("element => element.scrollIntoView({block: 'center', behavior: 'instant'})")
         hover = page.evaluate(
             """async id => {const chart = Chart.getChart(document.getElementById(id));
                 const pageModule = document.querySelector('script[type="module"][src]').src;
@@ -90,14 +92,13 @@ def test_three_planning_charts_show_expected_and_scheduled_devices(app_page, req
                 const datasetIndex = chart.data.datasets.findIndex(dataset => dataset.label === 'Washing machine: Scheduled');
                 const intervalIndex = chart.data.datasets[datasetIndex].data.findIndex(point => point.y < 0);
                 const bar = chart.getDatasetMeta(datasetIndex).data[intervalIndex];
-                const bounds = chart.canvas.getBoundingClientRect();
                 const pixel = Math.round(bar.x), time = chart.scales.x.getValueForPixel(pixel);
                 const quarter = chart.data.datasets[datasetIndex].data.find(point => point.start <= time && time < point.end);
-                return {x: bounds.left + pixel, y: bounds.top + (bar.y + bar.base) / 2,
+                return {x: pixel, y: (bar.y + bar.base) / 2,
                     title: `From ${when(quarter.start)} to ${when(quarter.end)}`};}""",
             identity,
         )
-        page.mouse.move(hover["x"], hover["y"])
+        canvas.hover(position={"x": hover["x"], "y": hover["y"]})
         expect(page.locator("#" + identity + "-tooltip .chart-tooltip-title")).to_have_text(
             hover["title"]
         )
@@ -256,7 +257,7 @@ def test_equal_device_names_keep_independent_legend_switches(app_page):
     wait_for_product_reads(page)
     expect(page.locator("#overview-status")).to_contain_text("Connected")
     for identity in ("plan-chart", "self-consumption-chart", "reference-chart"):
-        switches = page.locator("#" + identity + "-legend").get_by_role(
+        switches = open_chart_series(page, identity).get_by_role(
             "checkbox", name="Laundry", exact=True
         )
         expect(switches).to_have_count(2)
