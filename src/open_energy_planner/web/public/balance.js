@@ -230,6 +230,91 @@ export function batteryPlanSeries(plan, labels) {
  * Invalid timing, efficiencies, missing evidence or failed conservation within
  * BALANCE_TOLERANCE_KWH produce null interval gaps counted in missing.
  */
+function balanceRow(plan, problem, group, consumption, acSolar, converters, localSources, interval, index) {
+    const flow = plan.expected_flows?.[index];
+    if (!flow || !finite(interval.duration_h) || interval.duration_h <= 0 || !Number.isFinite(Date.parse(interval.start))) return null;
+    const solar = localSources.map((source) => flow.solar?.find((entry) => entry.source_id === source.source_id)?.used_kwh);
+    const batteries = group.units.map((unit) => flow.batteries?.find((entry) => entry.device_id === unit.device_id));
+    const conversionFlows = converters.map((inverter) => flow.inverters?.find((entry) => entry.inverter_id === inverter.inverter_id));
+    if (!solar.every(energy)
+        || !batteries.every((battery) => battery && energy(battery.charge_kwh) && energy(battery.discharge_kwh))
+        || !conversionFlows.every((converter) => converter && energy(converter.import_kwh) && energy(converter.export_kwh))
+        || !converters.every((inverter) => efficiency(inverter.efficiency))
+        || !group.units.every((unit) => efficiency(unit.dc_efficiency))) return null;
+    const imported = !group.inverter ? flow.grid_import : conversionFlows[0]?.import_kwh;
+    const exported = !group.inverter ? flow.grid_export : conversionFlows[0]?.export_kwh;
+    const load = !group.inverter ? consumption.base[index] : 0;
+    const devices = !group.inverter ? consumption.parts.map(part => part.values[index]) : [];
+    const thermal = !group.inverter ? workEnergy(flow.thermal, problem.thermal_work || [], "device_id") : 0;
+    if (!group.inverter && !energy(workEnergy(flow.ev, problem.ev_work || [], "session_id"))) return null;
+    if (!devices.every(energy) || !energy(thermal)) return null;
+    if (![imported, exported, load].every(energy)) return null;
+    const converterLosses = converters.map((inverter, converterIndex) =>
+        conversionFlows[converterIndex].import_kwh * (1 - inverter.efficiency)
+        + conversionFlows[converterIndex].export_kwh * (1 / inverter.efficiency - 1));
+    const losses = total(converterLosses)
+        + total(group.units.map((unit, batteryIndex) =>
+            batteries[batteryIndex].charge_kwh * (1 / unit.dc_efficiency - 1)
+            + batteries[batteryIndex].discharge_kwh * (1 - unit.dc_efficiency)));
+    const row = {
+        solar: total(solar), import: imported,
+        discharge: total(batteries.map((battery) => battery.discharge_kwh)),
+        load: -load, devices: -total(devices), thermal: -thermal, export: -exported,
+        charge: -total(batteries.map((battery) => battery.charge_kwh)), losses: -losses
+    };
+    // Validate original DC evidence before moving separate PV losses outside the display boundary.
+    if (!(Math.abs(total(Object.values(row))) <= BALANCE_TOLERANCE_KWH)) return null;
+    if (!group.inverter) {
+        row.solar = total(solar.filter((_, sourceIndex) => !acSolar.has(localSources[sourceIndex].inverter_id)));
+        row.solarAC = total(conversionFlows.filter((_, converterIndex) => acSolar.has(converters[converterIndex].inverter_id))
+            .map((converter) => converter.export_kwh));
+        row.losses += total(converterLosses.filter((_, converterIndex) => acSolar.has(converters[converterIndex].inverter_id)));
+    }
+    return Math.abs(total(Object.values(row))) <= BALANCE_TOLERANCE_KWH ? row : null;
+}
+
+function balanceSeries(plan, problem, group, consumption, labels, intervals, rows) {
+    const converter = Boolean(group.inverter);
+    const definitions = [
+        ["solar", "Solar production: DC", "Production"],
+        ...(!converter ? [["solarAC", "Solar production: AC", "Production"]] : []),
+        ["import", converter ? "AC supply to converter" : "Grid import: AC", "Production"],
+        ["discharge", "Battery discharge: DC", "Production"], ["load", plan.input_snapshot?.load_components?.length ? plan.input_snapshot.load_components.find(part => part.entity_id == null)?.unseparated_entities?.length ? "Household remainder: AC" : "Household base: AC" : "Household demand: AC", "Consumption"],
+        ["export", converter ? "Converter output to AC" : "Grid export: AC", "Consumption"],
+        ["charge", "Battery charge: DC", "Consumption"], ["losses", "Conversion losses", "Consumption"]
+    ];
+    const series = definitions
+        .filter(([key]) => !(converter && key === "load") && (group.units.length || !["charge", "discharge"].includes(key)))
+        .map(([key, name, tooltipGroup]) => ({
+            ...flowSeries(name, FLOW_COLORS[key], intervals, rows.map((row) => row?.[key]), tooltipGroup),
+            flowKey: key
+        }));
+    if (!converter) for (const part of consumption.parts) {
+        series.push({...flowSeries(part.name, part.color, intervals, rows.map((row, index) => row == null ? null : -part.values[index]), "Consumption"), legendId: part.identity, legendName: part.legendName, deviceState: part.state});
+    }
+    series.push(...socSeries(plan, intervals, group.units, labels));
+    // Thermal stores consume AC at the installation boundary, never inside a battery converter.
+    if (!converter) for (const [storeIndex, work] of (problem.thermal_work || []).entries()) {
+        const values = rows.map((row, index) => row == null ? null : -plan.expected_flows[index].thermal.find((item) => item.device_id === work.device_id).ac_kwh);
+        const meter = plan.input_snapshot?.thermal_evidence?.find(row => row.configuration.id === work.device_id)?.configuration.energy_entity;
+        const name = labels.get(meter) || labels.get(work.device_id) || `Thermal store ${storeIndex + 1}`;
+        const expected = meter ? consumption.parts.find(part => part.identity === meter) : null;
+        series.push({...flowSeries(`${name}: Scheduled`, expected?.color || THERMAL_COLORS[storeIndex % THERMAL_COLORS.length], intervals, values, "Consumption"), legendId: meter || work.device_id, legendName: name, deviceState: "scheduled"});
+    }
+    if (!converter) for (const [vehicleIndex, work] of (problem.ev_work || []).entries()) {
+        let stored = work.initial_soc * work.capacity_kwh / PERCENT;
+        const points = [];
+        intervals.forEach((step, index) => {
+            const start = Date.parse(step.start), row = plan.expected_flows?.[index]?.ev?.find((item) => item.session_id === work.session_id);
+            points.push([start, stored == null ? null : stored / work.capacity_kwh * PERCENT]);
+            stored = stored == null || !energy(row?.stored_kwh) ? null : stored + row.stored_kwh;
+            points.push([start + step.duration_h * MILLISECONDS_PER_HOUR, stored == null ? null : stored / work.capacity_kwh * PERCENT]);
+        });
+        series.push({name: `${labels.get(work.vehicle_id) || `Vehicle ${vehicleIndex + 1}`}: SoC`, points, color: SOC_COLORS[(group.units.length + vehicleIndex) % SOC_COLORS.length], axis: "soc", unit: "%", tooltipGroup: "Battery state"});
+    }
+    return series;
+}
+
 export function energyBalances(plan, labels) {
     const problem = plan.input_snapshot?.problem || {}, intervals = problem.intervals || [];
     const units = problem.batteries || [], sources = problem.pv_sources || [], inverters = problem.inverters || [];
@@ -243,88 +328,11 @@ export function energyBalances(plan, labels) {
             .map((inverter, index) => ({id: inverter.inverter_id, inverter, name: `Battery converter ${index + 1}`,
                 units: units.filter((unit) => unit.inverter_id === inverter.inverter_id)}))];
     return groups.map((group) => {
-        const rows = intervals.map((interval, index) => {
-            const flow = plan.expected_flows?.[index];
-            if (!flow || !finite(interval.duration_h) || interval.duration_h <= 0 || !Number.isFinite(Date.parse(interval.start))) return null;
-            const converters = !group.inverter ? inverters : inverters.filter((inverter) => inverter.inverter_id === group.id);
-            const localSources = sources.filter((source) => converters.some((inverter) => inverter.inverter_id === source.inverter_id));
-            const solar = localSources.map((source) => flow.solar?.find((entry) => entry.source_id === source.source_id)?.used_kwh);
-            const batteries = group.units.map((unit) => flow.batteries?.find((entry) => entry.device_id === unit.device_id));
-            const conversionFlows = converters.map((inverter) => flow.inverters?.find((entry) => entry.inverter_id === inverter.inverter_id));
-            if (!solar.every(energy)
-                || !batteries.every((battery) => battery && energy(battery.charge_kwh) && energy(battery.discharge_kwh))
-                || !conversionFlows.every((converter) => converter && energy(converter.import_kwh) && energy(converter.export_kwh))
-                || !converters.every((inverter) => efficiency(inverter.efficiency))
-                || !group.units.every((unit) => efficiency(unit.dc_efficiency))) return null;
-            const imported = !group.inverter ? flow.grid_import : conversionFlows[0]?.import_kwh;
-            const exported = !group.inverter ? flow.grid_export : conversionFlows[0]?.export_kwh;
-            const load = !group.inverter ? consumption.base[index] : 0;
-            const devices = !group.inverter ? consumption.parts.map(part => part.values[index]) : [];
-            const thermal = !group.inverter ? workEnergy(flow.thermal, problem.thermal_work || [], "device_id") : 0;
-            if (!group.inverter && !energy(workEnergy(flow.ev, problem.ev_work || [], "session_id"))) return null;
-            if (!devices.every(energy) || !energy(thermal)) return null;
-            if (![imported, exported, load].every(energy)) return null;
-            const converterLosses = converters.map((inverter, converterIndex) =>
-                conversionFlows[converterIndex].import_kwh * (1 - inverter.efficiency)
-                + conversionFlows[converterIndex].export_kwh * (1 / inverter.efficiency - 1));
-            const losses = total(converterLosses)
-                + total(group.units.map((unit, batteryIndex) =>
-                    batteries[batteryIndex].charge_kwh * (1 / unit.dc_efficiency - 1)
-                    + batteries[batteryIndex].discharge_kwh * (1 - unit.dc_efficiency)));
-            const row = {
-                solar: total(solar), import: imported,
-                discharge: total(batteries.map((battery) => battery.discharge_kwh)),
-                load: -load, devices: -total(devices), thermal: -thermal, export: -exported,
-                charge: -total(batteries.map((battery) => battery.charge_kwh)), losses: -losses
-            };
-            // Validate original DC evidence before moving separate PV losses outside the display boundary.
-            if (!(Math.abs(total(Object.values(row))) <= BALANCE_TOLERANCE_KWH)) return null;
-            if (!group.inverter) {
-                row.solar = total(solar.filter((_, sourceIndex) => !acSolar.has(localSources[sourceIndex].inverter_id)));
-                row.solarAC = total(conversionFlows.filter((_, converterIndex) => acSolar.has(converters[converterIndex].inverter_id))
-                    .map((converter) => converter.export_kwh));
-                row.losses += total(converterLosses.filter((_, converterIndex) => acSolar.has(converters[converterIndex].inverter_id)));
-            }
-            return Math.abs(total(Object.values(row))) <= BALANCE_TOLERANCE_KWH ? row : null;
-        });
-        const converter = Boolean(group.inverter);
-        const definitions = [
-            ["solar", "Solar production: DC", "Production"],
-            ...(!converter ? [["solarAC", "Solar production: AC", "Production"]] : []),
-            ["import", converter ? "AC supply to converter" : "Grid import: AC", "Production"],
-            ["discharge", "Battery discharge: DC", "Production"], ["load", plan.input_snapshot?.load_components?.length ? plan.input_snapshot.load_components.find(part => part.entity_id == null)?.unseparated_entities?.length ? "Household remainder: AC" : "Household base: AC" : "Household demand: AC", "Consumption"],
-            ["export", converter ? "Converter output to AC" : "Grid export: AC", "Consumption"],
-            ["charge", "Battery charge: DC", "Consumption"], ["losses", "Conversion losses", "Consumption"]
-        ];
-        const series = definitions
-            .filter(([key]) => !(converter && key === "load") && (group.units.length || !["charge", "discharge"].includes(key)))
-            .map(([key, name, tooltipGroup]) => ({
-                ...flowSeries(name, FLOW_COLORS[key], intervals, rows.map((row) => row?.[key]), tooltipGroup),
-                flowKey: key
-            }));
-        if (!converter) for (const part of consumption.parts) {
-            series.push({...flowSeries(part.name, part.color, intervals, rows.map((row, index) => row == null ? null : -part.values[index]), "Consumption"), legendId: part.identity, legendName: part.legendName, deviceState: part.state});
-        }
-        series.push(...socSeries(plan, intervals, group.units, labels));
-        // Thermal stores consume AC at the installation boundary, never inside a battery converter.
-        if (!converter) for (const [storeIndex, work] of (problem.thermal_work || []).entries()) {
-            const values = rows.map((row, index) => row == null ? null : -plan.expected_flows[index].thermal.find((item) => item.device_id === work.device_id).ac_kwh);
-            const meter = plan.input_snapshot?.thermal_evidence?.find(row => row.configuration.id === work.device_id)?.configuration.energy_entity;
-            const name = labels.get(meter) || labels.get(work.device_id) || `Thermal store ${storeIndex + 1}`;
-            const expected = meter ? consumption.parts.find(part => part.identity === meter) : null;
-            series.push({...flowSeries(`${name}: Scheduled`, expected?.color || THERMAL_COLORS[storeIndex % THERMAL_COLORS.length], intervals, values, "Consumption"), legendId: meter || work.device_id, legendName: name, deviceState: "scheduled"});
-        }
-        if (!converter) for (const [vehicleIndex, work] of (problem.ev_work || []).entries()) {
-            let stored = work.initial_soc * work.capacity_kwh / PERCENT;
-            const points = [];
-            intervals.forEach((step, index) => {
-                const start = Date.parse(step.start), row = plan.expected_flows?.[index]?.ev?.find((item) => item.session_id === work.session_id);
-                points.push([start, stored == null ? null : stored / work.capacity_kwh * PERCENT]);
-                stored = stored == null || !energy(row?.stored_kwh) ? null : stored + row.stored_kwh;
-                points.push([start + step.duration_h * MILLISECONDS_PER_HOUR, stored == null ? null : stored / work.capacity_kwh * PERCENT]);
-            });
-            series.push({name: `${labels.get(work.vehicle_id) || `Vehicle ${vehicleIndex + 1}`}: SoC`, points, color: SOC_COLORS[(group.units.length + vehicleIndex) % SOC_COLORS.length], axis: "soc", unit: "%", tooltipGroup: "Battery state"});
-        }
+        const converters = !group.inverter ? inverters : inverters.filter((inverter) => inverter.inverter_id === group.id);
+        const localSources = sources.filter((source) => converters.some((inverter) => inverter.inverter_id === source.inverter_id));
+        const rows = intervals.map((interval, index) =>
+            balanceRow(plan, problem, group, consumption, acSolar, converters, localSources, interval, index));
+        const series = balanceSeries(plan, problem, group, consumption, labels, intervals, rows);
         return {...group, series, missing: rows.filter((row) => row == null).length};
     });
 }
