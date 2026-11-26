@@ -24,7 +24,13 @@ from .planning_policy import FINE_INTERVAL_MINUTES
 
 REPLAN_BOUNDARY_MINUTES = 5
 BOUNDARY_START_WINDOW = timedelta(minutes=1)
-EXPIRED_ROUND_REASONS = ("stale_input", "input_expired_during_solve", "publication_inputs_expired")
+EXPIRED_ROUND_REASONS = (
+    "stale_input",
+    "input_expired_during_solve",
+    "publication_inputs_expired",
+    "ev_control_deferred",
+    "ev_service_unproven",
+)
 GRID_DEVIATION_W = 1000
 BATTERY_DEVIATION_FRACTION = 0.05
 THERMAL_DEVIATION_C = 2

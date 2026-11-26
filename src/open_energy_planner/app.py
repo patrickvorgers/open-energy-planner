@@ -272,6 +272,7 @@ def create_app(
 
     def planning_status():
         """Share immutable coordinator evidence with notification providers, never its mutation methods."""
+        _, _, active_plan = command_mode(repository, live)
         return PlanningStatus(
             planner.status,
             planner.reason,
@@ -279,6 +280,7 @@ def create_app(
             planner.block_reason,
             has_published=planner.published is not None,
             block_text=planner.block_text,
+            ev_fallback_active=bool(active_plan and active_plan.get("ev_control_deferred")),
         )
 
     def explain_live_problem(reason, _detail=None):

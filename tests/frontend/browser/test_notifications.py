@@ -12,6 +12,29 @@ from tests.app.notifications.support import measurement_evidence, notification_d
 from tests.frontend.browser.helpers import TOKEN, discover, open_primary_navigation
 
 
+@pytest.mark.parametrize("app_site", ["ingress"], indirect=True)
+def test_ev_wait_notice_shows_whether_the_energy_plan_is_active(app_page):
+    """Keep the wait message actionable, with or without a currently authorized fallback."""
+    page, url = app_page
+    page.clock.install()
+    result = notification_document("ready", "ev_control_deferred", None, ev_fallback_active=True)
+    page.route("**/v1/notifications", lambda route: route.fulfill(json=result))
+    page.goto(url + "/quality")
+    page.get_by_role("button", name="Notifications: 1 active", exact=True).click()
+    popup = page.get_by_role("dialog", name="Notifications", exact=True)
+    expect(popup).to_contain_text("Energy plan active without EV charging control")
+    expect(popup).to_contain_text("includes expected charging consumption")
+    expect(popup).to_contain_text("You don't need to do anything now.")
+    width = page.viewport_size["width"]
+    popup.screenshot(path=f"results/ci/ev-control-deferred-{width}.png")
+    result.update(notification_document("failed", "ev_service_unproven", datetime.now(UTC)))
+    page.clock.fast_forward(16000)
+    expect(popup).to_contain_text("Waiting for a new energy plan")
+    expect(popup).to_contain_text("retries automatically")
+    expect(popup).not_to_contain_text("Energy plan active")
+    popup.screenshot(path=f"results/ci/ev-waiting-for-plan-{width}.png")
+
+
 @pytest.mark.parametrize("app_site", ["measurement_ingress"], indirect=True)
 def test_real_lifecycle_and_sensor_notices_are_short_and_actionable(app_page):
     """Display authenticated synthetic lifecycle and observation evidence on desktop and mobile."""

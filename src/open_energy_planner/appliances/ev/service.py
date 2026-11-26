@@ -610,6 +610,11 @@ class EVService:
             prepared,
             problem=refine(prepared.problem, works) if works else prepared.problem,
             ev_revision=self.hard_revision(now, timezone),
+            ev_power_bounds=tuple(
+                (point["energy_entity"], point["maximum_w"]) for point in self.state["points"]
+            )
+            if works
+            else (),
             ev_evidence=tuple(
                 {
                     "work": asdict(work),

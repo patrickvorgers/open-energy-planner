@@ -11,6 +11,11 @@ from math import isfinite
 from time import monotonic
 from typing import Protocol
 
+from open_energy_planner.appliances.ev.fallback import (
+    EV_CONTROL_DEFERRED,
+    EV_SERVICE_UNPROVEN,
+    uncontrolled_snapshot,
+)
 from open_energy_planner.core.units import FULL_SOC_PERCENT, SECONDS_PER_MINUTE
 from open_energy_planner.installation.location import SiteLocation
 from open_energy_planner.optimization.calculation.consumption import (
@@ -139,6 +144,7 @@ class InputSnapshot:
     load_components: tuple = ()
     ev_revision: str | None = None
     ev_evidence: tuple = ()
+    ev_power_bounds: tuple[tuple[str, float], ...] = ()
     thermal_revision: str | None = None
     thermal_evidence: tuple = ()
 
@@ -211,6 +217,7 @@ class PlanningOutcome:
     document: dict | None
     reason: str
     result: SolveResult | None = None
+    fallback_snapshot: InputSnapshot | None = None
 
 
 class CommandMapper:
@@ -277,12 +284,24 @@ class PlanningService:
         if not snapshot.current_at(self.clock()):
             return PlanningOutcome(None, "stale_input")
         result = None
+        deferred = False
         try:
-            result = (
-                await self.solver.solve(snapshot.problem)
-                if snapshot.strategy == Strategy.COST
-                else await self.solver.solve(snapshot.problem, strategy=Strategy.CONSUMPTION)
+            solve_with_fallback = getattr(self.solver, "solve_with_ev_fallback", None)
+            fallback = (
+                await asyncio.to_thread(uncontrolled_snapshot, snapshot)
+                if solve_with_fallback and snapshot.ev_power_bounds
+                else None
             )
+            if fallback is not None:
+                result, deferred = await solve_with_fallback(
+                    snapshot.problem, fallback.problem, strategy=snapshot.strategy
+                )
+                if deferred:
+                    snapshot = fallback
+            elif snapshot.strategy == Strategy.COST:
+                result = await self.solver.solve(snapshot.problem)
+            else:
+                result = await self.solver.solve(snapshot.problem, strategy=Strategy.CONSUMPTION)
             if result.status not in (Status.OPTIMAL, Status.FEASIBLE) or result.plan is None:
                 return PlanningOutcome(None, result.stop_reason, result)
             costs = await asyncio.to_thread(self.validator, snapshot.problem, result.plan)
@@ -309,6 +328,9 @@ class PlanningService:
                     "tolerance_kwh": CONSUMPTION_PRIORITY_TOLERANCE_KWH,
                     "terminal_method": "initial_stock_grid_replacement",
                 }
+            if deferred:
+                document["ev_control_deferred"] = True
+                return PlanningOutcome(document, EV_CONTROL_DEFERRED, result, snapshot)
             return PlanningOutcome(document, "validated", result)
         except ValueError as error:
             _LOGGER.warning(
@@ -321,12 +343,16 @@ class PlanningService:
                 type(error).__name__,
                 failure_trace(error),
             )
-            return PlanningOutcome(None, "candidate_rejected", result)
+            return PlanningOutcome(
+                None, EV_SERVICE_UNPROVEN if deferred else "candidate_rejected", result
+            )
         except (TypeError, RuntimeError, IndexError, KeyError):
             _LOGGER.exception(
                 "Plan calculation failed unexpectedly. No partial plan will be published. Check the solver diagnostics."
             )
-            return PlanningOutcome(None, "candidate_rejected", result)
+            return PlanningOutcome(
+                None, EV_SERVICE_UNPROVEN if deferred else "candidate_rejected", result
+            )
 
 
 class PublicationSuperseded(Exception):
@@ -507,7 +533,10 @@ class PlanningCoordinator:
         original_ev = getattr(original.problem, "ev_work", ())
         if (
             original.appliance_revision != current.appliance_revision
-            or (original_ev and original.ev_revision != current.ev_revision)
+            or (
+                (original_ev or original.ev_power_bounds)
+                and original.ev_revision != current.ev_revision
+            )
             or original.thermal_revision != current.thermal_revision
             or type(original.problem) is not type(current.problem)
         ):
@@ -592,13 +621,14 @@ class PlanningCoordinator:
                 if self.closed:
                     return
                 if outcome.document is not None:
+                    self.active = outcome.fallback_snapshot or snapshot
                     reason = self.publication_rejection(
                         outcome.document, self.service.clock(), self.latest
                     )
                     if reason:
                         raise PublicationSuperseded(reason)
                     await self.publish(outcome.document)
-                    self.published = (snapshot, outcome.document)
+                    self.published = (self.active, outcome.document)
                     calculation_reason = "published"
                     _LOGGER.info(
                         "Plan published in %.2f seconds. Strategy: %s. Validated forecast intervals: %d.",
