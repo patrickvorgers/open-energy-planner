@@ -17,6 +17,7 @@ from open_energy_planner.storage.adapters.documents import SqlDocuments
 from open_energy_planner.storage.adapters.lifecycle.sqlalchemy import SqlPlanRepository
 from tests.app.contract.support.settings import settings
 from tests.frontend.browser import price_daily_fixture
+from tests.frontend.browser.documentation_fixture import START
 from tests.frontend.browser.helpers import TOKEN, discover
 
 
@@ -247,3 +248,37 @@ def test_linked_price_readout_uses_original_cash_rates_and_keeps_missing_values_
     expect(reading).to_contain_text("Grid import: 1.25 kWh. Cost: 0.38 EUR at 0.30 EUR/kWh.")
     price.press("End")
     expect(reading).to_contain_text("Grid import: Unavailable. Cost: Unavailable at 0.30 EUR/kWh.")
+
+
+@pytest.mark.parametrize("app_site", ["documentation"], indirect=True)
+def test_hovering_the_peer_chart_dismisses_a_different_pinned_interval(app_page):
+    """Pin a price quarter, then hover a different quarter on the Optimizer chart."""
+    page, url = app_page
+    page.clock.set_fixed_time(START)
+    page.goto(url + "/overview")
+    page.get_by_label("Installation API token", exact=True).fill(TOKEN)
+    page.get_by_role("button", name="Connect", exact=True).click()
+    expect(page.locator("#overview-status")).to_contain_text("Connected")
+    price = page.locator("#price-chart")
+    optimizer = page.locator("#plan-chart")
+    page.set_viewport_size({**page.viewport_size, "height": 1600})
+    optimizer.evaluate("canvas => canvas.scrollIntoView({block: 'center', behavior: 'instant'})")
+    scroll_before = page.evaluate("scrollY")
+    positions = """(canvas, position) => {
+        const {left, right, top, bottom} = Chart.getChart(canvas).chartArea;
+        return {x: left + (right - left) * position, y: (top + bottom) / 2};
+    }"""
+    price.click(position=price.evaluate(positions, 0.25))
+    pinned = page.locator("#price-chart-tooltip.chart-tooltip-linked")
+    expect(pinned).to_be_visible()
+    original_quarter = pinned.locator(".chart-tooltip-title").inner_text()
+    reading = page.locator("#linked-chart-reading")
+    expect(reading).to_contain_text(original_quarter)
+
+    optimizer.hover(position=optimizer.evaluate(positions, 0.75))
+    assert page.evaluate("scrollY") == scroll_before
+    expect(pinned).to_be_hidden()
+    expect(reading).to_be_empty()
+    current_quarter = page.locator("#plan-chart-tooltip .chart-tooltip-title")
+    expect(current_quarter).to_be_visible()
+    assert current_quarter.inner_text() != original_quarter

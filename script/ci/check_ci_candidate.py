@@ -270,7 +270,7 @@ def repowise_disposition_author_ids(current):
 
 
 def require_repowise_disposition(checks, comments, current):
-    """Require the PR author or repo owner to account for findings on the exact current scan."""
+    """Return the exact scan ID once its findings have an author or owner disposition."""
     head, base = current["head"]["sha"], current["base"]["sha"]
     check_id = require_repowise_scan(checks, head, base)
     author_ids = repowise_disposition_author_ids(current)
@@ -279,6 +279,16 @@ def require_repowise_disposition(checks, comments, current):
         raise VerificationError(
             "Record the RepoWise disposition for the current head, base and scan"
         )
+    return check_id
+
+
+def require_unchanged_repowise_scan(repository, head, base, client, accepted_scan_id):
+    """Reject a newer or invalid app result published while other gate checks ran."""
+    if accepted_scan_id is None:
+        return
+    latest_scan_id = require_repowise_scan(current_checks(repository, head, client), head, base)
+    if latest_scan_id != accepted_scan_id:
+        raise VerificationError("RepoWise scanned this revision again. Review the replacement scan")
 
 
 def codex_review_state(comments, head):
@@ -425,14 +435,18 @@ def check(event, repository, client):
     file_count = changed_files(repository, number, current, client)
     checks = current_checks(repository, head, client)
     require_prerequisites(checks)
+    accepted_scan_id = None
     if current.get("user", {}).get("login") != "dependabot[bot]":
         require_automated_review(checks, repository, number, head, client)
-        require_repowise_disposition(checks, review_comments(repository, number, client), current)
+        accepted_scan_id = require_repowise_disposition(
+            checks, review_comments(repository, number, client), current
+        )
     require_resolved_threads(repository, number, client)
     require_clear_formal_reviews(repository, number, head, base, client)
     final_count = current_pr().get("changed_files")
     if type(final_count) is not int or final_count != file_count:
         raise VerificationError("PR file count changed during admission")
+    require_unchanged_repowise_scan(repository, head, base, client, accepted_scan_id)
     return head
 
 

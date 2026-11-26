@@ -143,9 +143,9 @@ evidence. If there are no findings, say so explicitly after reviewing the report
 Every new head, base, or replacement scan requires a matching disposition.
 
 The formal review-state and candidate admission checks require one authentic
-successful RepoWise report and a matching human disposition. They verify
-identity and freshness. The operator remains responsible for the reasoning
-and for resolving discussions. The existing Dependabot exception applies.
+successful RepoWise report and a matching human disposition. They reject a scan
+that changed while the other gates ran. The operator remains responsible for the
+reasoning and for resolving discussions. The existing Dependabot exception applies.
 The change takes effect in trusted-main review checks once it is on main.
 
 If Ready starts a replacement scan and admission stops before the build,

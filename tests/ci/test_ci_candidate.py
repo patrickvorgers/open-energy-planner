@@ -276,6 +276,32 @@ def test_ready_rescan_uses_check_output_when_bot_comment_still_names_old_run(can
     assert check(event, REPOSITORY, client) == HEAD
 
 
+@pytest.mark.parametrize("completed", [False, True])
+def test_candidate_rejects_repowise_rescan_during_admission(candidate, completed):
+    """Recheck the scan before admission, even when the replacement already passed."""
+    event, current, checks = candidate
+    client = Evidence(current, checks)
+    original_listing = client.get_list
+
+    def list_with_rescan(path):
+        """Publish a newer app result after admission first read the checks."""
+        if "/issues/12/comments?" in path and checks[-1]["id"] == 9001:
+            checks.append(
+                {
+                    **checks[-1],
+                    "id": 9002,
+                    "status": "completed" if completed else "in_progress",
+                    "conclusion": "success" if completed else None,
+                    "output": repowise_output(9002),
+                }
+            )
+        return original_listing(path)
+
+    client.get_list = list_with_rescan
+    with pytest.raises(VerificationError, match="RepoWise"):
+        check(event, REPOSITORY, client)
+
+
 @pytest.mark.parametrize("check_index", [0, 1, 2, 3])
 @pytest.mark.parametrize(
     "conclusion,status",

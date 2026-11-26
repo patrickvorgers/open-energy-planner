@@ -15,6 +15,7 @@ from script.ci.check_ci_candidate import (
     require_included_base,
     require_prerequisites,
     require_repowise_disposition,
+    require_unchanged_repowise_scan,
     review_comments,
 )
 from script.ci.check_commit_signatures import GitHub, VerificationError, sha
@@ -45,11 +46,15 @@ def check(repository, number, head, base, client):
     require_included_base(repository, head, base, client)
     checks = current_checks(repository, head, client)
     require_prerequisites(checks)
+    accepted_scan_id = None
     if current.get("user", {}).get("login") != "dependabot[bot]":
         require_automated_review(checks, repository, number, head, client)
-        require_repowise_disposition(checks, review_comments(repository, number, client), current)
+        accepted_scan_id = require_repowise_disposition(
+            checks, review_comments(repository, number, client), current
+        )
     require_resolved_threads(repository, number, client)
     require_clear_formal_reviews(repository, number, head, base, client)
+    require_unchanged_repowise_scan(repository, head, base, client, accepted_scan_id)
 
 
 def main():

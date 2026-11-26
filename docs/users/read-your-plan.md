@@ -123,7 +123,7 @@ Interval pop-ups show positive **Total production** and negative **Total consump
 
 Bars show mean kW for their covered quarter. Battery lines use the separate SoC percentage axis. Tap or hover for the exact interval. A partial quarter has its actual covered duration rather than a fabricated full-quarter energy amount.
 
-Use **Next 6 hours**, **Next 24 hours** or **Full period**. The Optimizer and **Price inputs** charts share the time axis below **Price inputs**. Hover or tap either chart to highlight the same interval in both. The interval shows grid energy, the original import and export rates, import cost and export revenue before bonus. With a chart focused, use the arrow keys to move by interval and Escape to dismiss the selection. Day labels follow the installation timezone.
+Use **Next 6 hours**, **Next 24 hours** or **Full period**. The Optimizer and **Price inputs** charts share the time axis below **Price inputs**. Hover or tap either chart to highlight the same interval in both. The interval shows grid energy, the original import and export rates, import cost and export revenue before bonus. Moving the pointer to a different quarter dismisses a pinned readout for the previous quarter. With a chart focused, use the arrow keys to move by interval and Escape to dismiss the selection. Day labels follow the installation timezone.
 
 The balance legends group the main energy flows. Open **Chart series** on any Planning graph to toggle its individual series. On the balance charts this includes devices, conversion losses and state of charge. Hidden or missing data does not represent a measured zero.
 

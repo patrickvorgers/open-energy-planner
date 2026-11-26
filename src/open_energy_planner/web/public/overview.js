@@ -254,6 +254,13 @@ function knownQuantity(value, format, unit, unavailable = "Unavailable") {
 /** Redraw one timestamp across both plots without changing their scales or datasets. */
 function selectLinkedInterval(interval) {
     if (interval === linkedInterval) return;
+    for (const id of LINKED_CHART_IDS) {
+        const tooltip = $(`${id}-tooltip`);
+        if (!tooltip?.classList.contains("chart-tooltip-linked")) continue;
+        tooltip.hidden = true;
+        tooltip.classList.remove("chart-tooltip-linked");
+    }
+    $("linked-chart-reading").textContent = "";
     linkedInterval = interval;
     for (const id of LINKED_CHART_IDS) charts.get(id)?.draw();
 }
