@@ -179,6 +179,10 @@ def capture(coordinator, projection, now):
 
 
 def _validate_vehicle(row, identity):
+    """Check estimate, recognition sources, request and schedule in that order.
+
+    The first invalid field raises an exception. The row is left intact.
+    """
     actual = row.get("actual")
     if actual is not None:
         if (
@@ -256,6 +260,11 @@ def _validate_vehicle(row, identity):
 
 
 def _validate_point(row, maximum, vehicle_ids):
+    """Check minimum watts, vehicle membership and connection state in order.
+
+    The caller has already validated maximum watts. An invalid field raises an
+    exception without modifying the row.
+    """
     minimum = row.get("minimum_w")
     if type(minimum) not in (int, float) or not isfinite(minimum) or not 0 <= minimum <= maximum:
         raise ValueError("Invalid EV minimum power")

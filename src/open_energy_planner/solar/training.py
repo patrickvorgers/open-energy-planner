@@ -137,6 +137,11 @@ class DailySolarTraining:
 
     @staticmethod
     def _validate_pointer(pointer, binding, day, boundary):
+        """Accept an absent pointer or validate the stored reference without modifying it.
+
+        The training day uses the installation calendar. The evidence boundary
+        is UTC midnight. Invalid persisted fields raise ValueError.
+        """
         if pointer is not None and (
             not isinstance(pointer, dict)
             or set(pointer) != {"binding", "day", "inputs", "report", "usable", "validation_end"}

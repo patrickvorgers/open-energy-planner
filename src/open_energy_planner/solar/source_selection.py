@@ -188,6 +188,11 @@ def _score_comparisons(
     control,
     evidence_issue,
 ):
+    """Return matched days, hourly kWh errors by model and any evidence issue.
+
+    Skip days with incomplete or ineligible readings. Unreadable evidence
+    discards all collected days and suppresses scoring.
+    """
     actual = meter_hours.get(source.entity_id, {})
     cohorts = []
     for day_index in range(1, MAX_ACCURACY_LOOKBACK_DAYS + 1):
@@ -254,6 +259,13 @@ def _score_comparisons(
 
 
 def _select_model(source, models, scores, control, now, *, enforce_ml_policy):
+    """Return an available model and its optional learning diagnostic.
+
+    PVWatts is required as the fallback when the preferred model is unavailable.
+    When the ML policy applies, a nonempty score set must include the matched
+    PVWatts and ML errors. Stale curtailment feedback takes precedence over an
+    ML diagnostic when PVWatts is selected.
+    """
     preference = source.forecast_source
     chosen = (
         min(scores, key=scores.get)

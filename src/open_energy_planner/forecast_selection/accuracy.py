@@ -75,6 +75,12 @@ def read_capture(documents, path, family, day, timezone):
 
 
 def _update_pending_capture(documents, pointer, prefix, family, timezone, forecasts, now, today):
+    """Freeze elapsed pending evidence once and stage the next complete local day.
+
+    Predictions use hourly kWh. Return the next day's closing instant as ISO
+    text when a capture was written, otherwise return None. Validation and
+    storage failures propagate to the selection result's recovery handler.
+    """
     tomorrow = today + timedelta(days=1)
     if documents.exists(pointer):
         pending = documents.read(pointer)
@@ -126,6 +132,12 @@ def _live_windows(
     include_replay_metadata,
     result,
 ):
+    """Score completed forward captures against matching hourly observations.
+
+    Record the exclusion reason in result when control history bars a day.
+    Household selection stops after its minimum cohort. Device selection scans
+    the lookback and includes source and hour metadata for replay comparison.
+    """
     windows = []
     for offset in range(MAX_ACCURACY_LOOKBACK_DAYS):
         day = today - timedelta(days=offset)

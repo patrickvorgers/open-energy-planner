@@ -298,6 +298,11 @@ class CatalogueDiscovery:
         )
 
     async def _refresh_catalogue(self, active, names, dirty, *, energy, history) -> dict:
+        """Refresh an existing body, extending the dirty set for Energy changes.
+
+        Unaffected sections carry forward from the previous capture. The caller
+        checks the captured generation before publishing the result.
+        """
         previous = self.body
         suggestions = (
             await catalogue.energy_suggestions(self.hass) if energy else previous["suggestions"]
@@ -336,6 +341,7 @@ class CatalogueDiscovery:
         }
 
     def _index_catalogue(self, manager, body):
+        """Replace the device, integration and forecast indexes used by registry events."""
         self._forecast_entries = {
             identity
             for source in (manager.data or {}).get("energy_sources", ())
