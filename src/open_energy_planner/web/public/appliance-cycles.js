@@ -83,6 +83,15 @@ function renderLearningHistory(device, learned, metrics, profileEvidence, learni
     learning.append(node("summary", "Learning and usable history"), profileEvidence);
     if (device?.learning_half_life_days) learning.append(node("p", `Recency weighting: ${device.learning_half_life_days}-day half-life. A cycle ${device.learning_half_life_days} days older has half the weight. Fine timing refines hourly evidence. Each detected run counts once.`));
     if (device?.hourly_synthetic) learning.append(node("p", "Hourly evidence: Simulated data"));
+    appendModelEvidence(learning, device);
+    appendProfileProvenance(learning, device, learned, metrics);
+    appendLearningProgress(learning, device);
+    if (metrics && metrics.sourcePhaseMinutes > metrics.phaseMinutes) learning.append(node("p", learned?.evidence === "hourly_estimate" ? "Five-minute display: Hourly power is spread uniformly. Each energy bar estimates one twelfth of its hour. Fine measurements refine this shape later." : "Five-minute display: Coarser mean power is spread uniformly. These are estimates within each original measurement interval."));
+    if (learned?.evidence === "hourly_estimate") learning.append(node("p", "Provisional planning profile: Hourly history cannot establish exact start times, separate runs within one hour or short power peaks. The first complete fine cycle refines this estimate automatically."));
+    return learning;
+}
+
+function appendModelEvidence(learning, device) {
     const evidenceCard = node("div"), facts = node("dl"); evidenceCard.className = "evidence-card";
     evidenceCard.append(node("h3", "Model evidence"), facts);
     const addFact = (label, value) => facts.append(node("dt", label), node("dd", value));
@@ -94,10 +103,16 @@ function renderLearningHistory(device, learned, metrics, profileEvidence, learni
         addFact("Recent fine history received", `${when(recent.start)} to ${when(recent.end)}`);
         addFact("Usable fine intervals", `${recent.usable_intervals} of ${recent.expected_intervals}: ${percentage(recent.expected_intervals ? 100 * recent.usable_intervals / recent.expected_intervals : null)}`);
     }
+}
+
+function appendProfileProvenance(learning, device, learned, metrics) {
     if (metrics?.variable) learning.append(node("p", "Recorded state timing: This learned profile preserves actual irregular phase durations. It does not imply a fixed measurement frequency."));
     if (learned && learned.evidence !== "manual" && learned.samples === 1) learning.append(node("p", "Provisional profile: One complete cycle. Further cycles refine this estimate."));
     if (device?.profile_basis === "statistics" && learned && !["manual", "hourly_estimate"].includes(learned.evidence)) learning.append(node("p", "Provisional statistical profile: Reconstructed from historical interval data. The energy counter supplies the total. Historical data cannot prove continuous reporting."));
     if (device?.profile_basis === "observed") learning.append(node("p", "Continuously followed profile: Complete cycles with current power reports refine this shape. Historical statistics cannot replace it."));
+}
+
+function appendLearningProgress(learning, device) {
     const fine = device?.fine_import;
     if (fine) learning.append(node("p", `Fine history: ${optionLabel(fine.phase)}${fine.cursor ? `: Examined back to ${when(fine.cursor)}` : ""}`));
     const scan = device?.history_import, status = node("p"); status.setAttribute("role", "status");
@@ -113,9 +128,6 @@ function renderLearningHistory(device, learned, metrics, profileEvidence, learni
         }
         if (scan.expected_intervals) learning.append(node("p", `Usable hourly intervals: ${scan.usable_intervals} of ${scan.expected_intervals}: ${percentage(100 * scan.usable_intervals / scan.expected_intervals)}`));
     }
-    if (metrics && metrics.sourcePhaseMinutes > metrics.phaseMinutes) learning.append(node("p", learned?.evidence === "hourly_estimate" ? "Five-minute display: Hourly power is spread uniformly. Each energy bar estimates one twelfth of its hour. Fine measurements refine this shape later." : "Five-minute display: Coarser mean power is spread uniformly. These are estimates within each original measurement interval."));
-    if (learned?.evidence === "hourly_estimate") learning.append(node("p", "Provisional planning profile: Hourly history cannot establish exact start times, separate runs within one hour or short power peaks. The first complete fine cycle refines this estimate automatically."));
-    return learning;
 }
 
 function renderCycleHistory(device, learned, metrics) {

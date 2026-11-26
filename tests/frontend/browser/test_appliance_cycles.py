@@ -278,7 +278,14 @@ def test_waiting_profile_keeps_learning_available_without_raw_detail_requests(re
     """A device without a learned profile still completes rendering and exposes its retained evidence."""
     page, devices, _ = review_evidence
     devices[0]["profile"] = None
-    devices[0]["history_import"] = {"phase": "processing"}
+    devices[0]["history_import"] = {
+        "phase": "processing",
+        "start": "2026-07-20T00:00:00Z",
+        "cursor": "2026-07-20T02:00:00Z",
+        "end": "2026-07-20T04:00:00Z",
+        "usable_intervals": 2,
+        "expected_intervals": 4,
+    }
     page.clock.fast_forward(300000)
     expect(page.locator("#profile-kind")).to_have_text("Waiting for learning")
     expect(page.locator("#profile-summary")).to_be_hidden()
@@ -288,6 +295,10 @@ def test_waiting_profile_keeps_learning_available_without_raw_detail_requests(re
     expect(learning).to_be_visible()
     learning.click()
     expect(page.locator("#learning-history")).to_contain_text("Processing hourly history")
+    expect(page.locator("#learning-history")).to_contain_text("Usable hourly intervals: 2 of 4")
+    progress = page.get_by_role("progressbar", name="Hourly history progress")
+    expect(progress).to_be_visible()
+    assert progress.evaluate("bar => bar.value / bar.max") == 0.5
     expect(page.locator("#status")).to_have_text("Connected")
     expect(page.get_by_text("Recorded cycle measurements", exact=True)).to_have_count(0)
     devices[0]["power_entity"] = None
