@@ -279,6 +279,82 @@ def test_shared_heat_source_shows_actual_attribution_window(thermal_page):
     )
 
 
+def test_heat_source_actions_follow_source_rows_at_each_width(thermal_page):
+    """Separate zone fields, source removal and list actions while preserving the draft on refresh."""
+    page, state = thermal_page
+    document = state["document"]
+    document["catalogue"]["areas"] = [{"id": "living", "name": "Living room"}]
+    document["catalogue"]["entities"].append(
+        {"entity_id": "climate.living", "name": "Living room thermostat", "area_id": "living"}
+    )
+    document["energy_consumers"].extend(
+        [
+            {
+                "entity_id": "sensor.heat_pump_energy",
+                "name": "Heat pump meter",
+                "power_entity": "sensor.heat_pump_power",
+            },
+            {
+                "entity_id": "sensor.air_conditioner_energy",
+                "name": "Living room air conditioner",
+                "power_entity": "sensor.air_conditioner_power",
+            },
+        ]
+    )
+    document["configuration"]["applications"] = [
+        {
+            "id": "room",
+            "kind": "space_heating",
+            "name": "Living room",
+            "area_id": "living",
+            "climate_entity": "climate.living",
+            "sources": [
+                {"energy_entity": meter, "allow_scheduling": False}
+                for meter in ("sensor.heat_pump_energy", "sensor.air_conditioner_energy")
+            ],
+        }
+    ]
+    page.reload()
+    page.locator("#thermal-store-select").select_option("room")
+    page.get_by_role("button", name="Edit settings", exact=True).click()
+    add = page.get_by_role("button", name="Add heat source", exact=True)
+    refresh = page.get_by_role("button", name="Refresh Home Assistant sources", exact=True)
+    expect(refresh).to_be_enabled()
+    expect(add).to_be_enabled()
+    editor = page.locator("#thermal-editor")
+    sources = editor.locator(".thermal-heat-source")
+    expect(sources).to_have_count(2)
+    remove = sources.last.get_by_role("button", name="Remove Living room air conditioner")
+    assert remove.bounding_box()["y"] < add.bounding_box()["y"]
+    assert (add.bounding_box()["y"] == refresh.bounding_box()["y"]) == (
+        page.viewport_size["width"] > 520
+    )
+    assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+    expect(editor.locator(".thermal-heat-source-editor")).to_have_css("border-top-width", "1px")
+    expect(add.locator("..")).to_have_css("border-top-width", "1px")
+    page.evaluate("document.fonts.ready")
+    page.evaluate("window.scrollTo(0, 0)")
+    page.screenshot(
+        path=f"results/ci/thermal-heat-source-layout-{page.viewport_size['width']}.png",
+        full_page=True,
+    )
+
+    remove.click()
+    expect(sources).to_have_count(1)
+    refresh.click()
+    expect(refresh).to_be_enabled()
+    expect(add).to_have_count(1)
+    expect(sources).to_have_count(1)
+    expect(sources.get_by_role("heading", name="Heat pump meter", exact=True)).to_be_visible()
+    page.get_by_role("button", name="Cancel", exact=True).click()
+    expect(add).to_have_count(0)
+    expect(refresh).to_be_visible()
+    expect(page.locator("#thermal-summary .thermal-heat-source")).to_have_count(2)
+    expect(
+        page.get_by_role("heading", name="Living room air conditioner", exact=True)
+    ).to_be_visible()
+
+
 @pytest.mark.parametrize("remove_source", [False, True])
 def test_invalid_preheating_margin_clears_with_last_scheduling_source(thermal_page, remove_source):
     """Persist a forecast-only draft after disabling or removing the last scheduling source."""
