@@ -1,7 +1,7 @@
 """App setup security, complete preview and bounded read-only HA discovery contracts."""
 
 import asyncio
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from aiohttp.test_utils import TestClient, TestServer
@@ -157,11 +157,19 @@ def test_setup_catalogue_rejects_false_readiness_and_unbounded_history():
     with pytest.raises(ValueError, match="readiness"):
         HACatalogue().receive(body, datetime.now(UTC))
     body = setup_metadata()
+    catalogue = HACatalogue()
+    accepted = setup_metadata()
+    now = datetime.now(UTC)
+    catalogue.receive(accepted, now)
+    revision = catalogue.revision
     body["history"] = [
         {"entity_id": "sensor.import", "points": [[index * 86400, index] for index in range(3)]}
     ]
     with pytest.raises(ValueError, match="history points"):
-        HACatalogue().receive(body, datetime.now(UTC))
+        catalogue.receive(body, now + timedelta(seconds=1))
+    assert catalogue.value is accepted
+    assert catalogue.updated == now
+    assert catalogue.revision == revision
 
 
 @pytest.mark.parametrize(
