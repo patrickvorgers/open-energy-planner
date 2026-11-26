@@ -21,6 +21,8 @@ CODEX_APP_ID = 1144995
 CODEX_BOT_ID = 199175422
 MAX_CODEX_STATE_CHARACTERS = 10000
 CODEQL_APP_ID = 57789
+REPOWISE_APP_ID = 3768688
+MAX_REPOWISE_STATE_CHARACTERS = 10000
 MAX_PR_FILES = 150
 PREREQUISITE_CHECKS = (
     ("Quick checks", GITHUB_ACTIONS_APP_ID),
@@ -209,6 +211,86 @@ def provider_comment(comment, login, bot_id, app_id):
     )
 
 
+def repowise_summary_matches(check_run, head, base):
+    """Bind the selected app's published check output to its head, base and run."""
+    output = check_run.get("output")
+    report = output.get("text") if isinstance(output, dict) else None
+    if not isinstance(report, str):
+        return False
+    _, fence, state_block = report.replace("\r\n", "\n").rstrip().rpartition("\n```json\n")
+    if not fence or not state_block.endswith("\n```"):
+        return False
+    state_json = state_block.removesuffix("\n```")
+    if len(state_json) > MAX_REPOWISE_STATE_CHARACTERS:
+        return False
+    try:
+        state = json.loads(state_json)
+    except ValueError:
+        return False
+    if not isinstance(state, dict) or type(state.get("run")) is not int:
+        return False
+    return (state.get("head"), state.get("base"), state["run"]) == (
+        head,
+        base,
+        check_run["id"],
+    )
+
+
+def recorded_repowise_disposition(comment, marker, author_ids):
+    """Accept explanatory text with the exact scan marker from an identified human author."""
+    author = comment.get("user")
+    if not isinstance(author, dict) or author.get("type") != "User":
+        return False
+    author_id = author.get("id")
+    if type(author_id) is not int or author_id <= 0 or author_id not in author_ids:
+        return False
+    first, _, explanation = comment["body"].partition("\n")
+    return first.rstrip("\r") == marker and bool(explanation.strip())
+
+
+def require_repowise_scan(checks, head, base):
+    """Return the latest successful RepoWise check ID with matching app output."""
+    latest = latest_check(checks, "Repowise review", REPOWISE_APP_ID)
+    if not latest or (latest.get("status"), latest.get("conclusion")) != ("completed", "success"):
+        raise VerificationError("Wait for the current-head RepoWise scan to finish successfully")
+    if not repowise_summary_matches(latest, head, base):
+        raise VerificationError("Missing or invalid RepoWise check output for this head and base")
+    return latest["id"]
+
+
+def repowise_disposition_author_ids(current):
+    """Read numeric identities from current GitHub PR metadata."""
+    repo = current["base"].get("repo")
+    owner = repo.get("owner") if isinstance(repo, dict) else None
+    return [
+        actor.get("id")
+        for actor in (current.get("user"), owner)
+        if isinstance(actor, dict) and type(actor.get("id")) is int
+    ]
+
+
+def require_repowise_disposition(checks, comments, current):
+    """Return the exact scan ID once its findings have an author or owner disposition."""
+    head, base = current["head"]["sha"], current["base"]["sha"]
+    check_id = require_repowise_scan(checks, head, base)
+    author_ids = repowise_disposition_author_ids(current)
+    marker = f"<!-- oep-repowise-disposition:{head}:{base}:{check_id} -->"
+    if not any(recorded_repowise_disposition(comment, marker, author_ids) for comment in comments):
+        raise VerificationError(
+            "Record the RepoWise disposition for the current head, base and scan"
+        )
+    return check_id
+
+
+def require_unchanged_repowise_scan(repository, head, base, client, accepted_scan_id):
+    """Reject a newer or invalid app result published while other gate checks ran."""
+    if accepted_scan_id is None:
+        return
+    latest_scan_id = require_repowise_scan(current_checks(repository, head, client), head, base)
+    if latest_scan_id != accepted_scan_id:
+        raise VerificationError("RepoWise scanned this revision again. Review the replacement scan")
+
+
 def codex_review_state(comments, head):
     """Read Codex's published code-review state, never treating reactions as completion.
 
@@ -353,13 +435,18 @@ def check(event, repository, client):
     file_count = changed_files(repository, number, current, client)
     checks = current_checks(repository, head, client)
     require_prerequisites(checks)
+    accepted_scan_id = None
     if current.get("user", {}).get("login") != "dependabot[bot]":
         require_automated_review(checks, repository, number, head, client)
+        accepted_scan_id = require_repowise_disposition(
+            checks, review_comments(repository, number, client), current
+        )
     require_resolved_threads(repository, number, client)
     require_clear_formal_reviews(repository, number, head, base, client)
     final_count = current_pr().get("changed_files")
     if type(final_count) is not int or final_count != file_count:
         raise VerificationError("PR file count changed during admission")
+    require_unchanged_repowise_scan(repository, head, base, client, accepted_scan_id)
     return head
 
 

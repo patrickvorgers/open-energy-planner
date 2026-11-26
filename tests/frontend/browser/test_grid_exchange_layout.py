@@ -4,7 +4,7 @@ import pytest
 from playwright.sync_api import expect
 
 from tests.frontend.browser.documentation_fixture import START
-from tests.frontend.browser.helpers import TOKEN
+from tests.frontend.browser.helpers import TOKEN, open_chart_series
 
 
 @pytest.mark.parametrize("app_site", ["documentation"], indirect=True)
@@ -43,7 +43,7 @@ def test_grid_exchange_uses_full_planning_width(app_page, renamed):
     if not renamed:
         comparison.screenshot(path=f"results/ci/grid-exchange-{page.viewport_size['width']}.png")
     assert page.locator(".scenario-card h3").all_text_contents() == headings
-    legend = page.locator("#energy-chart-legend")
+    legend = open_chart_series(page, "energy-chart")
     expect(legend.locator("label")).to_have_text(headings)
     rendering = page.locator("#energy-chart").evaluate("""canvas => {
         const chart = Chart.getChart(canvas);

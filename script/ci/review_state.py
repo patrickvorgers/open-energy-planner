@@ -14,6 +14,9 @@ from script.ci.check_ci_candidate import (
     require_automated_review,
     require_included_base,
     require_prerequisites,
+    require_repowise_disposition,
+    require_unchanged_repowise_scan,
+    review_comments,
 )
 from script.ci.check_commit_signatures import GitHub, VerificationError, sha
 from script.ci.pr_readiness import require_clear_formal_reviews, require_resolved_threads
@@ -43,10 +46,15 @@ def check(repository, number, head, base, client):
     require_included_base(repository, head, base, client)
     checks = current_checks(repository, head, client)
     require_prerequisites(checks)
+    accepted_scan_id = None
     if current.get("user", {}).get("login") != "dependabot[bot]":
         require_automated_review(checks, repository, number, head, client)
+        accepted_scan_id = require_repowise_disposition(
+            checks, review_comments(repository, number, client), current
+        )
     require_resolved_threads(repository, number, client)
     require_clear_formal_reviews(repository, number, head, base, client)
+    require_unchanged_repowise_scan(repository, head, base, client, accepted_scan_id)
 
 
 def main():
@@ -70,7 +78,7 @@ def main():
         Path(environ["GITHUB_STEP_SUMMARY"]).write_text(
             f"## Review-state snapshot\n\nPR: {number}\n\nHead: `{head}`\n\nBase: `{base}`\n\n"
             "No outstanding formal change requests or unresolved threads were found. "
-            "Current-head prerequisites and provider completion passed. "
+            "Current-head prerequisites, provider completion and applicable RepoWise disposition passed. "
             "The operator must still evaluate every finding, including outside-diff findings. "
             "No review was dismissed and no approval was created. "
             "Recheck immediately before Ready and before merge. "

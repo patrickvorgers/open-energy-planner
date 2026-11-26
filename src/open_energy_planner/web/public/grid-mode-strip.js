@@ -1,7 +1,7 @@
 import {calendarTime} from "./chart_days.js";
 import {localDate, when} from "./display.js";
 
-export const GRID_MODE_TICK_PADDING = 29;
+export const GRID_MODE_STRIP_HEIGHT_PX = 26;
 export const ZERO_GRID_LABEL = "Zero on the meter";
 
 /** Join adjacent active commands using the archived mode and exact elapsed timestamps. */

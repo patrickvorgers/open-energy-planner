@@ -4,7 +4,7 @@ from copy import deepcopy
 
 import pytest
 
-from tests.frontend.browser.helpers import balances
+from tests.frontend.browser.helpers import balances, open_chart_series
 
 
 def mixed_solar_plan():
@@ -177,8 +177,6 @@ def test_three_scenarios_show_independent_solar_with_balanced_day_and_night(app_
     """Render validated mixed PV in all scenarios, preserving data through keyboard and bulk toggles."""
     from pathlib import Path
 
-    from playwright.sync_api import expect
-
     from tests.frontend.browser.documentation_fixture import START
     from tests.frontend.browser.helpers import wait_for_product_reads
     from tests.frontend.browser.test_documentation_examples import authenticate
@@ -215,18 +213,7 @@ def test_three_scenarios_show_independent_solar_with_balanced_day_and_night(app_
             assert sum(dataset["data"][index]["y"] for dataset in bars) == pytest.approx(
                 0, abs=0.00005
             )
-        legend = page.locator(f"#{identity}-legend")
-        dc = legend.get_by_role("checkbox", name="Solar production: DC", exact=True)
-        ac = legend.get_by_role("checkbox", name="Solar production: AC", exact=True)
-        dc.focus()
-        dc.press("Space")
-        expect(dc).not_to_be_checked()
-        expect(ac).to_be_checked()
-        legend.get_by_role("button", name="Select all", exact=True).click()
-        expect(dc).to_be_checked()
-        legend.get_by_role("button", name="Deselect all", exact=True).click()
-        expect(ac).not_to_be_checked()
-        legend.get_by_role("button", name="Select all", exact=True).click()
+        _assert_independent_solar_controls(page, identity)
         if page.viewport_size["width"] < 500:
             page.set_viewport_size({"width": 390, "height": 1700})
         page.evaluate("document.fonts.ready")
@@ -242,6 +229,24 @@ def test_three_scenarios_show_independent_solar_with_balanced_day_and_night(app_
         )
         == original
     )
+
+
+def _assert_independent_solar_controls(page, identity):
+    """Toggle DC and AC independently through each chart’s available legend controls."""
+    from playwright.sync_api import expect
+
+    legend = open_chart_series(page, identity)
+    dc = legend.get_by_role("checkbox", name="Solar production: DC", exact=True)
+    ac = legend.get_by_role("checkbox", name="Solar production: AC", exact=True)
+    dc.focus()
+    dc.press("Space")
+    expect(dc).not_to_be_checked()
+    expect(ac).to_be_checked()
+    legend.get_by_role("button", name="Select all", exact=True).click()
+    expect(dc).to_be_checked()
+    legend.get_by_role("button", name="Deselect all", exact=True).click()
+    expect(ac).not_to_be_checked()
+    legend.get_by_role("button", name="Select all", exact=True).click()
 
 
 @pytest.mark.parametrize("app_site", ["solar_boundaries"], indirect=True)

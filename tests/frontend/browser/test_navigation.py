@@ -11,6 +11,7 @@ from tests.frontend.browser.helpers import (
     TOKEN,
     connect,
     discover,
+    open_chart_series,
     open_primary_navigation,
     read_settings,
 )
@@ -700,6 +701,7 @@ def test_interactive_planning_navigation_legends_range_and_commands(app_page):
     scenario_axes = "['reference-chart','self-consumption-chart','plan-chart'].map(id => {const axis=Chart.getChart(document.getElementById(id)).scales.y;return [axis.min,axis.max];})"
     scenario_bounds = page.evaluate(scenario_axes)
     assert all(lower < upper for lower, upper in scenario_bounds)
+    open_chart_series(page, "plan-chart")
     page.locator("#plan-chart-legend input").first.uncheck()
     scenario_bounds = page.evaluate(scenario_axes)
     assert all(lower < upper for lower, upper in scenario_bounds)

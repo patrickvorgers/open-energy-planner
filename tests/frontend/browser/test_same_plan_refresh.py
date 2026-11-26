@@ -5,7 +5,7 @@ from datetime import datetime
 import pytest
 from playwright.sync_api import expect
 
-from tests.frontend.browser.helpers import TOKEN, wait_for_product_reads
+from tests.frontend.browser.helpers import TOKEN, open_chart_series, wait_for_product_reads
 
 
 @pytest.mark.parametrize("app_site", ["savings"], indirect=True)
@@ -38,7 +38,7 @@ def test_scenario_legend_choices_follow_scenarios_when_a_comparison_recovers(app
     }
     recovered = names[missing]
     retained = names["without_battery" if missing == "self_consumption" else "self_consumption"]
-    legend = page.locator("#energy-chart-legend")
+    legend = open_chart_series(page, "energy-chart")
     expect(legend.get_by_role("checkbox", name=recovered, exact=True)).to_have_count(0)
     retained_choice = legend.get_by_role("checkbox", name=retained, exact=True)
     retained_choice.focus()
@@ -46,9 +46,10 @@ def test_scenario_legend_choices_follow_scenarios_when_a_comparison_recovers(app
     expect(retained_choice).not_to_be_checked()
     legend.get_by_role("checkbox", name="Optimizer", exact=True).uncheck()
     page.get_by_role("button", name="Refresh overview", exact=True).click()
-    expect(legend.get_by_role("checkbox", name=recovered, exact=True)).to_be_visible()
     expect(page.locator("#overview-status")).to_contain_text("Connected")
     wait_for_product_reads(page)
+    open_chart_series(page, "energy-chart")
+    expect(legend.get_by_role("checkbox", name=recovered, exact=True)).to_be_visible()
     expect(legend.get_by_role("checkbox", name=retained, exact=True)).not_to_be_checked()
     expect(legend.get_by_role("checkbox", name=recovered, exact=True)).to_be_checked()
     expect(legend.get_by_role("checkbox", name="Optimizer", exact=True)).not_to_be_checked()
@@ -97,7 +98,7 @@ def test_same_plan_refresh_keeps_comparisons_and_evidence(app_page, evidence_sta
             "Loading original plan evidence…"
         )
     assert len(evidence_reads) == 1
-    page.locator("#reference-chart-legend").get_by_label("Grid import: AC", exact=True).uncheck()
+    open_chart_series(page, "reference-chart").get_by_label("Grid import: AC", exact=True).uncheck()
     costs = page.locator("#ems-costs").inner_text()
     rows = page.locator("#inspect-values").inner_text()
     battery_rows = page.locator("#plan-chart-legend").inner_text()
@@ -121,7 +122,7 @@ def test_same_plan_refresh_keeps_comparisons_and_evidence(app_page, evidence_sta
     assert page.locator("#plan-evidence").inner_text() == evidence_text
     assert len(evidence_reads) == 1
     expect(
-        page.locator("#reference-chart-legend").get_by_label("Grid import: AC", exact=True)
+        open_chart_series(page, "reference-chart").get_by_label("Grid import: AC", exact=True)
     ).not_to_be_checked()
     assert page.evaluate("""window.confirmedComparisons.every(saved=>
         saved.chart===Chart.getChart(document.getElementById(saved.id))&&

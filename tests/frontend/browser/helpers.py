@@ -64,6 +64,18 @@ def wait_for_product_reads(page):
     page.evaluate("() => window.__oepProductReadsIdle()")
 
 
+def open_chart_series(page, chart_id):
+    """Open one Planning chart's series menu and return its legend."""
+    legend = page.locator(f"#{chart_id}-legend")
+    summary = legend.get_by_text("Chart series", exact=True)
+    expect(summary).to_be_visible()
+    disclosure = legend.locator("details")
+    if not disclosure.evaluate("element => element.open"):
+        summary.press("Enter")
+    expect(disclosure).to_have_js_property("open", True)
+    return legend
+
+
 def open_primary_navigation(page):
     """Open the shared mobile Menu when hidden before choosing a navigation destination."""
     if not page.get_by_role("navigation", name="Primary navigation").is_visible():

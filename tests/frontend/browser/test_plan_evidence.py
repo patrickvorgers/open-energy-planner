@@ -8,7 +8,7 @@ import pytest
 from playwright.sync_api import expect
 
 from open_energy_planner.savings.evidence import evidence as plan_evidence
-from tests.frontend.browser.helpers import TOKEN, wait_for_product_reads
+from tests.frontend.browser.helpers import TOKEN, open_chart_series, wait_for_product_reads
 
 
 @pytest.fixture
@@ -137,75 +137,37 @@ def automatic_plan_overview(app_page, request):
 
 @pytest.mark.parametrize("app_site", ["savings"], indirect=True)
 @pytest.mark.parametrize("historical", [False, True])
-def test_daily_price_poll_updates_markers_without_rebuilding_frozen_plan(
-    automatic_plan_overview, historical
-):
-    """An unchanged latest or historical plan receives new daily labels while retaining chart identity and rates."""
+def test_price_poll_preserves_original_plan_markers(automatic_plan_overview, historical):
+    """Latest and historical plans retain their original rate bands during refresh polling."""
     state = automatic_plan_overview
     page = state["page"]
-    ranking = {"final": False}
-    first = state["beginning"]
-    second = first + timedelta(minutes=15)
-
-    def daily_prices(route):
-        """Change only backend-selected quarters and status, independently of the selected original plan."""
-        route.fulfill(
-            json={
-                "days": [
-                    {
-                        "day": first.date().isoformat(),
-                        "currency": "EUR",
-                        "status": "final" if ranking["final"] else "provisional",
-                        "cheapest": [] if ranking["final"] else [first.isoformat()],
-                        "most_expensive": [second.isoformat()] if ranking["final"] else [],
-                        "quarters": [
-                            {
-                                "start": at.isoformat(),
-                                "end": (at + timedelta(minutes=15)).isoformat(),
-                                "market_price": 0.1,
-                            }
-                            for at in (first, second)
-                        ],
-                    }
-                ]
-            }
-        )
-
-    page.route("**/v1/prices/daily?*", daily_prices)
     if historical:
         page.locator("#plan-version").select_option("older-plan")
     else:
         page.get_by_role("button", name="Refresh overview", exact=True).click()
     wait_for_product_reads(page)
-    expect(page.locator("#price-daily-status")).to_contain_text("12 cheapest quarters: Provisional")
+    expect(page.locator("#price-daily-status")).to_contain_text(
+        "The most expensive quarters use export rates"
+    )
     page.evaluate(
         "window.originalPriceChart = Chart.getChart(document.getElementById('price-chart'))"
     )
-    original_rates = page.evaluate(
-        "window.originalPriceChart.data.datasets.map(dataset => dataset.data)"
+    original = page.evaluate(
+        "({rates: window.originalPriceChart.data.datasets, marks: window.originalPriceChart.dailyPriceQuarters})"
     )
+    assert original["marks"]
     detail_reads = list(state["comparison_reads"])
-    ranking["final"] = True
-    with page.expect_response("**/v1/prices/daily?*"):
-        page.clock.run_for(15000)
+    page.clock.run_for(15000)
     wait_for_product_reads(page)
-    expect(page.locator("#price-daily-status")).to_contain_text("12 most expensive quarters: Final")
     assert page.evaluate(
         "Chart.getChart(document.getElementById('price-chart')) === window.originalPriceChart"
     )
     assert (
-        page.evaluate("window.originalPriceChart.data.datasets.map(dataset => dataset.data)")
-        == original_rates
+        page.evaluate(
+            "({rates: window.originalPriceChart.data.datasets, marks: window.originalPriceChart.dailyPriceQuarters})"
+        )
+        == original
     )
-    marks = page.evaluate("window.originalPriceChart.dailyPriceQuarters")
-    assert marks == [
-        {
-            "start": second.timestamp() * 1000,
-            "end": (second + timedelta(minutes=15)).timestamp() * 1000,
-            "extreme": "most_expensive",
-            "status": "final",
-        }
-    ]
     assert state["comparison_reads"] == detail_reads
 
 
@@ -262,11 +224,14 @@ def test_historical_selection_clears_previous_plan_until_its_own_read_succeeds(
     """Another selection never presents the previous plan's graphs or tables as its own, even on failure."""
     state = automatic_plan_overview
     page = state["page"]
+    page.locator("#price-chart").press("Home")
+    expect(page.locator("#linked-chart-reading")).to_contain_text("Revenue before bonus")
     state["hold_comparison"] = True
     with page.expect_request("**/v1/plans/older-plan/comparison?view=plan"):
         page.locator("#plan-version").select_option("older-plan")
     expect(page.locator("#overview-status")).to_have_text("Loading selected plan…")
     expect(page.locator("#plan-description")).to_have_text("Loading selected plan…")
+    expect(page.locator("#linked-chart-reading")).to_be_empty()
     for rows in ("plan-rows", "plan-battery-rows", "plan-solar-rows", "expected-cost-rows"):
         expect(page.locator(f"#{rows}")).to_have_count(0)
     assert page.evaluate("""() => ['plan-chart', 'reference-chart', 'self-consumption-chart',
@@ -287,6 +252,7 @@ def test_historical_selection_clears_previous_plan_until_its_own_read_succeeds(
         expect(page.locator("#overview-status")).to_contain_text("Connected")
         expect(page.locator("#plan-version option:checked")).to_contain_text("Minimize consumption")
         expect(page.locator("#inspect-time")).to_have_attribute("max", "1")
+    expect(page.locator("#linked-chart-reading")).to_be_empty()
 
 
 @pytest.mark.parametrize("app_site", ["savings"], indirect=True)
@@ -445,7 +411,7 @@ def test_failed_overview_reload_recovers_without_a_new_publication(
     """Retry the same latest plan or prices after a failed manual reload without redrawing good data."""
     state = automatic_plan_overview
     page = state["page"]
-    page.locator("#price-chart-legend").get_by_label("Import rate", exact=True).uncheck()
+    open_chart_series(page, "price-chart").get_by_label("Import rate", exact=True).uncheck()
     current = state["plans"][0]["plan_id"]
     state["current_buy_price"] = 0.88
     if failed_view == "plan":
@@ -473,7 +439,7 @@ def test_failed_overview_reload_recovers_without_a_new_publication(
     expect(page.locator("#plan-evidence-status")).not_to_contain_text("could not be loaded")
     expect(page.locator("#plan-version")).to_have_value(current if failed_view == "plan" else "")
     expect(
-        page.locator("#price-chart-legend").get_by_label("Import rate", exact=True)
+        open_chart_series(page, "price-chart").get_by_label("Import rate", exact=True)
     ).not_to_be_checked()
     assert page.evaluate(
         "!Chart.getChart(document.getElementById('price-chart')).isDatasetVisible(1)"
@@ -718,7 +684,7 @@ def test_historical_selection_survives_publication_and_quarter_rollover(automati
     page = state["page"]
     page.locator("#plan-version").select_option("older-plan")
     expect(page.locator("#plan-version option:checked")).to_contain_text("Minimize consumption")
-    page.locator("#price-chart-legend").get_by_label("Import rate", exact=True).uncheck()
+    open_chart_series(page, "price-chart").get_by_label("Import rate", exact=True).uncheck()
     before = page.evaluate("""() => {
         window.historicalChart = Chart.getChart(document.getElementById('plan-chart'));
         return {start: window.historicalChart.scales.x.min,
@@ -732,7 +698,7 @@ def test_historical_selection_survives_publication_and_quarter_rollover(automati
         ?.data.datasets[1]?.data[0]?.y === 0.17""")
     page.clock.run_for(45000)
     expect(
-        page.locator("#price-chart-legend").get_by_label("Import rate", exact=True)
+        open_chart_series(page, "price-chart").get_by_label("Import rate", exact=True)
     ).not_to_be_checked()
     assert page.evaluate(
         "!Chart.getChart(document.getElementById('price-chart')).isDatasetVisible(1)"
@@ -748,7 +714,7 @@ def test_historical_selection_survives_publication_and_quarter_rollover(automati
     assert page.evaluate(
         "window.historicalChart === Chart.getChart(document.getElementById('plan-chart'))"
     )
-    page.locator("#price-chart-legend").get_by_label("Import rate", exact=True).check()
+    open_chart_series(page, "price-chart").get_by_label("Import rate", exact=True).check()
     price_figure = page.locator("figure").filter(has=page.locator("#price-chart"))
     price_figure.scroll_into_view_if_needed()
     page.evaluate(
@@ -1035,8 +1001,8 @@ def test_forecast_price_intervals_are_dotted_in_current_and_original_charts(app_
     expected = [[kind == "forecast" for kind in kinds]] * 4
     for chart_id in ("price-chart",):
         assert rendered_intervals(chart_id) == expected
-        page.locator(f"#{chart_id}-legend").get_by_label("Import rate", exact=True).uncheck()
-        page.locator(f"#{chart_id}-legend").get_by_label("Import rate", exact=True).check()
+        open_chart_series(page, chart_id).get_by_label("Import rate", exact=True).uncheck()
+        open_chart_series(page, chart_id).get_by_label("Import rate", exact=True).check()
         assert rendered_intervals(chart_id) == expected
     for interval_index, kind in enumerate(kinds):
         page.evaluate(

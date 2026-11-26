@@ -269,7 +269,9 @@ def test_formal_review_pagination_detects_races_and_nontermination(monkeypatch, 
         )
 
 
-@pytest.mark.parametrize("fault", [None, "objection", "head", "base", "provider", "identity"])
+@pytest.mark.parametrize(
+    "fault", [None, "objection", "head", "base", "provider", "identity", "repowise"]
+)
 def test_pre_ready_and_premerge_snapshot_rechecks_live_objections(candidate, fault):
     """The operator's read-only gate checks genuine review coverage and notices a new objection or revision."""
     _, current, checks = candidate
@@ -284,6 +286,8 @@ def test_pre_ready_and_premerge_snapshot_rechecks_live_objections(candidate, fau
     elif fault == "identity":
         checks[2]["app"]["id"] = 123
     client = FormalEvidence(current, checks, [review_page(), final])
+    if fault == "repowise":
+        client.repowise.pop()
     if fault:
         with pytest.raises(VerificationError):
             review_state.check(REPOSITORY, 12, HEAD, BASE, client)

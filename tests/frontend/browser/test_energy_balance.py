@@ -61,7 +61,7 @@ def test_reference_balances_and_original_price_inputs_cover_the_complete_plan(ap
                 return [axis.min,axis.max,...axis.ticks.map(tick => tick.value)];
             }),
             prices: prices.data.datasets.map(dataset => ({label: dataset.label, values: dataset.data.map(point => point.y)})),
-            scenarioOrder: ['plan-chart','self-consumption-chart','reference-chart','price-chart'].map(id => document.getElementById(id).closest('figure').getBoundingClientRect().top),
+            scenarioOrder: ['plan-chart','price-chart','self-consumption-chart','reference-chart'].map(id => document.getElementById(id).getBoundingClientRect().top),
             evidenceLast: document.getElementById('plan-chart').getBoundingClientRect().top < document.getElementById('plan-evidence-panel').getBoundingClientRect().top};
     }""")
     assert not any("Battery" in name for name in state["reference"])
@@ -257,6 +257,7 @@ def test_balance_axis_bounds_change_after_real_legend_and_time_controls(app_page
     grid_import = (
         page.locator("#plan-chart-legend label").filter(has_text="Grid import").locator("input")
     )
+    page.locator("#plan-chart-legend").get_by_text("Chart series", exact=True).click()
     grid_import.uncheck()
     hidden_bounds = page.evaluate(read_bounds)
     assert hidden_bounds[0] == hidden_bounds[1] == hidden_bounds[2]
@@ -331,7 +332,7 @@ def test_rendered_balances_keep_real_widths_zero_sum_soc_and_accessible_inspecti
     expect(page.locator("[id^=converter-balance]")).to_have_count(0)
     expect(page.get_by_role("heading", name="converter balance", exact=False)).to_have_count(0)
     expect(page.get_by_role("heading", name="Battery converter", exact=False)).to_have_count(0)
-    expect(page.locator("#plan-chart-legend .series-swatch")).to_have_count(9)
+    expect(page.locator("#plan-chart-legend label .series-swatch")).to_have_count(9)
     canvas = page.locator("#plan-chart")
     canvas.scroll_into_view_if_needed()
     point = page.evaluate(
@@ -369,7 +370,7 @@ def test_rendered_balances_keep_real_widths_zero_sum_soc_and_accessible_inspecti
     expect(popup.locator(".chart-tooltip-total .chart-tooltip-value")).to_have_text(["16", "-16"])
     plot_bounds = canvas.bounding_box()
     legend_bounds = page.locator("#plan-chart-legend").bounding_box()
-    assert legend_bounds["y"] >= plot_bounds["y"] + plot_bounds["height"]
+    assert legend_bounds["y"] + legend_bounds["height"] <= plot_bounds["y"]
     assert legend_bounds["width"] == pytest.approx(plot_bounds["width"], abs=1)
     edges = popup.locator(".chart-tooltip-value").evaluate_all(
         "cells => cells.map(cell => cell.getBoundingClientRect().right)"
@@ -408,15 +409,14 @@ def test_rendered_balances_keep_real_widths_zero_sum_soc_and_accessible_inspecti
     expect(popup).to_contain_text("SoC")
     expect(popup).to_contain_text("50")
     if page.viewport_size["width"] < 500:
-        # Touch opens and scrolls to the inspector, which intentionally dismisses chart tooltips.
-        bounds = canvas.bounding_box()
+        # Touch keeps the chart in view and selects the same interval for subsequent evidence inspection.
         point = page.evaluate(
             "Chart.getChart(document.getElementById('plan-chart')).getDatasetMeta(0).data[0].getCenterPoint()"
         )
-        page.touchscreen.tap(bounds["x"] + point["x"], bounds["y"] + point["y"])
-        expect(page.locator("#plan-evidence-panel")).to_have_attribute("open", "")
-        expect(page.locator("#interval-evidence-panel")).to_have_attribute("open", "")
-        expect(page.get_by_label("Inspect planning time", exact=True)).to_have_value("0")
+        canvas.tap(position=point)
+        expect(popup).to_contain_text("Revenue before bonus")
+        expect(page.locator("#plan-evidence-panel")).to_have_js_property("open", False)
+        expect(page.locator("#inspect-time")).to_have_value("0")
     if not page.get_by_label("Inspect planning time", exact=True).is_visible():
         if not page.get_by_text("Selected interval details", exact=True).is_visible():
             page.get_by_text("Understand this plan", exact=True).click()

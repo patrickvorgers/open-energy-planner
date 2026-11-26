@@ -121,6 +121,38 @@ It cannot prove the human queue order. The operator must still confirm that all
 preceding PRs have merged before requesting review, and verify their successful
 main checks before Ready, candidate CI or merge.
 
+## RepoWise disposition for each PR revision
+
+After every push, including to a Draft, verify that the RepoWise check and report
+cover the current head and base. A green free check can still contain health
+notes. Validate every finding, fix confirmed issues and document the evidence for
+the decisions on the others. Inspect unscanned changed files where relevant.
+
+The PR author or repository owner posts a new PR conversation comment. Its first
+line is the following marker, using the two full commit SHAs and the numeric
+GitHub **Repowise review** check-run ID recorded in the check output. Use the
+latest check on the current head. The PR conversation summary can still point
+to an earlier scan of the same revision.
+
+```text
+<!-- oep-repowise-disposition:<head-sha>:<base-sha>:<check-run-id> -->
+```
+
+Below it, summarize the fixes, explain findings that remain, and cite the relevant
+evidence. If there are no findings, say so explicitly after reviewing the report.
+Every new head, base, or replacement scan requires a matching disposition.
+
+The formal review-state and candidate admission checks require one authentic
+successful RepoWise report and a matching human disposition. They reject a scan
+that changed while the other gates ran. The operator remains responsible for the
+reasoning and for resolving discussions. The existing Dependabot exception applies.
+The change takes effect in trusted-main review checks once it is on main.
+
+If Ready starts a replacement scan and admission stops before the build,
+wait for that scan, read its report and record the new disposition. Use the
+documented `ci: run` retry on the same ready PR if the reviewed head and base
+still match.
+
 ## Choose the reviewer before requesting a review
 
 After the current-head cheap checks pass and the coordinated review slot is

@@ -7,7 +7,7 @@ import pytest
 from playwright.sync_api import expect
 
 from tests.app.contract.support.settings import settings
-from tests.frontend.browser.helpers import TOKEN, discover
+from tests.frontend.browser.helpers import TOKEN, discover, open_chart_series
 
 
 @pytest.mark.parametrize("app_site", ["prices"], indirect=True)
@@ -92,7 +92,7 @@ def test_current_price_scale_follows_zero_negative_prices_and_legend(app_page, n
             / f"price-scale-{'negative' if negative else 'positive'}-{page.viewport_size['width']}.png"
         )
     )
-    legend = page.locator("#price-chart-legend")
+    legend = open_chart_series(page, "price-chart")
     for name in ("Spot market rate", "Export rate", "Export rate incl. bonus"):
         legend.get_by_role("checkbox", name=name, exact=True).uncheck()
     assert page.evaluate("Chart.getChart(document.getElementById('price-chart')).scales.y.min") == 0

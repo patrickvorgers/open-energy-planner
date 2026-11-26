@@ -6,7 +6,7 @@ import pytest
 from playwright.sync_api import expect
 
 from tests.frontend.browser.documentation_fixture import START
-from tests.frontend.browser.helpers import TOKEN
+from tests.frontend.browser.helpers import TOKEN, open_chart_series
 
 
 @pytest.mark.parametrize("app_site", ["battery_planning"], indirect=True)
@@ -25,7 +25,7 @@ def test_optimizer_battery_plan_shares_the_window_and_groups_each_battery(app_pa
     expect(page.locator("#overview-status")).to_contain_text("Connected")
 
     panel = page.locator(".optimizer-scenario #battery-plan-panel")
-    summary = panel.locator("summary")
+    summary = panel.locator(":scope > summary")
     expect(summary).to_have_text("Battery plan")
     expect(summary).to_be_visible()
     canvas = panel.get_by_role("img", name="Planned power and state of charge by battery")
@@ -43,10 +43,12 @@ def test_optimizer_battery_plan_shares_the_window_and_groups_each_battery(app_pa
         summary.tap()
 
     expect(canvas).to_be_visible()
-    garage = panel.get_by_role("checkbox", name="Example garage battery")
-    home = panel.get_by_role("checkbox", name="Example home battery")
+    legend = open_chart_series(page, "battery-plan-chart")
+    garage = legend.get_by_role("checkbox", name="Example garage battery")
+    home = legend.get_by_role("checkbox", name="Example home battery")
     expect(garage).to_be_checked()
     expect(home).to_be_checked()
+    legend.get_by_text("Chart series", exact=True).press("Escape")
     state = page.evaluate("""() => {
         const chart = Chart.getChart('battery-plan-chart');
         const optimizer = Chart.getChart('plan-chart');
@@ -160,6 +162,7 @@ def test_optimizer_battery_plan_shares_the_window_and_groups_each_battery(app_pa
         expect(tooltip).to_contain_text("Own use")
         tooltip.screenshot(path=str(images / "discharge-destinations.png"))
 
+    open_chart_series(page, "battery-plan-chart")
     garage.uncheck()
     assert (
         page.evaluate("""() => {
@@ -179,6 +182,7 @@ def test_optimizer_battery_plan_shares_the_window_and_groups_each_battery(app_pa
     summary.click()
     expect(canvas).to_be_hidden()
     summary.click()
+    open_chart_series(page, "battery-plan-chart")
     expect(garage).not_to_be_checked()
 
     if width == 1440:
