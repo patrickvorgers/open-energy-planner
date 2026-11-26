@@ -389,8 +389,8 @@ target.
 ## Prepare thermal storage
 
 The supported thermal model is a fixed-power resistive electric water heater.
-Under **Settings > Appliances > Thermal**, choose **Add electric boiler**
-and select an available device from the same Energy chooser. Its Energy meter
+Under **Settings > Appliances > Thermal**, choose **Add application**, select
+**Electric boiler** and continue to the Energy device chooser. Its Energy meter
 and configured device power sensor are selected together. Then configure the
 temperature measurement, volume, temperatures, standing losses, electrical
 heating rating and expected hourly heat draw. A missing power link requires an

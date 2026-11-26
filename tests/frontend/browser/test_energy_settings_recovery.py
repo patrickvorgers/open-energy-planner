@@ -10,6 +10,7 @@ from tests.frontend.browser.helpers import (
     TOKEN,
     add_thermal_appliance,
     discover_boiler_sources,
+    start_electric_boiler_setup,
     wait_for_product_reads,
 )
 from tests.frontend.browser.test_appliance_settings import add_ev_appliance
@@ -142,7 +143,7 @@ def test_failed_paired_read_holds_busy_until_peer_settles_and_retains_draft(
             "button",
             name={
                 "ev": "Add vehicle or charge point",
-                "thermal": "Add electric boiler",
+                "thermal": "Add application",
                 "consumption": "Add appliance",
             }[editor],
             exact=True,
@@ -198,12 +199,10 @@ def test_unreadable_real_consumer_ownership_keeps_shared_choices_unavailable(app
         page.get_by_role("button", name="Add vehicle or charge point", exact=True).click()
         page.get_by_role("radio", name="Charge point", exact=False).check()
         page.get_by_role("button", name="Continue", exact=True).click()
+    elif category == "consumption":
+        page.get_by_role("button", name="Add appliance", exact=True).click()
     else:
-        page.get_by_role(
-            "button",
-            name="Add appliance" if category == "consumption" else "Add electric boiler",
-            exact=True,
-        ).click()
+        start_electric_boiler_setup(page)
     dialog = page.locator("#source-dialog")
     expect(dialog).to_be_visible()
     expect(dialog.locator("#source-count")).to_contain_text("Restore the saved database")
@@ -246,7 +245,7 @@ def test_new_consumer_reads_keep_safe_errors_and_existing_deadline(app_page, edi
         page.get_by_role("radio", name="Charge point", exact=False).check()
         page.get_by_role("button", name="Continue", exact=True).click()
     else:
-        page.get_by_role("button", name="Add electric boiler", exact=True).click()
+        start_electric_boiler_setup(page)
     expect(page.locator("#status")).to_contain_text("Check the connection and retry")
     expect(page.locator("#status")).not_to_contain_text("PRIVATE-")
     assert page.evaluate("window.consumerBudgets") == [30000]
@@ -257,7 +256,7 @@ def test_new_consumer_reads_keep_safe_errors_and_existing_deadline(app_page, edi
         page.get_by_role("button", name="Add vehicle or charge point", exact=True).click()
         page.get_by_role("button", name="Continue", exact=True).click()
     else:
-        page.get_by_role("button", name="Add electric boiler", exact=True).click()
+        start_electric_boiler_setup(page)
     expect(page.locator("#source-dialog")).to_be_visible()
 
 

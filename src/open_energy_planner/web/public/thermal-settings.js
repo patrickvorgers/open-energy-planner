@@ -42,10 +42,9 @@ function validDraft() {
 /** Keep edit mode and the shared save state synchronized after rendering or an asynchronous operation. */
 function syncEditor() {
     find("thermal-editor").classList.toggle("settings-readonly", !editing);
-    for (const control of find("thermal-editor").querySelectorAll("input, select, button")) control.disabled = !editing || saveState.busy || "requiresArea" in control.dataset;
+    for (const control of document.querySelectorAll("#thermal-editor :is(input, select, button), #add-thermal-source")) control.disabled = !editing || saveState.busy || "requiresArea" in control.dataset;
     find("thermal-store-select").disabled = saveState.busy || editing || !selected();
     find("edit-thermal").disabled = saveState.busy || editing || !selected();
-    find("add-thermal").disabled = saveState.busy;
     find("add-thermal-application").disabled = saveState.busy;
     find("refresh-thermal").disabled = saveState.busy;
     find("refresh-thermal-evidence").disabled = saveState.busy;
@@ -53,7 +52,7 @@ function syncEditor() {
     find("thermal-description").textContent = editing ? "Edit this appliance's configuration. Changes are applied only after Save." : "Saved configuration. Choose Edit settings to make changes.";
     find("thermal-description").hidden = Boolean(selected()?.kind);
     for (const id of ["save-thermal", "cancel-thermal"]) find(id).hidden = !editing;
-    for (const id of ["edit-thermal", "add-thermal", "add-thermal-application", "thermal-more"]) find(id).hidden = editing;
+    for (const id of ["edit-thermal", "add-thermal-application", "thermal-more"]) find(id).hidden = editing;
     saveState.update();
     if (editing && !saveState.busy) find("cancel-thermal").disabled = false;
 }
@@ -94,6 +93,7 @@ function renderEditor() {
     if (!selected()) selectedId = entries[0]?.id || null;
     selector.value = selectedId || "";
     const store = selected(), editor = find("thermal-editor"); editor.replaceChildren();
+    find("add-thermal-source")?.remove();
     find("thermal-empty").hidden = Boolean(store); find("thermal-detail").hidden = !store;
     if (!store) { syncEditor(); return; }
     find("thermal-title").textContent = displayName(store);
@@ -102,7 +102,7 @@ function renderEditor() {
     find("thermal-detail").classList.toggle("thermal-application-layout", Boolean(store.kind));
     if (store.kind) {
         renderApplication({app: store, current, draft, editor, summary: find("thermal-summary"),
-            dialog: find("thermal-heat-source-dialog"), editing,
+            dialog: find("thermal-heat-source-dialog"), sourceActions: find("thermal-source-actions"), editing,
             rerender: () => retainInputs(renderEditor), changed: () => saveState.update()});
         syncEditor();
         return;
@@ -198,6 +198,10 @@ find("thermal-application-form").onsubmit = event => {
     event.preventDefault();
     if (editing || saveState.busy) return;
     const kind = find("thermal-application-kind").value;
+    if (kind === "electric_boiler") {
+        applicationDialog.close();
+        return addElectricBoiler();
+    }
     if (![SPACE_HEATING, HOT_WATER].includes(kind)) return;
     const application = {id: identity(), kind, name: "", area_id: null, climate_entity: null, maximum_preheat_c: null, sources: []};
     editOriginId = selectedId;
@@ -210,7 +214,7 @@ find("thermal-application-form").onsubmit = event => {
     refreshSources();
 };
 /** Recheck the latest Energy snapshot after the modal closes without replacing existing drafts or saved configuration. */
-find("add-thermal").onclick = async () => {
+async function addElectricBoiler() {
     if (saveState.busy || editing || saveState.dirty) return;
     const opening = current;
     saveState.begin("Loading Home Assistant Energy devices…"); syncEditor();
@@ -218,7 +222,7 @@ find("add-thermal").onclick = async () => {
     catch (error) { find("status").textContent = error.message; return; }
     finally { saveState.end(); syncEditor(); }
     if (current !== opening || editing) return;
-    find("add-thermal").focus();
+    find("add-thermal-application").focus();
     const chosen = await pickEnergySource(find("source-dialog"), energySources, "Add electric boiler");
     if (!chosen || current !== opening || saveState.busy || editing) return;
     const source = energySources.options.find(option => option.entity_id === chosen.entity_id);
@@ -227,7 +231,7 @@ find("add-thermal").onclick = async () => {
     }
     const store = {id: identity(), energy_entity: source.entity_id, temperature_entity: "", power_entity: source.power_entity || "", volume_litres: null, minimum_c: null, maximum_c: null, ambient_c: null, loss_w_per_c: null, heater_w: null, draw_profile_kwh: Array(24).fill(0), enabled: false};
     editOriginId = selectedId; draft.stores.push(store); selectedId = store.id; editing = true; renderEditor(); saveState.update(); refreshSources();
-};
+}
 find("thermal-settings").onsubmit = async event => {
     event.preventDefault(); if (saveState.busy || !editing || conflict || !validDraft()) return;
     ++requestGeneration; saveState.begin(); syncEditor();
