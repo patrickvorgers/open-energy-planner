@@ -304,6 +304,16 @@ def test_native_balance_preview_apply_keeps_preferences_and_both_statistics_reso
             assert balance.dt_util is dt_util
             assert applied["applied"] is True
             assert applied["journal_status"] == "completed"
+            completed = await Store(
+                hass, 1, "oep_test_balance_repairs." + entry.entry_id
+            ).async_load()
+            for period in ("hour", "5minute"):
+                original_export = completed["before"][period]["sensor.test_export"]
+                replacement_export = completed["after"][period]["sensor.test_export"]
+                assert original_export and replacement_export
+                assert [row["start"] for row in original_export] == [
+                    row["start"] for row in replacement_export
+                ]
             for period in ("hour", "5minute"):
                 rows = await recorder.async_add_executor_job(
                     statistics_during_period,

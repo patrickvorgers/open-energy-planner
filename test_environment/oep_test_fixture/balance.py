@@ -63,6 +63,34 @@ async def _resolve_interrupted_repair(store, journal, before, resolution, *, app
     return {"revision": resolution, "journal_status": status, "applied": False}
 
 
+def _prepare_repair_payloads(before, writes, metadata):
+    """Retain original rows and convert replacements into Recorder units before journaling."""
+    originals = {}
+    for period, entities in writes.items():
+        originals[period] = {}
+        for entity, rows in entities.items():
+            stamps = {row["start"] for row in rows}
+            originals[period][entity] = [
+                row for row in before[period][entity] if row["start"] in stamps
+            ]
+    payloads = []
+    for period, table in (("hour", Statistics), ("5minute", StatisticsShortTerm)):
+        for entity, rows in writes[period].items():
+            original_metadata = metadata[entity][1]
+            unit = original_metadata["unit_of_measurement"]
+            normalized = []
+            for row in rows:
+                converted = {"start": datetime.fromtimestamp(row["start"], UTC)}
+                for field in ("sum", "state"):
+                    if row.get(field) is not None:
+                        converted[field] = EnergyConverter.convert(row[field], "kWh", unit)
+                if row.get("last_reset") is not None:
+                    converted["last_reset"] = datetime.fromtimestamp(row["last_reset"], UTC)
+                normalized.append(converted)
+            payloads.append((original_metadata, normalized, table))
+    return originals, payloads
+
+
 def declare_sources(hass, entry, roles, sample):
     """Bind repair authority and the mode's canonical quarter-kWh sampler to this fixture entry."""
     owners = hass.data.setdefault(SOURCE_OWNERSHIP_KEY, {})
@@ -155,29 +183,7 @@ async def setup_balance(hass, entry):
                     hass, statistic_ids={entity for rows in writes.values() for entity in rows}
                 )
             )
-            originals = {}
-            for period, entities in writes.items():
-                originals[period] = {}
-                for entity, rows in entities.items():
-                    stamps = {row["start"] for row in rows}
-                    originals[period][entity] = [
-                        row for row in before[period][entity] if row["start"] in stamps
-                    ]
-            payloads = []
-            for period, table in (("hour", Statistics), ("5minute", StatisticsShortTerm)):
-                for entity, rows in writes[period].items():
-                    original_metadata = metadata[entity][1]
-                    unit = original_metadata["unit_of_measurement"]
-                    normalized = []
-                    for row in rows:
-                        converted = {"start": datetime.fromtimestamp(row["start"], UTC)}
-                        for field in ("sum", "state"):
-                            if row.get(field) is not None:
-                                converted[field] = EnergyConverter.convert(row[field], "kWh", unit)
-                        if row.get("last_reset") is not None:
-                            converted["last_reset"] = datetime.fromtimestamp(row["last_reset"], UTC)
-                        normalized.append(converted)
-                    payloads.append((original_metadata, normalized, table))
+            originals, payloads = _prepare_repair_payloads(before, writes, metadata)
             journal = {
                 "status": "applying",
                 "proposal": result,
