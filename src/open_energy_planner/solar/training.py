@@ -135,6 +135,49 @@ class DailySolarTraining:
             site_revision = self.site_revision(site)
         return withdrawn, revisions, site_revision
 
+    @staticmethod
+    def _validate_pointer(pointer, binding, day, boundary):
+        """Accept an absent pointer or validate the stored reference without modifying it.
+
+        The training day uses the installation calendar. The evidence boundary
+        is UTC midnight. Invalid persisted fields raise ValueError.
+        """
+        if pointer is not None and (
+            not isinstance(pointer, dict)
+            or set(pointer) != {"binding", "day", "inputs", "report", "usable", "validation_end"}
+            or pointer["binding"] != binding
+            or not isinstance(pointer["day"], str)
+            or pointer["day"] > day
+            or not isinstance(pointer["report"], str)
+            or fullmatch("[0-9a-f]{64}", pointer["report"]) is None
+            or not isinstance(pointer["inputs"], str)
+            or fullmatch("[0-9a-f]{64}", pointer["inputs"]) is None
+            or (
+                pointer["usable"] is not None
+                and (
+                    not isinstance(pointer["usable"], str)
+                    or fullmatch("[0-9a-f]{64}", pointer["usable"]) is None
+                )
+            )
+            or not isinstance(pointer["validation_end"], str)
+        ):
+            raise ValueError("Invalid solar training pointer")
+        if pointer:
+            try:
+                validation_end = datetime.fromisoformat(pointer["validation_end"])
+                if (
+                    date.fromisoformat(pointer["day"]).isoformat() != pointer["day"]
+                    or validation_end.tzinfo is None
+                    or validation_end.utcoffset() != boundary.utcoffset()
+                    or validation_end
+                    != validation_end.replace(hour=0, minute=0, second=0, microsecond=0)
+                    or validation_end > boundary
+                    or validation_end.isoformat() != pointer["validation_end"]
+                ):
+                    raise ValueError("Invalid solar training pointer")
+            except ValueError:
+                raise ValueError("Invalid solar training pointer") from None
+
     def prepare(
         self,
         source,
@@ -177,41 +220,7 @@ class DailySolarTraining:
         name = "training-current-" + binding + ".json"
         pointer = self.store.documents.read(name) if self.store.documents.exists(name) else None
         day = local.date().isoformat()
-        if pointer is not None and (
-            not isinstance(pointer, dict)
-            or set(pointer) != {"binding", "day", "inputs", "report", "usable", "validation_end"}
-            or pointer["binding"] != binding
-            or not isinstance(pointer["day"], str)
-            or pointer["day"] > day
-            or not isinstance(pointer["report"], str)
-            or fullmatch("[0-9a-f]{64}", pointer["report"]) is None
-            or not isinstance(pointer["inputs"], str)
-            or fullmatch("[0-9a-f]{64}", pointer["inputs"]) is None
-            or (
-                pointer["usable"] is not None
-                and (
-                    not isinstance(pointer["usable"], str)
-                    or fullmatch("[0-9a-f]{64}", pointer["usable"]) is None
-                )
-            )
-            or not isinstance(pointer["validation_end"], str)
-        ):
-            raise ValueError("Invalid solar training pointer")
-        if pointer:
-            try:
-                validation_end = datetime.fromisoformat(pointer["validation_end"])
-                if (
-                    date.fromisoformat(pointer["day"]).isoformat() != pointer["day"]
-                    or validation_end.tzinfo is None
-                    or validation_end.utcoffset() != boundary.utcoffset()
-                    or validation_end
-                    != validation_end.replace(hour=0, minute=0, second=0, microsecond=0)
-                    or validation_end > boundary
-                    or validation_end.isoformat() != pointer["validation_end"]
-                ):
-                    raise ValueError("Invalid solar training pointer")
-            except ValueError:
-                raise ValueError("Invalid solar training pointer") from None
+        self._validate_pointer(pointer, binding, day, boundary)
         previous = self.read(pointer["report"], binding) if pointer else None
         token = {
             "name": name,

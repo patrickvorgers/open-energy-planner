@@ -68,6 +68,17 @@ def test_missing_measurements_and_controlled_days_cannot_promote_a_model(tmp_pat
     assert result["selected"] == "baseline"
     assert result["completed_windows"] == 0
     assert result["excluded_reason"] == "controlled_use"
+    unknown = choose_daily(
+        store.documents,
+        "charger",
+        "Europe/Amsterdam",
+        forecasts(now),
+        measurements(now),
+        now,
+        excluded_dates=("*",),
+    )
+    assert unknown["excluded_reason"] == "control_history_unavailable"
+    assert unknown["windows"] == []
     missing = choose_daily(store.documents, "charger", "Europe/Amsterdam", forecasts(now), {}, now)
     assert missing["selected"] == "baseline"
     assert missing["completed_windows"] == 0

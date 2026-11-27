@@ -237,6 +237,8 @@ def test_inadequate_new_attempt_preserves_usable_model_after_restart(tmp_path):
         ("usable", []),
         ("usable", "bad"),
         ("day", "2026-08-19garbage"),
+        ("day", "9999-12-31"),
+        ("binding", "different-source"),
         ("validation_end", []),
         ("validation_end", "2026-08-20T00:00:00"),
         ("validation_end", "2026-08-20T01:00:00+00:00"),

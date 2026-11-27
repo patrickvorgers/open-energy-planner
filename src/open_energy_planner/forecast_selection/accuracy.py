@@ -74,6 +74,111 @@ def read_capture(documents, path, family, day, timezone):
     return record
 
 
+def _update_pending_capture(documents, pointer, prefix, family, timezone, forecasts, now, today):
+    """Freeze elapsed pending evidence once and stage the next complete local day.
+
+    Predictions use hourly kWh. Return the next day's closing instant as ISO
+    text when a capture was written, otherwise return None. Validation and
+    storage failures propagate to the selection result's recovery handler.
+    """
+    tomorrow = today + timedelta(days=1)
+    if documents.exists(pointer):
+        pending = documents.read(pointer)
+        pending_day = datetime.fromisoformat(pending["capture"]["day"]).date()
+        # Apply the same evidence validation to mutable and frozen captures.
+        read_capture(documents, pointer, family, pending_day, timezone)
+        if pending_day <= today:
+            target = prefix + pending_day.isoformat() + ".json"
+            if not documents.exists(target):
+                documents.write(target, pending)
+    hours, _end = comparison_hours(tomorrow, timezone)
+    predictions = {}
+    for name, forecast in forecasts.items():
+        issued = datetime.fromisoformat(forecast["issued_at"])
+        if issued.utcoffset() is None or issued > now:
+            raise ValueError("Future forecast issue time")
+        values = [integral(forecast["steps"], hour, hour + HOUR) for hour in hours]
+        if any(value is None for value in values):
+            continue
+        for value in values:
+            quantity(value)
+        predictions[name] = values
+    if set(predictions) == set(forecasts) and "baseline" in predictions:
+        capture = {
+            "family": family,
+            "day": tomorrow.isoformat(),
+            "timezone": timezone,
+            "issued_at": now.isoformat(),
+            "hours": [hour.isoformat() for hour in hours],
+            "predictions": predictions,
+            "forecasts": forecasts,
+        }
+        documents.write(pointer, {"capture": capture, "version": digest(capture)})
+        return day_window(tomorrow.isoformat(), timezone)[1].isoformat()
+    return None
+
+
+def _live_windows(
+    documents,
+    prefix,
+    family,
+    timezone,
+    forecasts,
+    actual,
+    now,
+    today,
+    *,
+    excluded_dates,
+    include_replay_metadata,
+    result,
+):
+    """Score completed forward captures against matching hourly observations.
+
+    Record the exclusion reason in result when control history bars a day.
+    Household selection stops after its minimum cohort. Device selection scans
+    the lookback and includes source and hour metadata for replay comparison.
+    """
+    windows = []
+    for offset in range(MAX_ACCURACY_LOOKBACK_DAYS):
+        day = today - timedelta(days=offset)
+        hours, end = comparison_hours(day, timezone)
+        if end > now:
+            continue
+        record = read_capture(documents, prefix + day.isoformat() + ".json", family, day, timezone)
+        if record is None or set(record["predictions"]) != set(forecasts):
+            continue
+        if "*" in excluded_dates or day.isoformat() in excluded_dates:
+            result["excluded_reason"] = (
+                "control_history_unavailable" if "*" in excluded_dates else "controlled_use"
+            )
+            continue
+        values = [actual.get(hour) for hour in hours]
+        if any(value is None for value in values):
+            continue
+        for value in values:
+            quantity(value)
+        scores = {
+            name: mean_absolute_error(predicted, values)
+            for name, predicted in record["predictions"].items()
+        }
+        windows.append(
+            {
+                "day": day.isoformat(),
+                **({"source": "live", "hours": len(hours)} if include_replay_metadata else {}),
+                "mae_kwh": scores,
+                "actual_version": digest(values),
+                "forecast_version": digest(record),
+                "daily_energy_error_kwh": {
+                    name: abs(fsum(predicted) - fsum(values))
+                    for name, predicted in record["predictions"].items()
+                },
+            }
+        )
+        if not include_replay_metadata and len(windows) == MIN_ACCURACY_DAYS:
+            break
+    return windows
+
+
 def choose_daily(
     documents, identity, timezone, forecasts, actual, now, *, excluded_dates=(), replays=None
 ):
@@ -112,81 +217,25 @@ def choose_daily(
     prefix = "accuracy-day-" + family + "-"
     pointer = "accuracy-pending-" + family + ".json"
     today = now.astimezone(ZoneInfo(timezone)).date()
-    tomorrow = today + timedelta(days=1)
     try:
-        if documents.exists(pointer):
-            pending = documents.read(pointer)
-            pending_day = datetime.fromisoformat(pending["capture"]["day"]).date()
-            # Apply the same evidence validation to mutable and frozen captures.
-            read_capture(documents, pointer, family, pending_day, timezone)
-            if pending_day <= today:
-                target = prefix + pending_day.isoformat() + ".json"
-                if not documents.exists(target):
-                    documents.write(target, pending)
-        hours, _end = comparison_hours(tomorrow, timezone)
-        predictions = {}
-        for name, forecast in forecasts.items():
-            issued = datetime.fromisoformat(forecast["issued_at"])
-            if issued.utcoffset() is None or issued > now:
-                raise ValueError("Future forecast issue time")
-            values = [integral(forecast["steps"], hour, hour + HOUR) for hour in hours]
-            if any(value is None for value in values):
-                continue
-            for value in values:
-                quantity(value)
-            predictions[name] = values
-        if set(predictions) == set(forecasts) and "baseline" in predictions:
-            capture = {
-                "family": family,
-                "day": tomorrow.isoformat(),
-                "timezone": timezone,
-                "issued_at": now.isoformat(),
-                "hours": [hour.isoformat() for hour in hours],
-                "predictions": predictions,
-                "forecasts": forecasts,
-            }
-            documents.write(pointer, {"capture": capture, "version": digest(capture)})
-            result["pending_until"] = day_window(tomorrow.isoformat(), timezone)[1].isoformat()
-        windows = []
-        for offset in range(MAX_ACCURACY_LOOKBACK_DAYS):
-            day = today - timedelta(days=offset)
-            hours, end = comparison_hours(day, timezone)
-            if end > now:
-                continue
-            record = read_capture(
-                documents, prefix + day.isoformat() + ".json", family, day, timezone
-            )
-            if record is None or set(record["predictions"]) != set(forecasts):
-                continue
-            if "*" in excluded_dates or day.isoformat() in excluded_dates:
-                result["excluded_reason"] = (
-                    "control_history_unavailable" if "*" in excluded_dates else "controlled_use"
-                )
-                continue
-            values = [actual.get(hour) for hour in hours]
-            if any(value is None for value in values):
-                continue
-            for value in values:
-                quantity(value)
-            scores = {
-                name: mean_absolute_error(predicted, values)
-                for name, predicted in record["predictions"].items()
-            }
-            windows.append(
-                {
-                    "day": day.isoformat(),
-                    **({"source": "live", "hours": len(hours)} if replays is not None else {}),
-                    "mae_kwh": scores,
-                    "actual_version": digest(values),
-                    "forecast_version": digest(record),
-                    "daily_energy_error_kwh": {
-                        name: abs(fsum(predicted) - fsum(values))
-                        for name, predicted in record["predictions"].items()
-                    },
-                }
-            )
-            if replays is None and len(windows) == MIN_ACCURACY_DAYS:
-                break
+        pending_until = _update_pending_capture(
+            documents, pointer, prefix, family, timezone, forecasts, now, today
+        )
+        if pending_until is not None:
+            result["pending_until"] = pending_until
+        windows = _live_windows(
+            documents,
+            prefix,
+            family,
+            timezone,
+            forecasts,
+            actual,
+            now,
+            today,
+            excluded_dates=excluded_dates,
+            include_replay_metadata=replays is not None,
+            result=result,
+        )
         if replays is not None:
             from .device_history import REPLAY_HISTORY_DAYS, REPLAY_SEASONS, replay_season
 

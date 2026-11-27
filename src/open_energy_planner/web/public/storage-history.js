@@ -24,6 +24,76 @@ export function bindStorageHistory(readToken, bytes, showDatabase) {
         find("storage-history-selected").textContent = row ? `${row.current ? "Current: " : ""}${when(row.observed_at)}: ${bytes(row.database_bytes)}${row.database_estimated ? " (estimated)" : ""}: ${BACKENDS[row.backend] || "Unknown backend"}` : "";
     }
     /** Replace old evidence immediately so failed or reordered reads cannot show a stale period. */
+    function renderHistory(start, end) {
+        const known = samples.filter(row => Number.isFinite(row.database_bytes));
+        const first = known[0], last = known.at(-1);
+        let summary = samples.length ? "Database size is unavailable for the observations in this period. Missing sizes remain gaps." : "No database size measurements in this period.";
+        if (known.length === 1) summary = "";
+        if (known.length > 1) {
+            const change = last.database_bytes - first.database_bytes;
+            const sameBackend = samples.every(row => row.backend === first.backend);
+            const elapsedDays = (Date.parse(last.observed_at) - Date.parse(first.observed_at)) / MILLISECONDS_PER_DAY;
+            summary = `${dateLabel(start)} – ${dateLabel(end)}: Measurements: ${known.length}: `;
+            if (!sameBackend) {
+                summary += "Growth is not compared across different database backends.";
+            } else {
+                const estimated = known.some(row => row.database_estimated) ? " (estimated)" : "";
+                summary += `${change < 0 ? "Decrease" : "Increase"}: ${bytes(Math.abs(change))}`;
+                summary += elapsedDays >= MINIMUM_AVERAGE_INTERVAL_DAYS
+                    ? `: Average: ${change < 0 ? "−" : "+"}${bytes(Math.abs(change) / elapsedDays)} per day${estimated}`
+                    : `${estimated}: Daily average requires ${MINIMUM_AVERAGE_INTERVAL_DAYS * HOURS_PER_DAY} hours between measurements.`;
+            }
+        }
+        find("storage-history-summary").textContent = summary;
+        if (!known.length) {
+            if (samples.length) {
+                find("storage-observation").replaceChildren(...samples.map((row, index) => new Option(when(row.observed_at), String(index))));
+                find("storage-observation-field").hidden = false;
+                find("storage-observation").value = String(samples.length - 1);
+                inspect(samples.length - 1);
+            }
+            return;
+        }
+        const byDay = new Map(samples.map(row => [row.day, row]));
+        const points = [];
+        for (let day = start; day <= end; day = nextDate(day)) {
+            const row = byDay.get(day);
+            points.push({x: Date.parse(day + "T00:00:00Z"), y: row?.database_bytes == null ? null : row.database_bytes / BYTES_PER_MIB, row});
+        }
+        find("storage-history-plot").hidden = false;
+        chart = new Chart(find("storage-history-chart"), {
+            type: "line",
+            data: {datasets: [{
+                label: "Database size", data: points, borderColor: "#087f8c", backgroundColor: "#087f8c",
+                borderWidth: 2, pointRadius: 2, pointHitRadius: 12, spanGaps: false,
+                segment: {borderColor: context => points[context.p0DataIndex].row?.backend !== points[context.p1DataIndex].row?.backend ? "transparent" : undefined},
+            }]},
+            options: {
+                responsive: true, maintainAspectRatio: false, animation: false,
+                onHover: (_event, elements) => {if (!keyboardSelection && elements[0]) inspect(samples.indexOf(points[elements[0].index].row));},
+                scales: {
+                    x: {
+                        type: "linear", min: points[0].x,
+                        max: points.at(-1).x + (points.length === 1 ? MILLISECONDS_PER_DAY : 0),
+                        afterBuildTicks: scale => {
+                            const limit = scale.chart.width < 500 ? 3 : 5;
+                            const stride = Math.max(1, Math.ceil((points.length - 1) / (limit - 1)));
+                            scale.ticks = points.filter((_point, index) => index % stride === 0 && index < points.length - 1).map(point => ({value: point.x}));
+                            scale.ticks.push({value: points.at(-1).x});
+                        },
+                        ticks: {maxRotation: 0, callback: value => dateLabel(new Date(value).toISOString().slice(0, 10))},
+                    },
+                    y: {title: {display: true, text: "MiB"}, ticks: {callback: value => value.toLocaleString(undefined, {maximumFractionDigits: 2})}},
+                },
+                plugins: {legend: {display: false}, tooltip: {callbacks: {
+                    title: items => `${items[0].raw.row.current ? "Current: " : ""}${when(items[0].raw.row.observed_at)}`,
+                    label: item => `${bytes(item.raw.row.database_bytes)}${item.raw.row.database_estimated ? " (estimated)" : ""}: ${BACKENDS[item.raw.row.backend] || "Unknown backend"}`,
+                }}},
+            },
+        });
+        inspect(samples.length - 1);
+    }
+
     async function load(usage, current = false) {
         if (usage) {
             currentUsage = usage;
@@ -66,73 +136,7 @@ export function bindStorageHistory(readToken, bytes, showDatabase) {
                 // Keep the view aligned with the displayed snapshot, including across local midnight.
                 samples.push({...measurement, day: measurementDay});
             }
-            const known = samples.filter(row => Number.isFinite(row.database_bytes));
-            const first = known[0], last = known.at(-1);
-            let summary = samples.length ? "Database size is unavailable for the observations in this period. Missing sizes remain gaps." : "No database size measurements in this period.";
-            if (known.length === 1) summary = "";
-            if (known.length > 1) {
-                const change = last.database_bytes - first.database_bytes;
-                const sameBackend = samples.every(row => row.backend === first.backend);
-                const elapsedDays = (Date.parse(last.observed_at) - Date.parse(first.observed_at)) / MILLISECONDS_PER_DAY;
-                summary = `${dateLabel(start)} – ${dateLabel(history.end)}: Measurements: ${known.length}: `;
-                if (!sameBackend) {
-                    summary += "Growth is not compared across different database backends.";
-                } else {
-                    const estimated = known.some(row => row.database_estimated) ? " (estimated)" : "";
-                    summary += `${change < 0 ? "Decrease" : "Increase"}: ${bytes(Math.abs(change))}`;
-                    summary += elapsedDays >= MINIMUM_AVERAGE_INTERVAL_DAYS
-                        ? `: Average: ${change < 0 ? "−" : "+"}${bytes(Math.abs(change) / elapsedDays)} per day${estimated}`
-                        : `${estimated}: Daily average requires ${MINIMUM_AVERAGE_INTERVAL_DAYS * HOURS_PER_DAY} hours between measurements.`;
-                }
-            }
-            find("storage-history-summary").textContent = summary;
-            if (!known.length) {
-                if (samples.length) {
-                    find("storage-observation").replaceChildren(...samples.map((row, index) => new Option(when(row.observed_at), String(index))));
-                    find("storage-observation-field").hidden = false;
-                    find("storage-observation").value = String(samples.length - 1);
-                    inspect(samples.length - 1);
-                }
-                return;
-            }
-            const byDay = new Map(samples.map(row => [row.day, row]));
-            const points = [];
-            for (let day = start; day <= history.end; day = nextDate(day)) {
-                const row = byDay.get(day);
-                points.push({x: Date.parse(day + "T00:00:00Z"), y: row?.database_bytes == null ? null : row.database_bytes / BYTES_PER_MIB, row});
-            }
-            find("storage-history-plot").hidden = false;
-            chart = new Chart(find("storage-history-chart"), {
-                type: "line",
-                data: {datasets: [{
-                    label: "Database size", data: points, borderColor: "#087f8c", backgroundColor: "#087f8c",
-                    borderWidth: 2, pointRadius: 2, pointHitRadius: 12, spanGaps: false,
-                    segment: {borderColor: context => points[context.p0DataIndex].row?.backend !== points[context.p1DataIndex].row?.backend ? "transparent" : undefined},
-                }]},
-                options: {
-                    responsive: true, maintainAspectRatio: false, animation: false,
-                    onHover: (_event, elements) => {if (!keyboardSelection && elements[0]) inspect(samples.indexOf(points[elements[0].index].row));},
-                    scales: {
-                        x: {
-                            type: "linear", min: points[0].x,
-                            max: points.at(-1).x + (points.length === 1 ? MILLISECONDS_PER_DAY : 0),
-                            afterBuildTicks: scale => {
-                                const limit = scale.chart.width < 500 ? 3 : 5;
-                                const stride = Math.max(1, Math.ceil((points.length - 1) / (limit - 1)));
-                                scale.ticks = points.filter((_point, index) => index % stride === 0 && index < points.length - 1).map(point => ({value: point.x}));
-                                scale.ticks.push({value: points.at(-1).x});
-                            },
-                            ticks: {maxRotation: 0, callback: value => dateLabel(new Date(value).toISOString().slice(0, 10))},
-                        },
-                        y: {title: {display: true, text: "MiB"}, ticks: {callback: value => value.toLocaleString(undefined, {maximumFractionDigits: 2})}},
-                    },
-                    plugins: {legend: {display: false}, tooltip: {callbacks: {
-                        title: items => `${items[0].raw.row.current ? "Current: " : ""}${when(items[0].raw.row.observed_at)}`,
-                        label: item => `${bytes(item.raw.row.database_bytes)}${item.raw.row.database_estimated ? " (estimated)" : ""}: ${BACKENDS[item.raw.row.backend] || "Unknown backend"}`,
-                    }}},
-                },
-            });
-            inspect(samples.length - 1);
+            renderHistory(start, history.end);
         } catch {
             if (version === requestVersion) {
                 chart?.destroy(); chart = null; samples = [];

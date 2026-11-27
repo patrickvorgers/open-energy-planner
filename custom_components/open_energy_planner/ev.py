@@ -13,7 +13,7 @@ from homeassistant.util import dt as dt_util
 from .const import DOMAIN, projection_id
 from .measurement_sources import FULL_SOC_PERCENT, HomeAssistantMeasurementSource
 from .measurements import Quantity, SourceBinding
-from .protocol import timestamp
+from .protocol import identifier, timestamp
 from .subentries import add_grouped_entities, retire_empty_groups
 from .wire_limits import MAX_API_RESPONSE_BYTES, validate_projection_size
 
@@ -178,10 +178,116 @@ def capture(coordinator, projection, now):
     }
 
 
+def _validate_vehicle(row, identity):
+    """Check estimate, recognition sources, request and schedule in that order.
+
+    The first invalid field raises an exception. The row is left intact.
+    """
+    actual = row.get("actual")
+    if actual is not None:
+        if (
+            not isinstance(actual, dict)
+            or actual.get("source_entity") != row["soc_entity"]
+            or actual.get("basis") not in ("measured", "last_known", "estimated_from_meter")
+            or any(
+                type(actual.get(field)) not in (int, float)
+                or not isfinite(actual[field])
+                or not 0 <= actual[field] <= FULL_SOC_PERCENT
+                for field in ("soc", "measured_soc")
+            )
+        ):
+            raise ValueError("Invalid EV SoC estimate")
+        timestamp(actual.get("observed_at"))
+        timestamp(actual.get("estimate_updated_at"))
+    for field, domain in (
+        ("connected_entity", "binary_sensor."),
+        ("charging_entity", "binary_sensor."),
+        ("location_entity", "device_tracker."),
+    ):
+        source = row.get(field)
+        if source is not None and (
+            not isinstance(source, str) or not source.startswith(domain) or len(source) > 127
+        ):
+            raise ValueError("Invalid EV recognition source")
+    request = row.get("charging_request")
+    if request is not None:
+        if (
+            not isinstance(request, dict)
+            or request.get("status") != "planned"
+            or request.get("vehicle_id") != identity
+        ):
+            raise ValueError("Invalid EV charging request")
+        identifier(request.get("id"))
+        identifier(request.get("version"))
+        if timestamp(request.get("ready_at")) >= timestamp(request.get("departure")):
+            raise ValueError("Invalid EV request window")
+        target_soc = request.get("target_soc")
+        if (
+            type(target_soc) not in (int, float)
+            or not isfinite(target_soc)
+            or not 0 <= target_soc <= FULL_SOC_PERCENT
+        ):
+            raise ValueError("Invalid EV request target")
+        weekdays = request.get("repeat_weekdays")
+        if (
+            not isinstance(weekdays, list)
+            or any(type(day) is not int or not 0 <= day < DAYS_PER_WEEK for day in weekdays)
+            or len(set(weekdays)) != len(weekdays)
+        ):
+            raise ValueError("Invalid EV repeat weekdays")
+    timestamp(row["next_departure"])
+    clock = time.fromisoformat(row["departure_time"])
+    if clock.tzinfo or clock.second or clock.microsecond:
+        raise ValueError("Invalid daily EV departure clock")
+    capacity = row.get("capacity_kwh")
+    if (
+        type(capacity) not in (int, float)
+        or not isfinite(capacity)
+        or not 0 < capacity <= MAX_EV_CAPACITY_KWH
+    ):
+        raise ValueError("Invalid usable EV capacity")
+    attribute = row.get("soc_timestamp_attribute")
+    if attribute is not None and (
+        not isinstance(attribute, str) or not attribute or len(attribute) > 64
+    ):
+        raise ValueError("Invalid EV sample timestamp attribute")
+    if (
+        type(row.get("target_soc")) not in (int, float)
+        or not isfinite(row["target_soc"])
+        or not 0 <= row["target_soc"] <= FULL_SOC_PERCENT
+    ):
+        raise ValueError("Invalid EV target SoC")
+
+
+def _validate_point(row, maximum, vehicle_ids):
+    """Check minimum watts, vehicle membership and connection state in order.
+
+    The caller has already validated maximum watts. An invalid field raises an
+    exception without modifying the row.
+    """
+    minimum = row.get("minimum_w")
+    if type(minimum) not in (int, float) or not isfinite(minimum) or not 0 <= minimum <= maximum:
+        raise ValueError("Invalid EV minimum power")
+    allowed = row.get("vehicle_ids")
+    if (
+        not isinstance(allowed, list)
+        or not allowed
+        or len(set(allowed)) != len(allowed)
+        or not set(allowed) <= vehicle_ids
+        or (row.get("vehicle_id") is not None and row["vehicle_id"] not in allowed)
+    ):
+        raise ValueError("Invalid EV vehicle membership")
+    actual = row.get("actual")
+    if not isinstance(actual, dict):
+        raise TypeError("Invalid EV connection projection")
+    if actual:
+        identifier(actual.get("session_id"))
+        if actual.get("connected") is not None and type(actual["connected"]) is not bool:
+            raise ValueError("Invalid EV connection state")
+
+
 def receive(value):
     """Validate bounded app projections before dynamic entities or source reads can use them."""
-    from .protocol import identifier
-
     validate_projection_size(value, MAX_API_RESPONSE_BYTES)
 
     if (
@@ -219,85 +325,7 @@ def receive(value):
                 ):
                     raise ValueError("Invalid EV source entity")
             if kind == "vehicles":
-                actual = row.get("actual")
-                if actual is not None:
-                    if (
-                        not isinstance(actual, dict)
-                        or actual.get("source_entity") != row["soc_entity"]
-                        or actual.get("basis")
-                        not in ("measured", "last_known", "estimated_from_meter")
-                        or any(
-                            type(actual.get(field)) not in (int, float)
-                            or not isfinite(actual[field])
-                            or not 0 <= actual[field] <= FULL_SOC_PERCENT
-                            for field in ("soc", "measured_soc")
-                        )
-                    ):
-                        raise ValueError("Invalid EV SoC estimate")
-                    timestamp(actual.get("observed_at"))
-                    timestamp(actual.get("estimate_updated_at"))
-                for field, domain in (
-                    ("connected_entity", "binary_sensor."),
-                    ("charging_entity", "binary_sensor."),
-                    ("location_entity", "device_tracker."),
-                ):
-                    source = row.get(field)
-                    if source is not None and (
-                        not isinstance(source, str)
-                        or not source.startswith(domain)
-                        or len(source) > 127
-                    ):
-                        raise ValueError("Invalid EV recognition source")
-                request = row.get("charging_request")
-                if request is not None:
-                    if (
-                        not isinstance(request, dict)
-                        or request.get("status") != "planned"
-                        or request.get("vehicle_id") != identity
-                    ):
-                        raise ValueError("Invalid EV charging request")
-                    identifier(request.get("id"))
-                    identifier(request.get("version"))
-                    if timestamp(request.get("ready_at")) >= timestamp(request.get("departure")):
-                        raise ValueError("Invalid EV request window")
-                    target_soc = request.get("target_soc")
-                    if (
-                        type(target_soc) not in (int, float)
-                        or not isfinite(target_soc)
-                        or not 0 <= target_soc <= FULL_SOC_PERCENT
-                    ):
-                        raise ValueError("Invalid EV request target")
-                    weekdays = request.get("repeat_weekdays")
-                    if (
-                        not isinstance(weekdays, list)
-                        or any(
-                            type(day) is not int or not 0 <= day < DAYS_PER_WEEK for day in weekdays
-                        )
-                        or len(set(weekdays)) != len(weekdays)
-                    ):
-                        raise ValueError("Invalid EV repeat weekdays")
-                timestamp(row["next_departure"])
-                clock = time.fromisoformat(row["departure_time"])
-                if clock.tzinfo or clock.second or clock.microsecond:
-                    raise ValueError("Invalid daily EV departure clock")
-                capacity = row.get("capacity_kwh")
-                if (
-                    type(capacity) not in (int, float)
-                    or not isfinite(capacity)
-                    or not 0 < capacity <= MAX_EV_CAPACITY_KWH
-                ):
-                    raise ValueError("Invalid usable EV capacity")
-                attribute = row.get("soc_timestamp_attribute")
-                if attribute is not None and (
-                    not isinstance(attribute, str) or not attribute or len(attribute) > 64
-                ):
-                    raise ValueError("Invalid EV sample timestamp attribute")
-                if (
-                    type(row.get("target_soc")) not in (int, float)
-                    or not isfinite(row["target_soc"])
-                    or not 0 <= row["target_soc"] <= FULL_SOC_PERCENT
-                ):
-                    raise ValueError("Invalid EV target SoC")
+                _validate_vehicle(row, identity)
             elif row.get("control") not in ("read_only", "on_off", "variable"):
                 raise ValueError("Invalid EV capability")
             maximum = row.get("maximum_w")
@@ -308,32 +336,7 @@ def receive(value):
             ):
                 raise ValueError("Invalid EV maximum power")
             if kind == "points":
-                minimum = row.get("minimum_w")
-                if (
-                    type(minimum) not in (int, float)
-                    or not isfinite(minimum)
-                    or not 0 <= minimum <= maximum
-                ):
-                    raise ValueError("Invalid EV minimum power")
-                allowed = row.get("vehicle_ids")
-                if (
-                    not isinstance(allowed, list)
-                    or not allowed
-                    or len(set(allowed)) != len(allowed)
-                    or not set(allowed) <= vehicle_ids
-                    or (row.get("vehicle_id") is not None and row["vehicle_id"] not in allowed)
-                ):
-                    raise ValueError("Invalid EV vehicle membership")
-                actual = row.get("actual")
-                if not isinstance(actual, dict):
-                    raise TypeError("Invalid EV connection projection")
-                if actual:
-                    identifier(actual.get("session_id"))
-                    if (
-                        actual.get("connected") is not None
-                        and type(actual["connected"]) is not bool
-                    ):
-                        raise ValueError("Invalid EV connection state")
+                _validate_point(row, maximum, vehicle_ids)
     if vehicle_ids & {point["id"] for point in value["points"]} or any(
         len({point[field] for point in value["points"]}) != len(value["points"])
         for field in ("power_entity", "connected_entity", "energy_entity")

@@ -150,6 +150,8 @@ def test_daily_storage_chart_periods_keyboard_gaps_and_recovery(daily_storage_hi
     expect(page.locator("#storage-history-summary")).to_contain_text("Measurements: 7")
     delayed[0].fulfill(json=quarter_rows)
     wait_for_product_reads(page)
+    expect(page.locator("#storage-history-summary")).to_contain_text("Measurements: 7")
+    expect(canvas).to_be_visible()
     assert (
         page.evaluate(
             "Chart.getChart(document.getElementById('storage-history-chart')).data.datasets[0].data.length"

@@ -321,6 +321,9 @@ def test_automatic_uses_three_identical_complete_days_and_survives_restart(tmp_p
     )
     assert chosen["pv0"][0] == "ha"
     assert status["pv0"]["complete_days"] == 3
+    assert status["pv0"]["comparison_days"] == [
+        (START.date() + timedelta(days=offset)).isoformat() for offset in (3, 2, 1)
+    ]
     assert status["pv0"]["mae_kwh"] == pytest.approx(
         {"pvwatts": 0.1, "ml": 0.2, "ha": 0}, abs=1e-12
     )

@@ -152,7 +152,9 @@ def test_ac_solar_is_counted_once_and_battery_conversion_remains_inside(app_page
         assert bars["Battery charge: DC"] == pytest.approx(-1.44)
 
 
-@pytest.mark.parametrize("defect", ["source_mismatch", "missing_ac_flow", "invalid_efficiency"])
+@pytest.mark.parametrize(
+    "defect", ["source_mismatch", "missing_ac_flow", "invalid_efficiency", "invalid_duration"]
+)
 def test_ac_projection_cannot_hide_invalid_original_evidence(app_page, defect):
     """Moving the boundary must not make corrupt raw DC quantities or missing AC evidence look valid."""
     page, url = app_page
@@ -161,8 +163,10 @@ def test_ac_projection_cannot_hide_invalid_original_evidence(app_page, defect):
         plan["expected_flows"][0]["solar"][1]["used_kwh"] = 2.5
     elif defect == "missing_ac_flow":
         plan["expected_flows"][0]["inverters"].pop()
-    else:
+    elif defect == "invalid_efficiency":
         plan["input_snapshot"]["problem"]["inverters"][1]["efficiency"] = 0
+    else:
+        plan["input_snapshot"]["problem"]["intervals"][0]["duration_h"] = 0
     group = balances(page, url, plan)[0]
     assert group["missing"] == 1
     assert all(
