@@ -937,6 +937,7 @@ def test_optional_setup_catalogue_failure_does_not_block_current_plan(monkeypatc
             coordinator = entry.runtime_data
             request = coordinator.client.request
             attempts = 0
+            failure_receipts = []
             refresh = "setup-one"
 
             async def fail_discovery(method, path, body=None):
@@ -945,6 +946,8 @@ def test_optional_setup_catalogue_failure_does_not_block_current_plan(monkeypatc
                 if path == "/v1/ha/catalogue":
                     if "refresh_failed" not in (body or {}):
                         attempts += 1
+                    else:
+                        failure_receipts.append(body["refresh_failed"])
                     raise ClientError("Discovery temporarily unavailable")
                 data = await request(method, path, body)
                 if path == "/v1/ha/requests":
@@ -964,6 +967,7 @@ def test_optional_setup_catalogue_failure_does_not_block_current_plan(monkeypatc
             coordinator.catalogue_failed_at -= timedelta(minutes=6)
             await coordinator.sync()
             assert attempts == 3
+            assert failure_receipts == ["setup-one", "setup-two", "setup-two"]
 
     asyncio.run(scenario())
 

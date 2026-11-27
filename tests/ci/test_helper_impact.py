@@ -360,6 +360,12 @@ def test_provisioning_helpers_do_not_depend_on_supervisor_boundaries():
             False,
         ),
         ("__import__(target)", False),
+        ("from builtins import __import__ as load\ncallback = load", False),
+        (
+            "from importlib import import_module as load\nload('tests.app.price.support.rates')",
+            True,
+        ),
+        ("from importlib import import_module as load\nload('.rates', package=target)", False),
     ],
 )
 def test_builtin_import_forms_preserve_ha_coverage_without_fabricating_static_ownership(

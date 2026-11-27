@@ -198,7 +198,10 @@ def test_sidebar_failure_is_not_recorded_as_success(tmp_path, monkeypatch):
                 None, "http://homeassistant", None, journal.path, app_request=None
             )
         )
-    assert "sidebar" not in examples.ExampleJournal(journal.path).state["completed"]
+    receipts = examples.ExampleJournal(journal.path).state["completed"]
+    assert "sidebar" not in receipts
+    assert "attempted:sidebar" in receipts
+    assert not any(receipt.startswith("automation:") for receipt in receipts)
 
 
 @pytest.mark.parametrize("outcome", ["rejected", "unexpected_id"])

@@ -236,6 +236,93 @@ def is_pytest_module(path):
     return any(PurePosixPath(path).match(pattern) for pattern in PYTEST_MODULE_PATTERNS)
 
 
+def _import_dependencies(node, package, path, dynamic_names, builtin_import_names):
+    """Return static import names, or None if an import cannot be resolved statically."""
+    if isinstance(node, ast.Import):
+        return [alias.name for alias in node.names]
+    if isinstance(node, ast.ImportFrom):
+        base = node.module or ""
+        if node.level:
+            parts = package.split(".")
+            if node.level > len(parts):
+                raise ValueError(f"Invalid relative test import in {path}")
+            base = ".".join(parts[: len(parts) - node.level + 1] + ([base] if base else []))
+        return [base, *(base + "." + alias.name for alias in node.names)]
+    if not isinstance(node, ast.Call):
+        return ()
+    function = node.func
+    if isinstance(function, ast.Name) and function.id in dynamic_names:
+        builtin_import = function.id in builtin_import_names
+    elif isinstance(function, ast.Attribute) and function.attr in {"import_module", "__import__"}:
+        builtin_import = function.attr == "__import__"
+    else:
+        return ()
+    if (
+        node.args
+        and isinstance(node.args[0], ast.Constant)
+        and isinstance(node.args[0].value, str)
+        and not node.args[0].value.startswith(".")
+        and not (builtin_import and (len(node.args) > 1 or node.keywords))
+    ):
+        return [node.args[0].value]
+    return None
+
+
+def _source_test_dependencies(path, source, test_modules):
+    """Resolve one parsed source and detect conservative coverage requirements."""
+    module = path.removesuffix(".py").replace("/", ".")
+    package = (
+        module.removesuffix(".__init__")
+        if path.endswith("/__init__.py")
+        else module.rpartition(".")[0]
+    )
+    dependencies = set()
+    has_dynamic_imports = False
+    tree = ast.parse(source, filename=path)
+    import_aliases = {
+        (alias.asname or alias.name, alias.name)
+        for node in ast.walk(tree)
+        if isinstance(node, ast.ImportFrom)
+        for alias in node.names
+        if (node.module, alias.name) in {("importlib", "import_module"), ("builtins", "__import__")}
+    }
+    dynamic_names = {"__import__", "import_module"} | {name for name, _ in import_aliases}
+    builtin_import_names = {"__import__"} | {
+        name for name, original in import_aliases if original == "__import__"
+    }
+    direct_calls = {id(node.func) for node in ast.walk(tree) if isinstance(node, ast.Call)}
+    for node in ast.walk(tree):
+        if id(node) not in direct_calls and (
+            isinstance(node, ast.Name)
+            and isinstance(node.ctx, ast.Load)
+            and node.id in dynamic_names
+            or isinstance(node, ast.Attribute)
+            and isinstance(node.ctx, ast.Load)
+            and node.attr in {"import_module", "__import__"}
+        ):
+            has_dynamic_imports = True
+        if (
+            isinstance(node, ast.Name)
+            and node.id == "pytest_plugins"
+            and isinstance(node.ctx, ast.Store)
+            or isinstance(node, ast.alias)
+            and (node.name == "*" or (node.asname or node.name.split(".")[0]) == "pytest_plugins")
+        ):
+            raise ValueError("Unclassified pytest plugin or wildcard declarations require full CI")
+        names = _import_dependencies(node, package, path, dynamic_names, builtin_import_names)
+        if names is None:
+            has_dynamic_imports = True
+            continue
+        for name in names:
+            parts = name.split(".")
+            dependencies.update(
+                test_modules[prefix]
+                for index in range(1, len(parts) + 1)
+                if (prefix := ".".join(parts[:index])) in test_modules
+            )
+    return dependencies, has_dynamic_imports
+
+
 def test_consumer_graph(sources):
     """Parse each source once and return per-helper reachability without candidate execution.
 
@@ -251,89 +338,9 @@ def test_consumer_graph(sources):
     fixture_consumers = {}
     dynamic_importers = set()
     for path, source in sources.items():
-        module = path.removesuffix(".py").replace("/", ".")
-        package = (
-            module.removesuffix(".__init__")
-            if path.endswith("/__init__.py")
-            else module.rpartition(".")[0]
-        )
-        dependencies = set()
-        tree = ast.parse(source, filename=path)
-        import_aliases = {
-            (alias.asname or alias.name, alias.name)
-            for node in ast.walk(tree)
-            if isinstance(node, ast.ImportFrom)
-            for alias in node.names
-            if (node.module, alias.name)
-            in {("importlib", "import_module"), ("builtins", "__import__")}
-        }
-        dynamic_names = {"__import__", "import_module"} | {name for name, _ in import_aliases}
-        builtin_import_names = {"__import__"} | {
-            name for name, original in import_aliases if original == "__import__"
-        }
-        direct_calls = {id(node.func) for node in ast.walk(tree) if isinstance(node, ast.Call)}
-        for node in ast.walk(tree):
-            if id(node) not in direct_calls and (
-                isinstance(node, ast.Name)
-                and isinstance(node.ctx, ast.Load)
-                and node.id in dynamic_names
-                or isinstance(node, ast.Attribute)
-                and isinstance(node.ctx, ast.Load)
-                and node.attr in {"import_module", "__import__"}
-            ):
-                dynamic_importers.add(path)
-            if (
-                isinstance(node, ast.Name)
-                and node.id == "pytest_plugins"
-                and isinstance(node.ctx, ast.Store)
-                or isinstance(node, ast.alias)
-                and (
-                    node.name == "*" or (node.asname or node.name.split(".")[0]) == "pytest_plugins"
-                )
-            ):
-                raise ValueError(
-                    "Unclassified pytest plugin or wildcard declarations require full CI"
-                )
-            names = []
-            if isinstance(node, ast.Import):
-                names = [alias.name for alias in node.names]
-            elif isinstance(node, ast.ImportFrom):
-                base = node.module or ""
-                if node.level:
-                    parts = package.split(".")
-                    if node.level > len(parts):
-                        raise ValueError(f"Invalid relative test import in {path}")
-                    base = ".".join(parts[: len(parts) - node.level + 1] + ([base] if base else []))
-                names = [base, *(base + "." + alias.name for alias in node.names)]
-            elif isinstance(node, ast.Call) and (
-                isinstance(node.func, ast.Name)
-                and node.func.id in dynamic_names
-                or isinstance(node.func, ast.Attribute)
-                and node.func.attr in {"import_module", "__import__"}
-            ):
-                builtin_import = (
-                    isinstance(node.func, ast.Name)
-                    and node.func.id in builtin_import_names
-                    or isinstance(node.func, ast.Attribute)
-                    and node.func.attr == "__import__"
-                )
-                if (
-                    node.args
-                    and isinstance(node.args[0], ast.Constant)
-                    and isinstance(node.args[0].value, str)
-                    and not node.args[0].value.startswith(".")
-                    and not (builtin_import and (len(node.args) > 1 or node.keywords))
-                ):
-                    names = [node.args[0].value]
-                else:
-                    dynamic_importers.add(path)
-            for name in names:
-                parts = name.split(".")
-                dependencies.update(
-                    test_modules[prefix]
-                    for index in range(1, len(parts) + 1)
-                    if (prefix := ".".join(parts[:index])) in test_modules
-                )
+        dependencies, has_dynamic_imports = _source_test_dependencies(path, source, test_modules)
+        if has_dynamic_imports:
+            dynamic_importers.add(path)
         for parent in PurePosixPath(path).parents:
             initializer = str(parent / "__init__.py")
             if initializer in sources:

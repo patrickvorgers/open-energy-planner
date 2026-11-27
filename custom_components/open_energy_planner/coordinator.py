@@ -742,6 +742,162 @@ class PlanCoordinator:
                 return False
             return True
 
+    async def _sync_service_catalogue(self, data, now):
+        """Refresh Energy metadata while preserving rejection, retry and close behaviour."""
+        if data.get("source") == "home_assistant":
+            try:
+                self.catalogue_discovery.configure(
+                    data.get("installation", {}).get("setup_source_entities", [])
+                )
+            except (ValueError, TypeError):
+                if not self.catalogue_bindings_rejected:
+                    self.catalogue_discovery.repair()
+                    _LOGGER.warning(
+                        "Home Assistant source bindings cannot be used for metadata refresh. "
+                        "Previous metadata is retained without freshness confirmation. "
+                        "Check the configured source identities in settings"
+                    )
+                self.catalogue_bindings_rejected = True
+            else:
+                if self.catalogue_bindings_rejected:
+                    self.catalogue_failed_at = None
+                    _LOGGER.info(
+                        "Home Assistant source bindings accepted. Metadata refresh can resume"
+                    )
+                self.catalogue_bindings_rejected = False
+        catalogue_request = data.get("installation", {}).get("setup_discovery_requested")
+        forced_catalogue = self.catalogue_sent is None or (
+            catalogue_request and catalogue_request != self.catalogue_request
+        )
+        if (
+            data.get("source") == "home_assistant"
+            and not self.catalogue_bindings_rejected
+            and (
+                forced_catalogue
+                or self.catalogue_failed_at is None
+                or now - self.catalogue_failed_at >= timedelta(minutes=CATALOGUE_RETRY_MINUTES)
+            )
+        ):
+            try:
+                membership = await self._publish_catalogue(now, force=bool(forced_catalogue))
+                if membership is None:
+                    membership = await self._confirm_catalogue(now)
+                if self.closed:
+                    return False
+                if membership is not None:
+                    if membership.get("devices") is not None:
+                        data["installation"]["devices"] = membership["devices"]
+                    if membership.get("configuration_issue"):
+                        self.revoke_observation_authority()
+                        self.planning_status = {
+                            "status": "not_ready",
+                            "reason": membership["configuration_issue"],
+                        }
+                self.catalogue_failed_at = None
+            except (
+                AuthenticationError,
+                InstallationMismatchError,
+                ReleaseMismatchError,
+                ServerFingerprintMismatch,
+            ):
+                raise
+            except (ClientError, TimeoutError, ValueError, TypeError, KeyError):
+                self.catalogue_discovery.repair()
+                self.catalogue_failed_at = now
+                _LOGGER.debug("Setup catalogue refresh failed", exc_info=True)
+                if catalogue_request:
+                    try:
+                        await self.client.request(
+                            "POST",
+                            "/v1/ha/catalogue",
+                            {"refresh_failed": catalogue_request},
+                        )
+                    except (ClientError, TimeoutError, ValueError, TypeError, KeyError):
+                        _LOGGER.debug("Source refresh outcome could not be confirmed")
+            finally:
+                self.catalogue_sent, self.catalogue_request = now, catalogue_request
+        return True
+
+    async def _sync_service_histories(self, data, intent_at_request, ev_intent_at_request):
+        """Transfer optional Recorder histories without taking command authority."""
+        for request_key, bridge, endpoint, label in (
+            (
+                "forecast_quality_request",
+                self.forecast_history_bridge,
+                "/v1/forecast-quality/history",
+                "Forecast quality",
+            ),
+            ("settlement_request", self.settlement_bridge, "/v1/settlement", "Settlement"),
+        ):
+            pending_history = data.get(request_key)
+            if not pending_history:
+                continue
+            # Publish received control decisions before optional Recorder/network work.
+            self.refresh()
+            try:
+                historical = await bridge.capture(pending_history)
+                if self.closed:
+                    return
+                if historical is not None:
+                    await self.client.request("POST", endpoint, historical)
+            except AuthenticationError:
+                raise
+            except (InstallationMismatchError, ReleaseMismatchError):
+                raise
+            except (ClientError, TimeoutError, ValueError, TypeError, KeyError):
+                _LOGGER.warning(
+                    "%s transfer failed. Retained commands remain independent",
+                    label,
+                    exc_info=True,
+                )
+            if (
+                self.closed
+                or self.schedule.resume_after != intent_at_request
+                or self.ev_intent_generation != ev_intent_at_request
+            ):
+                return
+        for domain, bridge, endpoint in (
+            (
+                "bonus_history",
+                self.history_bridge,
+                "/v1/history",
+            ),
+            (
+                "demand",
+                self.demand_history_bridge,
+                "/v1/demand/history",
+            ),
+            (
+                "solar",
+                self.solar_history_bridge,
+                "/v1/solar/history",
+            ),
+        ):
+            if self.closed:
+                return
+            pending = data.get(domain, {}).get("request")
+            if pending:
+                try:
+                    historical = await bridge.capture(pending)
+                    if self.closed:
+                        return
+                    if historical is not None:
+                        receipt = await self.client.request("POST", endpoint, historical)
+                        diagnostics = receipt.get("diagnostics")
+                        if domain == "bonus_history" and "issue" in receipt:
+                            diagnostics = {"issue": receipt["issue"]}
+                        if not self.closed and isinstance(diagnostics, dict):
+                            self.service_diagnostics[domain] = diagnostics
+                            self._update_snapshot_notification(self.service_diagnostics)
+                except (
+                    InstallationMismatchError,
+                    ReleaseMismatchError,
+                    AuthenticationError,
+                ):
+                    raise
+                except (ClientError, TimeoutError, ValueError, TypeError, KeyError):
+                    _LOGGER.debug("Optional history transfer did not complete", exc_info=True)
+
     async def sync_services(self, _now=None):
         """Service setup, optional virtual projections and Recorder away from plan reconciliation."""
         if self.closed or self.services_lock.locked():
@@ -765,81 +921,8 @@ class PlanCoordinator:
                         return
                 self.market_prices.start(data.get("market_price_request"), self.client)
                 now = dt_util.utcnow()
-                if data.get("source") == "home_assistant":
-                    try:
-                        self.catalogue_discovery.configure(
-                            data.get("installation", {}).get("setup_source_entities", [])
-                        )
-                    except (ValueError, TypeError):
-                        if not self.catalogue_bindings_rejected:
-                            self.catalogue_discovery.repair()
-                            _LOGGER.warning(
-                                "Home Assistant source bindings cannot be used for metadata refresh. "
-                                "Previous metadata is retained without freshness confirmation. "
-                                "Check the configured source identities in settings"
-                            )
-                        self.catalogue_bindings_rejected = True
-                    else:
-                        if self.catalogue_bindings_rejected:
-                            self.catalogue_failed_at = None
-                            _LOGGER.info(
-                                "Home Assistant source bindings accepted. Metadata refresh can resume"
-                            )
-                        self.catalogue_bindings_rejected = False
-                catalogue_request = data.get("installation", {}).get("setup_discovery_requested")
-                forced_catalogue = self.catalogue_sent is None or (
-                    catalogue_request and catalogue_request != self.catalogue_request
-                )
-                if (
-                    data.get("source") == "home_assistant"
-                    and not self.catalogue_bindings_rejected
-                    and (
-                        forced_catalogue
-                        or self.catalogue_failed_at is None
-                        or now - self.catalogue_failed_at
-                        >= timedelta(minutes=CATALOGUE_RETRY_MINUTES)
-                    )
-                ):
-                    try:
-                        membership = await self._publish_catalogue(
-                            now, force=bool(forced_catalogue)
-                        )
-                        if membership is None:
-                            membership = await self._confirm_catalogue(now)
-                        if self.closed:
-                            return
-                        if membership is not None:
-                            if membership.get("devices") is not None:
-                                data["installation"]["devices"] = membership["devices"]
-                            if membership.get("configuration_issue"):
-                                self.revoke_observation_authority()
-                                self.planning_status = {
-                                    "status": "not_ready",
-                                    "reason": membership["configuration_issue"],
-                                }
-                        self.catalogue_failed_at = None
-                    except (
-                        AuthenticationError,
-                        InstallationMismatchError,
-                        ReleaseMismatchError,
-                        ServerFingerprintMismatch,
-                    ):
-                        raise
-                    except (ClientError, TimeoutError, ValueError, TypeError, KeyError):
-                        self.catalogue_discovery.repair()
-                        self.catalogue_failed_at = now
-                        _LOGGER.debug("Setup catalogue refresh failed", exc_info=True)
-                        if catalogue_request:
-                            try:
-                                await self.client.request(
-                                    "POST",
-                                    "/v1/ha/catalogue",
-                                    {"refresh_failed": catalogue_request},
-                                )
-                            except (ClientError, TimeoutError, ValueError, TypeError, KeyError):
-                                _LOGGER.debug("Source refresh outcome could not be confirmed")
-                    finally:
-                        self.catalogue_sent, self.catalogue_request = now, catalogue_request
+                if not await self._sync_service_catalogue(data, now):
+                    return
                 if (
                     self.catalogue_context is not None
                     and self.catalogue_discovery.healthy
@@ -993,85 +1076,7 @@ class PlanCoordinator:
                     or self.ev_intent_generation != ev_intent_at_request
                 ):
                     return
-                for request_key, bridge, endpoint, label in (
-                    (
-                        "forecast_quality_request",
-                        self.forecast_history_bridge,
-                        "/v1/forecast-quality/history",
-                        "Forecast quality",
-                    ),
-                    ("settlement_request", self.settlement_bridge, "/v1/settlement", "Settlement"),
-                ):
-                    pending_history = data.get(request_key)
-                    if not pending_history:
-                        continue
-                    # Publish received control decisions before optional Recorder/network work.
-                    self.refresh()
-                    try:
-                        historical = await bridge.capture(pending_history)
-                        if self.closed:
-                            return
-                        if historical is not None:
-                            await self.client.request("POST", endpoint, historical)
-                    except AuthenticationError:
-                        raise
-                    except (InstallationMismatchError, ReleaseMismatchError):
-                        raise
-                    except (ClientError, TimeoutError, ValueError, TypeError, KeyError):
-                        _LOGGER.warning(
-                            "%s transfer failed. Retained commands remain independent",
-                            label,
-                            exc_info=True,
-                        )
-                    if (
-                        self.closed
-                        or self.schedule.resume_after != intent_at_request
-                        or self.ev_intent_generation != ev_intent_at_request
-                    ):
-                        return
-                for domain, bridge, endpoint in (
-                    (
-                        "bonus_history",
-                        self.history_bridge,
-                        "/v1/history",
-                    ),
-                    (
-                        "demand",
-                        self.demand_history_bridge,
-                        "/v1/demand/history",
-                    ),
-                    (
-                        "solar",
-                        self.solar_history_bridge,
-                        "/v1/solar/history",
-                    ),
-                ):
-                    if self.closed:
-                        return
-                    pending = data.get(domain, {}).get("request")
-                    if pending:
-                        try:
-                            historical = await bridge.capture(pending)
-                            if self.closed:
-                                return
-                            if historical is not None:
-                                receipt = await self.client.request("POST", endpoint, historical)
-                                diagnostics = receipt.get("diagnostics")
-                                if domain == "bonus_history" and "issue" in receipt:
-                                    diagnostics = {"issue": receipt["issue"]}
-                                if not self.closed and isinstance(diagnostics, dict):
-                                    self.service_diagnostics[domain] = diagnostics
-                                    self._update_snapshot_notification(self.service_diagnostics)
-                        except (
-                            InstallationMismatchError,
-                            ReleaseMismatchError,
-                            AuthenticationError,
-                        ):
-                            raise
-                        except (ClientError, TimeoutError, ValueError, TypeError, KeyError):
-                            _LOGGER.debug(
-                                "Optional history transfer did not complete", exc_info=True
-                            )
+                await self._sync_service_histories(data, intent_at_request, ev_intent_at_request)
             except (
                 InstallationMismatchError,
                 ReleaseMismatchError,
