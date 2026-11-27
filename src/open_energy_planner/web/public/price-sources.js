@@ -48,51 +48,66 @@ export class PriceSourceSettings {
         const settings = prices.source_preferences;
         const container = document.getElementById("price-source-controls");
         if (!container) return;
+        if (this.dirty && !discard) return;
         if (!settings?.available_sources?.length) {
-            if (!this.dirty || discard) {
-                container.replaceChildren(); this.controls = []; this.baseline = null;
-                this.area = null; this.version = null;
-            }
+            container.replaceChildren();
+            this.controls = [];
+            this.baseline = null;
+            this.area = null;
+            this.version = null;
             return;
         }
-        if (!this.dirty || discard) {
-            const changedArea = this.area !== prices.market_area;
-            this.area = prices.market_area;
-            this.version = settings.configuration_version;
-            const stored = settings.stored_preferences || settings.preferences || [];
-            const inactive = stored.map(source => source && !settings.available_sources.includes(source) ? source : null);
-            const choices = JSON.stringify([settings.available_sources, settings.source_horizons_hours, inactive]);
-            if (!this.ready || changedArea || this.choices !== choices) {
-                container.replaceChildren(); this.controls = []; this.choices = choices;
-                for (const row of prices.forecast_selection || []) {
-                    const label = text("label", `Forecast preference: ${row.lead_start_hours}–${row.lead_end_hours} hours ahead`, container);
-                    const select = document.createElement("select");
-                    select.id = `price-source-${this.controls.length}`;
-                    select.setAttribute("aria-label", label.textContent);
-                    select.setAttribute("form", "wizard");
-                    select.dataset.pricePreference = "true";
-                    select.setAttribute("data-view-control", "");
-                    const retained = inactive[this.controls.length];
-                    if (retained) {
-                        const option = text("option", "Automatic: Keep saved preference", select);
-                        option.value = RETAIN_SAVED_SOURCE; option.disabled = true;
-                        select.dataset.retainedSource = retained;
-                    }
-                    for (const [value, title] of [["", "Automatic"], ...settings.available_sources.map(source => [source, name(source)])]) {
-                        const horizon = settings.source_horizons_hours?.[value];
-                        const unsupported = value && horizon != null && row.lead_end_hours > horizon;
-                        const option = text("option", unsupported ? `${title}: Up to ${horizon} hours` : title, select);
-                        option.value = value; option.disabled = Boolean(unsupported);
-                    }
-                    select.onchange = () => this.changed();
-                    label.append(select); this.controls.push(select);
-                    if (retained) text("small", `The saved source ${name(retained)} is not supported in this market. Automatic applies until replaced.`, label);
-                }
+
+        const changedArea = this.area !== prices.market_area;
+        this.area = prices.market_area;
+        this.version = settings.configuration_version;
+        const stored = settings.stored_preferences || settings.preferences || [];
+        const inactive = stored.map(source => source && !settings.available_sources.includes(source) ? source : null);
+        const choices = JSON.stringify([settings.available_sources, settings.source_horizons_hours, inactive]);
+        if (!this.ready || changedArea || this.choices !== choices) {
+            container.replaceChildren();
+            this.controls = [];
+            this.choices = choices;
+            for (const row of prices.forecast_selection || []) {
+                this.#appendControl(container, row, settings, inactive[this.controls.length]);
             }
-            this.controls.forEach((control, index) => { control.value = inactive[index] ? RETAIN_SAVED_SOURCE : settings.preferences[index] || ""; });
-            this.baseline = JSON.stringify(this.values);
+        }
+        this.controls.forEach((control, index) => {
+            control.value = inactive[index] ? RETAIN_SAVED_SOURCE : settings.preferences[index] || "";
+        });
+        this.baseline = JSON.stringify(this.values);
+    }
+
+    /** Build one bucket, preserving inactive stored choices and source horizon limits. */
+    #appendControl(container, row, settings, retained) {
+        const label = text("label", `Forecast preference: ${row.lead_start_hours}–${row.lead_end_hours} hours ahead`, container);
+        const select = document.createElement("select");
+        select.id = `price-source-${this.controls.length}`;
+        select.setAttribute("aria-label", label.textContent);
+        select.setAttribute("form", "wizard");
+        select.dataset.pricePreference = "true";
+        select.setAttribute("data-view-control", "");
+        if (retained) {
+            const option = text("option", "Automatic: Keep saved preference", select);
+            option.value = RETAIN_SAVED_SOURCE;
+            option.disabled = true;
+            select.dataset.retainedSource = retained;
+        }
+        for (const [value, title] of [["", "Automatic"], ...settings.available_sources.map(source => [source, name(source)])]) {
+            const horizon = settings.source_horizons_hours?.[value];
+            const unsupported = value && horizon != null && row.lead_end_hours > horizon;
+            const option = text("option", unsupported ? `${title}: Up to ${horizon} hours` : title, select);
+            option.value = value;
+            option.disabled = Boolean(unsupported);
+        }
+        select.onchange = () => this.changed();
+        label.append(select);
+        this.controls.push(select);
+        if (retained) {
+            text("small", `The saved source ${name(retained)} is not supported in this market. Automatic applies until replaced.`, label);
         }
     }
+
     /** Write against the captured area and version, then confirm only the server response. */
     async save(api) {
         const result = await api("/v1/prices/preferences", "PUT", {preferences: this.values, configuration_version: this.version, market_area: this.area});

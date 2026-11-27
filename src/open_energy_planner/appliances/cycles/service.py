@@ -79,6 +79,64 @@ def separate_progress(state):
     return archived, {"devices": progress}
 
 
+def _uniform_phase_boundaries(work, step):
+    """Yield the existing absolute grid plus actual fixed or partial phase edges within one parent interval."""
+    end = step.start + timedelta(hours=step.duration_h)
+    phase_seconds = work.profile.phase_seconds
+    boundary = (int(step.start.timestamp()) // phase_seconds + 1) * phase_seconds
+    while boundary < end.timestamp():
+        yield datetime.fromtimestamp(boundary, step.start.tzinfo)
+        boundary += phase_seconds
+    if work.fixed_start:
+        for offset in work.profile.phase_boundaries:
+            boundary = work.fixed_start + timedelta(seconds=offset)
+            if step.start < boundary < end:
+                yield boundary
+    elif work.profile.duration_seconds % phase_seconds:
+        remainder = work.profile.duration_seconds % phase_seconds
+        boundary = int(step.start.timestamp()) // phase_seconds * phase_seconds + remainder
+        if boundary <= step.start.timestamp():
+            boundary += phase_seconds
+        while boundary < end.timestamp():
+            yield datetime.fromtimestamp(boundary, step.start.tzinfo)
+            boundary += phase_seconds
+
+
+def _uniform_window_edges(
+    work, window, intervals, admitted, parent_boundaries, remaining_edges, remaining_checks
+):
+    """Count checks and new off-grid edges, stopping as soon as the budget is exceeded."""
+    first, last = window
+    additions, checks, extra_edges = set(), 0, 0
+    for step in intervals:
+        if step.start >= last or step.start + timedelta(hours=step.duration_h) <= first:
+            continue
+        for boundary in _uniform_phase_boundaries(work, step):
+            checks += 1
+            if checks > remaining_checks:
+                return None, checks, extra_edges
+            if boundary in admitted or boundary in additions:
+                continue
+            additions.add(boundary)
+            if boundary not in parent_boundaries and boundary.timestamp() % SAMPLE_SECONDS:
+                extra_edges += 1
+            if (
+                extra_edges > remaining_edges
+                or len(admitted) + len(additions) > MAX_REFINED_PLAN_INTERVALS
+            ):
+                return None, checks, extra_edges
+    return additions, checks, extra_edges
+
+
+def _variable_phase_boundaries(work, origins, start, end):
+    """Yield admitted explicit phase edges strictly within their parent interval."""
+    for origin in origins:
+        for offset in work.profile.phase_boundaries:
+            boundary = origin + timedelta(seconds=offset)
+            if start < boundary < end:
+                yield boundary
+
+
 class ApplianceService:
     """Keep hardware authority in HA while persisting exact task/attempt transitions in the app."""
 
@@ -1008,28 +1066,6 @@ class ApplianceService:
             for boundary in (step.start, step.start + timedelta(hours=step.duration_h))
         }
 
-        def uniform_phase_boundaries(work, step):
-            """Yield the existing absolute grid plus actual fixed or partial phase edges within one parent interval."""
-            end = step.start + timedelta(hours=step.duration_h)
-            phase_seconds = work.profile.phase_seconds
-            boundary = (int(step.start.timestamp()) // phase_seconds + 1) * phase_seconds
-            while boundary < end.timestamp():
-                yield datetime.fromtimestamp(boundary, step.start.tzinfo)
-                boundary += phase_seconds
-            if work.fixed_start:
-                for offset in work.profile.phase_boundaries:
-                    boundary = work.fixed_start + timedelta(seconds=offset)
-                    if step.start < boundary < end:
-                        yield boundary
-            elif work.profile.duration_seconds % phase_seconds:
-                remainder = work.profile.duration_seconds % phase_seconds
-                boundary = int(step.start.timestamp()) // phase_seconds * phase_seconds + remainder
-                if boundary <= step.start.timestamp():
-                    boundary += phase_seconds
-                while boundary < end.timestamp():
-                    yield datetime.fromtimestamp(boundary, step.start.tzinfo)
-                    boundary += phase_seconds
-
         for work, first, last in task_windows:
             if work.profile.phase_durations_seconds is not None:
                 edge_count = len(work.profile.power_w) + 1
@@ -1050,34 +1086,17 @@ class ApplianceService:
                 remaining_edges -= edge_count * origin_count
                 remaining_checks -= checks
             else:
-                additions, checks, extra_edges = set(), 0, 0
-                fits = True
-                for step in problem.intervals:
-                    if step.start >= last or step.start + timedelta(hours=step.duration_h) <= first:
-                        continue
-                    for boundary in uniform_phase_boundaries(work, step):
-                        checks += 1
-                        if checks > remaining_checks:
-                            fits = False
-                            break
-                        if boundary not in uniform_boundaries and boundary not in additions:
-                            additions.add(boundary)
-                            if (
-                                boundary not in parent_boundaries
-                                and boundary.timestamp() % SAMPLE_SECONDS
-                            ):
-                                extra_edges += 1
-                            if (
-                                extra_edges > remaining_edges
-                                or len(uniform_boundaries) + len(additions)
-                                > MAX_REFINED_PLAN_INTERVALS
-                            ):
-                                fits = False
-                                break
-                    if not fits:
-                        break
+                additions, checks, extra_edges = _uniform_window_edges(
+                    work,
+                    (first, last),
+                    problem.intervals,
+                    uniform_boundaries,
+                    parent_boundaries,
+                    remaining_edges,
+                    remaining_checks,
+                )
                 remaining_checks -= min(checks, remaining_checks)
-                if not fits:
+                if additions is None:
                     self._phase_limited_entities.add(work.entity_id)
                     if work.entity_id not in excluded_entities:
                         entities.discard(work.entity_id)
@@ -1224,12 +1243,11 @@ class ApplianceService:
                     if end <= first or step.start >= last:
                         continue
                     if work.profile.phase_durations_seconds is not None:
-                        for origin in origins_by_entity[work.entity_id]:
-                            for offset in work.profile.phase_boundaries:
-                                instant_boundary = origin + timedelta(seconds=offset)
-                                if step.start < instant_boundary < end:
-                                    boundaries.add(instant_boundary)
-                        continue
+                        boundaries.update(
+                            _variable_phase_boundaries(
+                                work, origins_by_entity[work.entity_id], step.start, end
+                            )
+                        )
                 from itertools import pairwise
 
                 for left, right in pairwise(sorted(boundaries)):

@@ -139,7 +139,17 @@ def test_control_retries_create_only_one_new_plan_and_ack_is_not_execution(tmp_p
     asyncio.run(scenario())
 
 
-@pytest.mark.parametrize("body", [[], {"enabled": "false"}, {"enabled": True}])
+@pytest.mark.parametrize(
+    "body",
+    [
+        [],
+        {"enabled": "false"},
+        {"enabled": True},
+        {"enabled": False, "request_id": ""},
+        {"enabled": False, "request_id": 123},
+        {"enabled": False, "request_id": "x" * 129},
+    ],
+)
 def test_bad_controls_do_not_change_persisted_intent(tmp_path, body):
     """Send malformed enable requests. Return HTTP 400 while persisted enable intent stays unchanged."""
 
