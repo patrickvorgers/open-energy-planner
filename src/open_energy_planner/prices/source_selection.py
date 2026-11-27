@@ -101,35 +101,7 @@ class SourceSelection:
         self.settings_name = f"source-preferences-{self.area}.json"
         self._restoration_issue = self.issue
         try:
-            if documents.exists(self.state_name):
-                loaded = documents.read(self.state_name)
-                buckets = {str(index) for index in range(LEAD_BUCKET_COUNT)}
-                if not isinstance(loaded, dict) or any(
-                    str(bucket) not in buckets
-                    or not isinstance(state, dict)
-                    or state.get("preferred_source") not in self.known_sources
-                    or state.get("challenger") not in (None, *self.known_sources)
-                    or type(state.get("streak")) is not int
-                    or state["streak"] < 0
-                    for bucket, state in loaded.items()
-                ):
-                    raise ValueError("Invalid saved forecast recommendation")
-                for state in loaded.values():
-                    date.fromisoformat(state["assessed_on"])
-                self.states = {}
-                current_pairs = {(pair.primary, pair.alternative) for pair in self.comparisons}
-                for bucket, state in loaded.items():
-                    if state["preferred_source"] not in self.sources:
-                        continue
-                    identity = (state.get("primary_source"), state.get("alternative_source"))
-                    if (
-                        not self.comparisons
-                        or state.get("challenger") not in (None, *self.sources)
-                        or identity != (None, None)
-                        and identity not in current_pairs
-                    ):
-                        state = {"preferred_source": state["preferred_source"]}
-                    self.states[int(bucket)] = state
+            self._restore_recommendations(documents)
             if documents.exists(self.settings_name):
                 saved = documents.read(self.settings_name)
                 # Retain historical choices without silently rewriting unrelated preferences.
@@ -142,6 +114,38 @@ class SourceSelection:
         except (OSError, ValueError, TypeError, KeyError):
             self.issue = "forecast_selection_storage_unavailable"
             self._restoration_issue = self.issue
+
+    def _restore_recommendations(self, documents):
+        """Validate persisted scores before replacing legacy defaults with eligible recommendations."""
+        if documents.exists(self.state_name):
+            loaded = documents.read(self.state_name)
+            buckets = {str(index) for index in range(LEAD_BUCKET_COUNT)}
+            if not isinstance(loaded, dict) or any(
+                str(bucket) not in buckets
+                or not isinstance(state, dict)
+                or state.get("preferred_source") not in self.known_sources
+                or state.get("challenger") not in (None, *self.known_sources)
+                or type(state.get("streak")) is not int
+                or state["streak"] < 0
+                for bucket, state in loaded.items()
+            ):
+                raise ValueError("Invalid saved forecast recommendation")
+            for state in loaded.values():
+                date.fromisoformat(state["assessed_on"])
+            self.states = {}
+            current_pairs = {(pair.primary, pair.alternative) for pair in self.comparisons}
+            for bucket, state in loaded.items():
+                if state["preferred_source"] not in self.sources:
+                    continue
+                identity = (state.get("primary_source"), state.get("alternative_source"))
+                if (
+                    not self.comparisons
+                    or state.get("challenger") not in (None, *self.sources)
+                    or identity != (None, None)
+                    and identity not in current_pairs
+                ):
+                    state = {"preferred_source": state["preferred_source"]}
+                self.states[int(bucket)] = state
 
     def validate(
         self, preferences, *, enforce_horizons=True, restoring=False, retain_inactive=False
