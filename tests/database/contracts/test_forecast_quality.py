@@ -808,6 +808,15 @@ def test_frozen_household_device_and_pv_evidence_survives_restart_without_hindsi
         }
     assert plan == old_plan
 
+    archive.documents.write("quality-components-original.json", {"selected": False})
+    missing_components = evidence(
+        plan, archive, archive.documents, solar, START + timedelta(hours=4)
+    )
+    assert missing_components["series"] == [household, pv]
+    assert missing_components["issues"] == [
+        "Original household or component forecast evidence unavailable"
+    ]
+
 
 @pytest.mark.parametrize(
     "scheduled_task", [False, True], ids=["baseline-exclusion", "appliance-task"]

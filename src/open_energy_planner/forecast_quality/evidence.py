@@ -135,75 +135,11 @@ def _solar_hourly_issues(source, inverter, siblings, meter_readings, feedback, s
     return hourly_issues
 
 
-def evidence(
-    plan,
-    archive,
-    demand_documents,
-    solar_documents,
-    now,
-    *,
-    window=None,
-    names=None,
-    solar_feedback=None,
-    weather_documents=None,
+def _append_demand_evidence(
+    result, entries, plan, archive, demand_documents, sources, start, end, now, names
 ):
-    """Resolve frozen forecasts and HA evidence without rerunning models or inferring historic knowledge.
-
-    Args:
-        plan: Original plan or frozen daily context with retained source bindings.
-        archive: Independent cumulative hourly measurement archive in kWh.
-        demand_documents: Original demand forecast and configuration documents.
-        solar_documents: Original PV forecast and configuration documents.
-        weather_documents: Original normalized weather evidence for irradiance.
-        now: Aware evaluation time, reduced by the Recorder completion delay.
-        window: Optional aware UTC (start, end) datetimes replacing interval-derived
-            bounds and MAX_VIEW_HOURS. Callers must bound this window. Whole UTC
-            hours align with measurements. Fractional-hour day edges lack actuals.
-        names: Current Energy names keyed by the archived meter identity. Only
-            labels change. Removed sources retain their captured name.
-        solar_feedback: Immutable runtime snapshots keyed by source, production
-            meter and feedback sensor. An active unavailable snapshot stays closed.
-
-    Returns:
-        Series, issues and evidence version. Daily contexts need no problem intervals
-        and return None for their absent plan_id and generated_at.
-    """
-    feedback_by_source = solar_feedback or {}
-    unavailable_sensors = {
-        binding[2]
-        for binding, history in feedback_by_source.items()
-        if history is None or history.entity_id != binding[2] or history.checked_until > now
-    }
-    result = {
-        "plan_id": plan.get("plan_id"),
-        "generated_at": plan.get("generated_at"),
-        "as_of": now.isoformat(),
-        "series": [],
-        "issues": [],
-    }
-    snapshot = plan.get("input_snapshot", {})
-    intervals = snapshot.get("problem", {}).get("intervals", [])
-    sources = plan.get("forecast_quality_sources")
-    if (not intervals and window is None) or sources is None:
-        return {
-            **result,
-            "issues": ["This original plan predates retained forecast-quality source bindings"],
-        }
-    if window is not None:
-        start, end = window
-    else:
-        start = (
-            datetime.fromisoformat(intervals[0]["start"])
-            .astimezone(UTC)
-            .replace(minute=0, second=0, microsecond=0)
-        )
-        last = intervals[-1]
-        finish = datetime.fromisoformat(last["start"]) + timedelta(hours=last["duration_h"])
-        end = min(
-            finish.replace(minute=0, second=0, microsecond=0),
-            start + timedelta(hours=MAX_VIEW_HOURS),
-        )
-    for entry in snapshot.get("demand_evidence", []):
+    """Resolve retained household and device comparisons in original source order."""
+    for entry in entries:
         version = entry["forecast_version"]
         try:
             path = (
@@ -312,6 +248,88 @@ def evidence(
                     result["series"].append(row)
         except (FileNotFoundError, KeyError, TypeError, ValueError):
             result["issues"].append("Original household or component forecast evidence unavailable")
+
+
+def evidence(
+    plan,
+    archive,
+    demand_documents,
+    solar_documents,
+    now,
+    *,
+    window=None,
+    names=None,
+    solar_feedback=None,
+    weather_documents=None,
+):
+    """Resolve frozen forecasts and HA evidence without rerunning models or inferring historic knowledge.
+
+    Args:
+        plan: Original plan or frozen daily context with retained source bindings.
+        archive: Independent cumulative hourly measurement archive in kWh.
+        demand_documents: Original demand forecast and configuration documents.
+        solar_documents: Original PV forecast and configuration documents.
+        weather_documents: Original normalized weather evidence for irradiance.
+        now: Aware evaluation time, reduced by the Recorder completion delay.
+        window: Optional aware UTC (start, end) datetimes replacing interval-derived
+            bounds and MAX_VIEW_HOURS. Callers must bound this window. Whole UTC
+            hours align with measurements. Fractional-hour day edges lack actuals.
+        names: Current Energy names keyed by the archived meter identity. Only
+            labels change. Removed sources retain their captured name.
+        solar_feedback: Immutable runtime snapshots keyed by source, production
+            meter and feedback sensor. An active unavailable snapshot stays closed.
+
+    Returns:
+        Series, issues and evidence version. Daily contexts need no problem intervals
+        and return None for their absent plan_id and generated_at.
+    """
+    feedback_by_source = solar_feedback or {}
+    unavailable_sensors = {
+        binding[2]
+        for binding, history in feedback_by_source.items()
+        if history is None or history.entity_id != binding[2] or history.checked_until > now
+    }
+    result = {
+        "plan_id": plan.get("plan_id"),
+        "generated_at": plan.get("generated_at"),
+        "as_of": now.isoformat(),
+        "series": [],
+        "issues": [],
+    }
+    snapshot = plan.get("input_snapshot", {})
+    intervals = snapshot.get("problem", {}).get("intervals", [])
+    sources = plan.get("forecast_quality_sources")
+    if (not intervals and window is None) or sources is None:
+        return {
+            **result,
+            "issues": ["This original plan predates retained forecast-quality source bindings"],
+        }
+    if window is not None:
+        start, end = window
+    else:
+        start = (
+            datetime.fromisoformat(intervals[0]["start"])
+            .astimezone(UTC)
+            .replace(minute=0, second=0, microsecond=0)
+        )
+        last = intervals[-1]
+        finish = datetime.fromisoformat(last["start"]) + timedelta(hours=last["duration_h"])
+        end = min(
+            finish.replace(minute=0, second=0, microsecond=0),
+            start + timedelta(hours=MAX_VIEW_HOURS),
+        )
+    _append_demand_evidence(
+        result,
+        snapshot.get("demand_evidence", []),
+        plan,
+        archive,
+        demand_documents,
+        sources,
+        start,
+        end,
+        now,
+        names,
+    )
     for entry in snapshot.get("solar_evidence", []):
         try:
             forecast = solar_documents.read("forecast-" + entry["forecast_version"] + ".json")[
