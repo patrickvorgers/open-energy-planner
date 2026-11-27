@@ -336,43 +336,7 @@ class InstallationProblem:
                 raise ValueError("Intervals must be contiguous in absolute time")
         for name in ("grid_import_limit_w", "grid_export_limit_w"):
             nonnegative(name, getattr(self, name))
-        ends = {step.start + timedelta(hours=step.duration_h) for step in self.intervals}
-        if (
-            not isinstance(self.thermal_work, tuple)
-            or any(not isinstance(work, ThermalWork) for work in self.thermal_work)
-            or len({work.device_id for work in self.thermal_work}) != len(self.thermal_work)
-            or any(len(work.demand_kwh) != len(self.intervals) for work in self.thermal_work)
-            or any(
-                work.ambient_profile_c and len(work.ambient_profile_c) != len(self.intervals)
-                for work in self.thermal_work
-            )
-        ):
-            raise ValueError("Invalid thermal storage work")
-        if (
-            not isinstance(self.reserve_checkpoints, tuple)
-            or any(
-                not isinstance(end, datetime) or end.utcoffset() is None or end not in ends
-                for end in self.reserve_checkpoints
-            )
-            or tuple(sorted(set(self.reserve_checkpoints))) != self.reserve_checkpoints
-        ):
-            raise ValueError("Invalid original reserve checkpoints")
-        if (
-            not isinstance(self.ev_work, tuple)
-            or any(not isinstance(work, EVWork) for work in self.ev_work)
-            or any(
-                len({getattr(work, identity) for work in self.ev_work}) != len(self.ev_work)
-                for identity in ("session_id", "point_id", "vehicle_id")
-            )
-        ):
-            raise ValueError("Invalid or multiply connected EV work")
-        if (
-            not isinstance(self.appliances, tuple)
-            or any(not isinstance(work, ApplianceWork) for work in self.appliances)
-            or len({work.task_id for work in self.appliances}) != len(self.appliances)
-            or len({work.entity_id for work in self.appliances}) != len(self.appliances)
-        ):
-            raise ValueError("Invalid or overlapping appliance work")
+        self._validate_work()
         if not all(
             isinstance(values, tuple)
             for values in (self.inverters, self.batteries, self.pv_sources)
@@ -432,6 +396,46 @@ class InstallationProblem:
                 )
             ):
                 raise ValueError("PV and battery sharing requires a hybrid inverter")
+
+    def _validate_work(self):
+        """Validate device work uniqueness and reserve checkpoints against the original intervals."""
+        ends = {step.start + timedelta(hours=step.duration_h) for step in self.intervals}
+        if (
+            not isinstance(self.thermal_work, tuple)
+            or any(not isinstance(work, ThermalWork) for work in self.thermal_work)
+            or len({work.device_id for work in self.thermal_work}) != len(self.thermal_work)
+            or any(len(work.demand_kwh) != len(self.intervals) for work in self.thermal_work)
+            or any(
+                work.ambient_profile_c and len(work.ambient_profile_c) != len(self.intervals)
+                for work in self.thermal_work
+            )
+        ):
+            raise ValueError("Invalid thermal storage work")
+        if (
+            not isinstance(self.reserve_checkpoints, tuple)
+            or any(
+                not isinstance(end, datetime) or end.utcoffset() is None or end not in ends
+                for end in self.reserve_checkpoints
+            )
+            or tuple(sorted(set(self.reserve_checkpoints))) != self.reserve_checkpoints
+        ):
+            raise ValueError("Invalid original reserve checkpoints")
+        if (
+            not isinstance(self.ev_work, tuple)
+            or any(not isinstance(work, EVWork) for work in self.ev_work)
+            or any(
+                len({getattr(work, identity) for work in self.ev_work}) != len(self.ev_work)
+                for identity in ("session_id", "point_id", "vehicle_id")
+            )
+        ):
+            raise ValueError("Invalid or multiply connected EV work")
+        if (
+            not isinstance(self.appliances, tuple)
+            or any(not isinstance(work, ApplianceWork) for work in self.appliances)
+            or len({work.task_id for work in self.appliances}) != len(self.appliances)
+            or len({work.entity_id for work in self.appliances}) != len(self.appliances)
+        ):
+            raise ValueError("Invalid or overlapping appliance work")
 
 
 @dataclass(frozen=True)
