@@ -286,6 +286,7 @@ def test_source_repairs_accumulate_across_hours_with_distinct_roof_profiles(seco
         return {"roof": 0.2, "garage": 0.1, "battery": 0}
 
     _, writes = repair_documents(hourly, fine, roles, ["dish"], {"dish"}, sample=sample)
+    assert {"hour": hourly, "5minute": fine} == originals
     for period, target, width in (("hour", hourly, 1), ("5minute", fine, 12)):
         for entity, rows in writes[period].items():
             replacements = {row["start"]: row for row in rows}
