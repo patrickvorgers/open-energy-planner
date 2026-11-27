@@ -18,6 +18,40 @@ MAX_ENTITY_ID_LENGTH = 127
 MAX_BATTERY_CAPACITY_KWH = 1000000.0
 
 
+def _grid_suggestions(source, term, configured_power):
+    """Read the signed power channels and admit each configured import/export term once."""
+    connection_power = {
+        power
+        for power_source in (source, *source.get("power", []))
+        if (power := configured_power(power_source))
+    }
+    # Current HA stores one import/export pair per source. Older configurations
+    # group routes. Prefer the current shape without counting either channel twice.
+    incoming = (
+        [{"stat_energy_from": source["stat_energy_from"]}]
+        if source.get("stat_energy_from") is not None
+        else source.get("flow_from", [])
+    )
+    outgoing = (
+        [{"stat_energy_to": source["stat_energy_to"]}]
+        if source.get("stat_energy_to") is not None
+        else source.get("flow_to", [])
+    )
+    complete = bool(incoming)
+    imports, exports = [], []
+    for routes, field, sign, collected in (
+        (incoming, "stat_energy_from", 1, imports),
+        (outgoing, "stat_energy_to", -1, exports),
+    ):
+        for route in routes:
+            entity = route.get(field)
+            valid = term(entity, sign)
+            complete &= valid
+            if valid:
+                collected.append(entity)
+    return complete, imports, exports, connection_power
+
+
 async def energy_suggestions(hass):
     """Read Energy sources independently of current measurements and Recorder history.
 
@@ -90,46 +124,20 @@ async def energy_suggestions(hass):
                     **({"power_entity": power} if (power := configured_power(consumer)) else {}),
                 }
             )
-    imports = exports = 0
+    grid = result["settlement"]
     selected_forecasts = {}
-    export_channels = []
     explicit_power_channels = set()
     storage = False
     for source in (manager.data or {}).get("energy_sources", []):
         kind = source.get("type")
         if kind == "grid":
-            connection_power = set()
-            for power_source in (source, *source.get("power", [])):
-                if power := configured_power(power_source):
-                    connection_power.add(power)
+            valid, imports, exports, connection_power = _grid_suggestions(
+                source, term, configured_power
+            )
+            complete &= valid
             explicit_power_channels.update(connection_power)
-            # Current HA stores one import/export pair per source. Older configurations
-            # group routes. Prefer the current shape without counting either channel twice.
-            incoming = (
-                [{"stat_energy_from": source["stat_energy_from"]}]
-                if source.get("stat_energy_from") is not None
-                else source.get("flow_from", [])
-            )
-            outgoing = (
-                [{"stat_energy_to": source["stat_energy_to"]}]
-                if source.get("stat_energy_to") is not None
-                else source.get("flow_to", [])
-            )
-            complete &= bool(incoming)
-            for route in incoming:
-                entity = route.get("stat_energy_from")
-                valid = term(entity, 1)
-                complete &= valid
-                imports += int(valid)
-                if valid:
-                    result["settlement"]["imports"].append(entity)
-            for route in outgoing:
-                valid = term(route.get("stat_energy_to"), -1)
-                complete &= valid
-                exports += int(valid)
-                if valid:
-                    export_channels.append(route["stat_energy_to"])
-                    result["settlement"]["exports"].append(route["stat_energy_to"])
+            grid["imports"].extend(imports)
+            grid["exports"].extend(exports)
         elif kind == "solar":
             result["solar"] = True
             entity = sensor_id(source.get("stat_energy_from"))
@@ -194,11 +202,11 @@ async def energy_suggestions(hass):
     selected_power = explicit_power_channels
     result["grid_power_entities"] = sorted(selected_power)
     result["grid_power"] = next(iter(selected_power)) if len(selected_power) == 1 else None
-    result["grid_export"] = export_channels[0] if export_channels else None
+    result["grid_export"] = grid["exports"][0] if grid["exports"] else None
     if (
         not complete
-        or not imports
-        or ((result["solar"] or storage) and not exports)
+        or not grid["imports"]
+        or ((result["solar"] or storage) and not grid["exports"])
         or len({energy_term["entity_id"] for energy_term in result["terms"]})
         != len(result["terms"])
     ):

@@ -854,6 +854,11 @@ def test_installation_energy_balance_prefill_requires_all_declared_channels(comp
                 energy_term["entity_id"]: energy_term["sign"] for energy_term in result["terms"]
             } == expected
             assert result["energy_status"] == "ready"
+            assert result["settlement"] == {
+                "imports": ["sensor.incoming"],
+                "exports": ["sensor.outgoing"],
+            }
+            assert result["grid_export"] == "sensor.outgoing"
             assert manager.data["energy_sources"] == sources
 
     asyncio.run(scenario())

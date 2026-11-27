@@ -25,6 +25,44 @@ REPAIR_BOUNDARY_MARGIN_SECONDS = 20
 SOURCE_OWNERSHIP_KEY = "oep_test_fixture.balance_sources"
 
 
+def _matches_repair_rows(before, expected):
+    """Compare each journalled counter against the Recorder readback."""
+    if not expected:
+        return False
+    for period, entities in expected.items():
+        for entity, rows in entities.items():
+            actual = {row["start"]: row for row in before[period].get(entity, [])}
+            for row in rows:
+                current = actual.get(row["start"], {})
+                if any(
+                    abs(current.get(field, float("inf")) - row[field]) > ENERGY_TOLERANCE_KWH
+                    for field in ("sum", "state")
+                    if row.get(field) is not None
+                ):
+                    return False
+    return True
+
+
+async def _resolve_interrupted_repair(store, journal, before, resolution, *, apply):
+    """Close a proven interrupted outcome without queuing any Recorder changes."""
+    if (
+        apply
+        or journal.get("status") != "applying"
+        or resolution != journal.get("proposal", {}).get("revision")
+    ):
+        raise ValueError("Recovery requires the exact interrupted revision and a separate call")
+    if _matches_repair_rows(before, journal.get("after")):
+        status = "completed"
+    elif _matches_repair_rows(before, journal.get("before")):
+        status = "aborted"
+    else:
+        raise ValueError(
+            "Recorder has a mixed or unverifiable outcome. No automatic recovery is permitted"
+        )
+    await store.async_save({**journal, "status": status})
+    return {"revision": resolution, "journal_status": status, "applied": False}
+
+
 def declare_sources(hass, entry, roles, sample):
     """Bind repair authority and the mode's canonical quarter-kWh sampler to this fixture entry."""
     owners = hass.data.setdefault(SOURCE_OWNERSHIP_KEY, {})
@@ -85,43 +123,9 @@ async def setup_balance(hass, entry):
             before = await read()
             journal = await store.async_load() or {}
             if resolution := call.data.get("resolve_ambiguous_revision"):
-                if (
-                    call.data.get("apply")
-                    or journal.get("status") != "applying"
-                    or resolution != journal.get("proposal", {}).get("revision")
-                ):
-                    raise ValueError(
-                        "Recovery requires the exact interrupted revision and a separate call"
-                    )
-
-                def matches(expected):
-                    """Accept recovery only when every journalled row has one proven outcome."""
-                    if not expected:
-                        return False
-                    for period, entities in expected.items():
-                        for entity, rows in entities.items():
-                            actual = {row["start"]: row for row in before[period].get(entity, [])}
-                            for row in rows:
-                                current = actual.get(row["start"], {})
-                                if any(
-                                    abs(current.get(field, float("inf")) - row[field])
-                                    > ENERGY_TOLERANCE_KWH
-                                    for field in ("sum", "state")
-                                    if row.get(field) is not None
-                                ):
-                                    return False
-                    return True
-
-                if matches(journal.get("after")):
-                    status = "completed"
-                elif matches(journal.get("before")):
-                    status = "aborted"
-                else:
-                    raise ValueError(
-                        "Recorder has a mixed or unverifiable outcome. No automatic recovery is permitted"
-                    )
-                await store.async_save({**journal, "status": status})
-                return {"revision": resolution, "journal_status": status, "applied": False}
+                return await _resolve_interrupted_repair(
+                    store, journal, before, resolution, apply=call.data.get("apply")
+                )
             repairs, writes = repair_documents(
                 before["hour"],
                 before["5minute"],

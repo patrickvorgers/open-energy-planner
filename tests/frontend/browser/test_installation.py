@@ -348,6 +348,10 @@ def test_installation_summary_rejects_partial_solar_total_after_last_panel_remov
     expect(capacity).to_have_text("8 kWp")
     expect(page.locator("#review-solar")).to_have_text("2 sources: 8 kWp")
     page.get_by_role("button", name="Cancel", exact=True).click()
+    panel_summary = page.locator("#installation-summary .solar-panel-summary")
+    expect(panel_summary.get_by_role("heading", name="Panel group 1", exact=True)).to_be_visible()
+    capacity_fact = panel_summary.locator("div").filter(has_text="Panel capacity (kWp)")
+    expect(capacity_fact.get_by_role("definition")).to_have_text("5")
     assert read_settings(page, url)["solar"] == original["solar"]
     assert read_settings(page, url)["installation"] == original["installation"]
 

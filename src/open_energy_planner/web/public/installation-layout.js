@@ -18,6 +18,32 @@ function summaryFact(list, title, value) {
     row.append(term, detail); list.append(row);
 }
 
+/** Format a configured field for the read-only installation summary. */
+function summaryInputValue(input, feedInDisabled) {
+    const {key} = input.dataset;
+    if (key === "panel_azimuth") return azimuthLabel(input.value === "" ? null : Number(input.value));
+    if (input.type === "checkbox") {
+        const checked = input.checked && (input.id !== "allow-feed-in" || !feedInDisabled);
+        return checked ? "Enabled" : "Off";
+    }
+    if (!input.value) return "Not configured";
+    if (key === "minimum_soc") return percentage(Number(input.value));
+    if (key === "wear_cost_per_kwh") return configuredRate(Number(input.value));
+    return input.selectedOptions?.[0]?.textContent || input.value;
+}
+
+/** Append visible field values to their owning panel or the main summary. */
+function appendInputSummary(root, list, panelLists, feedInDisabled) {
+    for (const input of root?.querySelectorAll("input,select") || []) {
+        if (input.closest(".calibration-fields")?.hidden) continue;
+        if (input.type === "hidden" || input.id === "grid-invert" || input.dataset.key === "panel_name" || input.hasAttribute("data-view-control")) continue;
+        if (["grid", "export-energy"].includes(input.id) || input.dataset.key === "inverter_id") continue;
+        const title = input.getAttribute("aria-label") || [...(input.labels?.[0]?.childNodes || [])].filter(node => node.nodeType === Node.TEXT_NODE).map(node => node.textContent).join("").trim();
+        const facts = panelLists.get(input.closest(".solar-panel")) || list;
+        summaryFact(facts, title, summaryInputValue(input, feedInDisabled));
+    }
+}
+
 /** Present the existing setup draft without owning validation, writes or HA discovery. */
 export class InstallationLayout {
     /** Reuse SaveBar locks and the setup module's navigation and refresh boundaries. */
@@ -267,15 +293,7 @@ export class InstallationLayout {
             panelLists.set(group, facts);
             panelSections.push(section);
         }
-        for (const input of root?.querySelectorAll("input,select") || []) {
-            if (input.closest(".calibration-fields")?.hidden) continue;
-            if (input.type === "hidden" || input.id === "grid-invert" || input.dataset.key === "panel_name" || input.hasAttribute("data-view-control")) continue;
-            const title = input.getAttribute("aria-label") || [...(input.labels?.[0]?.childNodes || [])].filter(node => node.nodeType === Node.TEXT_NODE).map(node => node.textContent).join("").trim();
-            if (["grid", "export-energy"].includes(input.id) || input.dataset.key === "inverter_id") continue;
-            const checked = input.checked && (input.id !== "allow-feed-in" || !feedInDisabled);
-            const value = input.type === "checkbox" ? (checked ? "Enabled" : "Off") : input.dataset.key === "minimum_soc" ? (input.value === "" ? "Not configured" : percentage(Number(input.value))) : !input.value ? "Not configured" : input.dataset.key === "wear_cost_per_kwh" ? configuredRate(Number(input.value)) : input.selectedOptions?.[0]?.textContent || input.value;
-            summaryFact(panelLists.get(input.closest(".solar-panel")) || list, title, input.dataset.key === "panel_azimuth" ? azimuthLabel(input.value === "" ? null : Number(input.value)) : value);
-        }
+        appendInputSummary(root, list, panelLists, feedInDisabled);
         if (this.area === 0) for (const [title, value] of this.gridSources || []) summaryFact(list, title, value);
         if (this.area === 2 && root) summaryFact(list, "Usable capacity source", "Home Assistant Energy: Read-only");
         summary.append(tag, heading, list, ...panelSections);

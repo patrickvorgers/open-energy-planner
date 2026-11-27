@@ -104,6 +104,37 @@ def measured(archive, sources, terms, start, end):
     return result, max(receipts) if receipts else None
 
 
+def _solar_hourly_issues(source, inverter, siblings, meter_readings, feedback, start, end):
+    """Keep hours with clipping or unproven unrestricted production out of accuracy scores."""
+    boundary = source.get("measurement_boundary", "ac")
+    actual, _ = meter_readings[source["entity_id"]]
+    source_definition = parse_source(source) if source.get("curtailment_entity_id") else None
+    hourly_issues = {}
+    hour = start
+    while hour < end:
+        if actual.get(hour) is not None:
+            clipping_issue = ac_comparison_issue(
+                boundary,
+                inverter["ac_limit_w"],
+                tuple(
+                    meter_readings[other["entity_id"]][0].get(hour)
+                    if other.get("measurement_boundary", "ac") == "ac"
+                    else None
+                    for other in siblings
+                ),
+            )
+            if clipping_issue:
+                hourly_issues[hour] = clipping_issue
+        if source_definition and not unrestricted_interval(
+            source_definition, hour, hour + timedelta(hours=1), feedback
+        ):
+            hourly_issues[hour] = (
+                "Curtailment feedback does not establish unrestricted production for this hour"
+            )
+        hour += timedelta(hours=1)
+    return hourly_issues
+
+
 def evidence(
     plan,
     archive,
@@ -333,32 +364,9 @@ def evidence(
                                 feedback = load_feedback(solar_documents, sensor, now)
                             except (OSError, KeyError, ValueError, TypeError):
                                 pass
-                source_definition = (
-                    parse_source(source) if source.get("curtailment_entity_id") else None
+                hourly_issues = _solar_hourly_issues(
+                    source, inverter, siblings, meter_readings, feedback, start, end
                 )
-                hourly_issues = {}
-                hour = start
-                while hour < end:
-                    if actual.get(hour) is not None:
-                        clipping_issue = ac_comparison_issue(
-                            boundary,
-                            inverter["ac_limit_w"],
-                            tuple(
-                                meter_readings[other["entity_id"]][0].get(hour)
-                                if other.get("measurement_boundary", "ac") == "ac"
-                                else None
-                                for other in siblings
-                            ),
-                        )
-                        if clipping_issue:
-                            hourly_issues[hour] = clipping_issue
-                    if source_definition and not unrestricted_interval(
-                        source_definition, hour, hour + timedelta(hours=1), feedback
-                    ):
-                        hourly_issues[hour] = (
-                            "Curtailment feedback does not establish unrestricted production for this hour"
-                        )
-                    hour += timedelta(hours=1)
                 row = series(
                     identity,
                     (names or {}).get(

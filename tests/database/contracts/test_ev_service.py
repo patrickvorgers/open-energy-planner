@@ -681,6 +681,39 @@ def test_small_ha_clock_skew_is_fresh_but_never_extends_maximum_report_age(servi
     assert service.report == before
 
 
+@pytest.mark.parametrize(
+    "fault, reason",
+    [
+        ("future_soc", "SoC provenance is invalid"),
+        ("unknown_soc", "Unknown SoC cannot have a claimed measurement timestamp"),
+        ("unbound_recognition", "Invalid vehicle recognition evidence"),
+    ],
+)
+def test_invalid_vehicle_evidence_leaves_accepted_report_and_telemetry_intact(
+    service, fault, reason
+):
+    """Reject vehicle evidence before changing a valid report or its retained SoC estimate."""
+    service.receive(observations(service), NOW)
+    before = deepcopy((service.report, service.telemetry, service.state))
+    later = NOW + timedelta(seconds=10)
+    invalid = observations(service, later)
+    car = invalid["vehicles"][0]
+    if fault == "future_soc":
+        car["observed_at"] = (later + timedelta(seconds=6)).isoformat()
+    elif fault == "unknown_soc":
+        car["soc"] = None
+    else:
+        car["connected"] = {
+            "value": True,
+            "observed_at": later.isoformat(),
+            "reported_at": later.isoformat(),
+            "timestamp_kind": "ha_state",
+        }
+    with pytest.raises(ValueError, match=reason):
+        service.receive(invalid, later)
+    assert (service.report, service.telemetry, service.state) == before
+
+
 def test_removing_energy_consumer_withdraws_ev_work_without_deleting_history(service):
     """A removed Energy meter revokes current charging eligibility and changes the hard revision, retaining saved intent."""
     service.receive(observations(service), NOW)

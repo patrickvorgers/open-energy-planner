@@ -52,6 +52,63 @@ def states(rows, end, *, energy=False):
     return result
 
 
+def _detect_completed_cycles(segments, conserved, *, synthetic):
+    """Detect quiet-bracketed runs and learn only profiles with conserved energy."""
+    quiet_seconds = QUIET_SAMPLES * SAMPLE_SECONDS
+    active_minimum = MIN_ACTIVE_SAMPLES * SAMPLE_SECONDS
+    quiet, active, started, last_active = 0.0, 0.0, None, None
+    cycles, runs = [], []
+    finite = [value for _, _, value in segments if value is not None]
+    threshold = max(MIN_ACTIVITY_W, min(finite, default=0) + 5)
+    for start, finish, power in segments:
+        seconds = (finish - start).total_seconds()
+        if power is None:
+            quiet, active, started, last_active = 0.0, 0.0, None, None
+            continue
+        if power > threshold:
+            if started is None and quiet >= quiet_seconds:
+                started, active = start, 0.0
+            if started is not None:
+                active += seconds
+                last_active = finish
+            quiet = 0.0
+        else:
+            quiet += seconds
+            if started is not None and quiet >= quiet_seconds:
+                if active >= active_minimum and timedelta(
+                    seconds=active_minimum
+                ) <= last_active - started <= timedelta(hours=MAX_CYCLE_HOURS):
+                    candidate = {
+                        "started_at": started.isoformat(),
+                        "completed_at": last_active.isoformat(),
+                        "profile": None,
+                    }
+                    runs.append(candidate)
+                    if conserved(started, last_active):
+                        parts = [
+                            (max(started, left), min(last_active, right), value)
+                            for left, right, value in segments
+                            if left < last_active and right > started
+                        ]
+                        learned = CycleProfile(
+                            tuple(value for _, _, value in parts),
+                            evidence="synthetic" if synthetic else "measured",
+                            phase_durations_seconds=tuple(
+                                (right - left).total_seconds() for left, right, _ in parts
+                            ),
+                        )
+                        cycles.append(
+                            {
+                                "started_at": started.isoformat(),
+                                "completed_at": last_active.isoformat(),
+                                "profile": learned,
+                            }
+                        )
+                        candidate["profile"] = learned
+                started, active, last_active = None, 0.0, None
+    return cycles, runs, started, active, quiet >= quiet_seconds and started is None
+
+
 def analyze(body):
     """Keep actual curves visible and train only fully bracketed, independently conserved runs.
 
@@ -111,59 +168,10 @@ def analyze(body):
         integrated = integrate(anchors[0][0], anchors[-1][0])
         return integrated is not None and abs(integrated - measured) <= ENERGY_TOLERANCE_KWH
 
-    quiet_seconds = QUIET_SAMPLES * SAMPLE_SECONDS
+    cycles, runs, started, active, quiet = _detect_completed_cycles(
+        segments, conserved, synthetic=body["synthetic"]
+    )
     active_minimum = MIN_ACTIVE_SAMPLES * SAMPLE_SECONDS
-    quiet, active, started, last_active = 0.0, 0.0, None, None
-    cycles, runs, detected = [], [], False
-    finite = [value for _, _, value in segments if value is not None]
-    threshold = max(MIN_ACTIVITY_W, min(finite, default=0) + 5)
-    for start, finish, power in segments:
-        seconds = (finish - start).total_seconds()
-        if power is None:
-            quiet, active, started, last_active = 0.0, 0.0, None, None
-            continue
-        if power > threshold:
-            if started is None and quiet >= quiet_seconds:
-                started, active = start, 0.0
-            if started is not None:
-                active += seconds
-                last_active = finish
-            quiet = 0.0
-        else:
-            quiet += seconds
-            if started is not None and quiet >= quiet_seconds:
-                if active >= active_minimum and timedelta(
-                    seconds=active_minimum
-                ) <= last_active - started <= timedelta(hours=MAX_CYCLE_HOURS):
-                    detected = True
-                    candidate = {
-                        "started_at": started.isoformat(),
-                        "completed_at": last_active.isoformat(),
-                        "profile": None,
-                    }
-                    runs.append(candidate)
-                    if conserved(started, last_active):
-                        parts = [
-                            (max(started, left), min(last_active, right), value)
-                            for left, right, value in segments
-                            if left < last_active and right > started
-                        ]
-                        learned = CycleProfile(
-                            tuple(value for _, _, value in parts),
-                            evidence="synthetic" if body["synthetic"] else "measured",
-                            phase_durations_seconds=tuple(
-                                (right - left).total_seconds() for left, right, _ in parts
-                            ),
-                        )
-                        cycles.append(
-                            {
-                                "started_at": started.isoformat(),
-                                "completed_at": last_active.isoformat(),
-                                "profile": learned,
-                            }
-                        )
-                        candidate["profile"] = learned
-                started, active, last_active = None, 0.0, None
     running = None
     if (
         started is not None
@@ -188,14 +196,14 @@ def analyze(body):
         "cycles": cycles,
         "runs": runs,
         "running": running,
-        "quiet": quiet >= quiet_seconds and started is None,
+        "quiet": quiet,
         "observed_until": power_end.isoformat(),
         "status": "running"
         if running
         else "complete"
         if cycles
         else "unverified"
-        if detected
+        if runs
         else "limited"
         if body["limited"]
         else "no_complete_cycle",

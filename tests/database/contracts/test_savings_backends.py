@@ -126,9 +126,20 @@ def test_recovery_receipt_commits_frames_and_both_cursors_atomically(settlement,
 
 
 @pytest.mark.parametrize(
-    "damage", ["future", "outside", "naive", "off_grid", "overlap", "before", "after"]
+    "damage,reason",
+    [
+        ("future", "outside requested coverage"),
+        ("outside", "outside requested coverage"),
+        ("naive", "outside requested coverage"),
+        ("off_grid", "requested quarter boundary"),
+        ("overlap", "gaps or overlaps"),
+        ("before", "outside requested coverage"),
+        ("after", "outside requested coverage"),
+    ],
 )
-def test_sparse_capture_rejects_invalid_scan_or_frame_boundaries_atomically(settlement, damage):
+def test_sparse_capture_rejects_invalid_scan_or_frame_boundaries_atomically(
+    settlement, damage, reason
+):
     """Sparse transport never permits future, overlapping, off-grid or out-of-request evidence."""
     runtime, store, documents, _engine, _plans = settlement
     start = END + timedelta(minutes=15)
@@ -156,7 +167,7 @@ def test_sparse_capture_rejects_invalid_scan_or_frame_boundaries_atomically(sett
         "end": end.isoformat(),
         "bindings": bindings(),
     }
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match=reason):
         runtime.receive(
             pending,
             {
