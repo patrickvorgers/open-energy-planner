@@ -34,7 +34,21 @@ def capture(page, name, selector=None):
     page.evaluate("window.scrollTo(0, 0)")
     path = str(destination / f"{name}-{page.viewport_size['width']}.png")
     if selector:
-        page.screenshot(path=path, full_page=True, clip=page.locator(selector).bounding_box())
+        # A cropped component has no navigation. Keep sticky chrome outside the capture.
+        mobile_bar = page.query_selector(".settings-mobilebar")
+        if mobile_bar:
+            visibility = mobile_bar.evaluate("""bar => {
+                const previous = bar.style.visibility;
+                bar.style.visibility = "hidden";
+                return previous;
+            }""")
+        try:
+            page.locator(selector).screenshot(path=path)
+        finally:
+            if mobile_bar:
+                mobile_bar.evaluate(
+                    "(bar, previous) => bar.style.visibility = previous", visibility
+                )
     else:
         page.screenshot(path=path, full_page=True)
 
