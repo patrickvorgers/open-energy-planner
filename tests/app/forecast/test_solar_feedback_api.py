@@ -313,6 +313,9 @@ def test_plan_feedback_partial_hours_and_complete_day_rule_over_http(tmp_path):
                 assert [
                     index for index, hour in enumerate(row["rows"]) if hour["error_kwh"] is None
                 ] == [8, 9, 10, 15, 16, 22, 23]
+                assert row["rows"][8]["evaluation_issue"] == (
+                    "Curtailment feedback does not establish unrestricted production for this hour"
+                )
             response = await client.get("/v1/forecast-quality/days/2026-06-15", headers=headers)
             assert response.status == 200
             daily = (await response.json())["series"][0]
