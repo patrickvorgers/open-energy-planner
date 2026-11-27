@@ -976,6 +976,47 @@ def _advance_coderabbit(repository, number, state, subject, client, now, publish
     return False
 
 
+def _terminal_provider_check(checks, phase, checks_after):
+    """Find a newly completed check for the current review provider."""
+    provider_name, provider_app_id = {
+        "kody": ("Kody Code Review", KODY_APP_ID),
+        "greptile": ("Greptile Review", GREPTILE_APP_ID),
+        "coderabbit": ("CodeRabbit", CODERABBIT_APP_ID),
+    }[phase]
+    provider = latest_check(checks, provider_name, provider_app_id)
+    if provider is None:
+        # Matching-name metadata was already excluded by latest_check.
+        provider = max(
+            (
+                row
+                for row in checks
+                if row.get("app", {}).get("id") == provider_app_id
+                and row.get("name") != provider_name
+            ),
+            key=lambda row: row["id"],
+            default=None,
+        )
+    if provider and provider["id"] > checks_after and provider.get("status") == "completed":
+        return provider_name, provider
+    return provider_name, None
+
+
+def _terminal_fallback_target(phase, provider_name, provider):
+    """Classify recognized technical failures without granting permission to dispatch."""
+    output = provider.get("output") or {}
+    if provider.get("name") != provider_name:
+        return None
+    conclusion = provider.get("conclusion")
+    if phase in {"coderabbit", "greptile"} and conclusion == "timed_out":
+        return "greptile" if phase == "coderabbit" else "kody"
+    if phase == "kody" and (
+        conclusion == "timed_out"
+        or (conclusion == "failure" and output.get("title") == "Code Review Failed")
+    ):
+        return "codex"
+    return None
+
+
 def advance(repository, number, state, comments, client, now, publisher=None):
     """Resume one request using fresh provider metadata, without interpreting findings as failures."""
     if state["phase"] in TERMINAL:
@@ -1078,54 +1119,17 @@ def advance(repository, number, state, comments, client, now, publisher=None):
                 credit_reply=refusals[0],
             )
             return
-    provider_name, provider_app_id = {
-        "kody": ("Kody Code Review", KODY_APP_ID),
-        "greptile": ("Greptile Review", GREPTILE_APP_ID),
-        "coderabbit": ("CodeRabbit", CODERABBIT_APP_ID),
-    }[state["phase"]]
-    provider = latest_check(checks, provider_name, provider_app_id)
-    if provider is None:
-        # Matching-name metadata was already excluded by latest_check.
-        provider = max(
-            (
-                row
-                for row in checks
-                if row.get("app", {}).get("id") == provider_app_id
-                and row.get("name") != provider_name
-            ),
-            key=lambda row: row["id"],
-            default=None,
-        )
-    if (
-        provider
-        and provider["id"] > state["checks_after"]
-        and provider.get("status") == "completed"
-    ):
-        output = provider.get("output") or {}
-        if (
-            state["phase"] in {"coderabbit", "greptile"}
-            and provider.get("name") == provider_name
-            and provider.get("conclusion") == "timed_out"
-        ):
+    provider_name, provider = _terminal_provider_check(
+        checks, state["phase"], state["checks_after"]
+    )
+    if provider is not None:
+        target = _terminal_fallback_target(state["phase"], provider_name, provider)
+        if target is not None:
             require_no_unclassified_feedback(repository, number, state, comments, client)
             require_clear_formal_reviews(repository, number, state["head"], state["base"], client)
-            target = greptile_fallback_target() if state["phase"] == "coderabbit" else "kody"
+            if target == "greptile":
+                target = greptile_fallback_target()
             send_command(repository, number, state, target, subject, client, now, publisher)
-            return
-        if (
-            state["phase"] == "kody"
-            and provider.get("name") == provider_name
-            and (
-                provider.get("conclusion") == "timed_out"
-                or (
-                    provider.get("conclusion") == "failure"
-                    and output.get("title") == "Code Review Failed"
-                )
-            )
-        ):
-            require_no_unclassified_feedback(repository, number, state, comments, client)
-            require_clear_formal_reviews(repository, number, state["head"], state["base"], client)
-            send_command(repository, number, state, "codex", subject, client, now, publisher)
             return
         if (
             state["phase"] == "greptile"

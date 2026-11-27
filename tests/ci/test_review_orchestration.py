@@ -2633,8 +2633,16 @@ def test_existing_durable_request_without_new_flags_remains_readable():
     assert client.provider_commands() == ["@coderabbitai rate limit"]
 
 
-@pytest.mark.parametrize("conclusion", ["timed_out", "failure", "cancelled"])
-def test_only_provider_terminal_timeout_advances_coderabbit(conclusion):
+@pytest.mark.parametrize(
+    "status,conclusion,expected_phase",
+    [
+        ("completed", "timed_out", "greptile"),
+        ("completed", "failure", "blocked"),
+        ("completed", "cancelled", "blocked"),
+        ("in_progress", None, "coderabbit"),
+    ],
+)
+def test_only_provider_terminal_timeout_advances_coderabbit(status, conclusion, expected_phase):
     """An actual provider timeout differs from an unknown failure or the controller's local deadline."""
     client = GitHubEvidence()
     client.run(explicit=True)
@@ -2646,16 +2654,16 @@ def test_only_provider_terminal_timeout_advances_coderabbit(conclusion):
             "head_sha": HEAD,
             "app": {"id": 347564},
             "name": "CodeRabbit",
-            "status": "completed",
+            "status": status,
             "conclusion": conclusion,
         }
     )
     client.run(minutes=1)
-    assert client.state()["phase"] == ("greptile" if conclusion == "timed_out" else "blocked")
+    assert client.state()["phase"] == expected_phase
     assert client.provider_commands() == [
         "@coderabbitai rate limit",
         "@coderabbitai review",
-        *(["@greptileai review this draft"] if conclusion == "timed_out" else []),
+        *(["@greptileai review this draft"] if expected_phase == "greptile" else []),
     ]
 
 
