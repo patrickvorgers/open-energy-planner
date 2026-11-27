@@ -1269,6 +1269,70 @@ function intervalContractRates({plan, bonusRules, index, start, end, prices, tar
     return {buyRate, sellRate, rankedExportRate: bonusRules.length ? exportWithBonus : sellRate};
 }
 
+/** Clear display state before reading a different plan or the live price preview. */
+function resetPlanSelection(id) {
+    periodCostPlan = null; periodCostKey = ""; periodCostRequest++;
+    const clearPrices = Boolean(id || priceInputPlanId);
+    if (clearPrices) {
+        priceInputPlanId = currentPriceWindow = null;
+        priceRequest++;
+        $("current-price-status").textContent = id ? "Loading selected plan prices…" : "Loading current price preview…";
+        $("price-chart").closest(".chart-wrap").hidden = true;
+    }
+    renderedPlanId = null;
+    planReadPending = false;
+    simulationReadPending = false;
+    $("overview-status").textContent = id ? "Loading selected plan…" : CONNECTED_MESSAGE;
+    $("plan-description").textContent = id ? "Loading selected plan…" : "No plan selected.";
+    inspectSteps = [];
+    clearLinkedInspection();
+    clearBatteryPlan();
+    for (const chartId of ["plan-chart", "reference-chart", "self-consumption-chart", "energy-chart", "forecast-chart", "price-chart"]) {
+        if (chartId === "price-chart" && !clearPrices) continue;
+        if (charts.has(chartId)) chart(chartId, [], {deferRange: true});
+    }
+    $("reference-issue").textContent = $("self-consumption-issue").textContent = "";
+    for (const caption of document.querySelectorAll(".scenario-period")) caption.textContent = id ? "Loading original plan comparison…" : "No plan selected.";
+    for (const costId of ["reference-costs", "self-consumption-costs", "ems-costs"]) renderScenarioCosts(costId, null, "", null, costId !== "reference-costs");
+    $("expected-benefit").textContent = "";
+    planEvidence = null;
+    $("inspect-time").disabled = true;
+    $("inspect-values").textContent = id ? "Loading original interval values…" : "No plan selected.";
+    $("evidence-period").textContent = ""; $("plan-evidence-status").textContent = id ? "Loading original whole-plan evidence…" : "No plan selected.";
+    evidenceCards($("plan-evidence"), []);
+    $("evidence-time").textContent = ""; $("evidence-issue").textContent = id ? "Loading original plan evidence…" : "No plan selected.";
+}
+
+/** Settle independently loaded simulations and evidence for the still-selected plan. */
+async function finishPlanSupplements(simulationRead, plan, id, request) {
+    const evidenceRead = loadPlanEvidence();
+    let simulationsLoaded = false;
+    try {
+        const result = await simulationRead;
+        if (result.error) throw result.error;
+        const supplementary = result.value;
+        if (request !== selectionRequest) return false;
+        if (supplementary.plan_id !== id) throw new Error("Cannot read this view: The plan identity does not match. Please retry.");
+        renderPlanComparisons(supplementary, plan);
+        simulationReadPending = false;
+        simulationsLoaded = true;
+        return true;
+    } catch {
+        if (request !== selectionRequest) return false;
+        simulationReadPending = true;
+        const message = periodCostPlan ? "Simulation update is unavailable. Showing the previously loaded comparisons. Use Refresh overview to retry." : "Simulations are unavailable. Use Refresh overview to retry.";
+        $("overview-status").textContent = `Plan loaded. ${message}`;
+        for (const caption of document.querySelectorAll(".scenario-period")) caption.textContent = message;
+        return true;
+    } finally {
+        if (request === selectionRequest && simulationsLoaded && evidenceRequest) $("overview-status").textContent = "Plan loaded. Loading original plan evidence…";
+        await evidenceRead;
+        // A disclosure can start its shared read while the simulations are still loading.
+        if (request === selectionRequest) await evidenceRequest;
+        if (request === selectionRequest && simulationsLoaded) $("overview-status").textContent = CONNECTED_MESSAGE;
+    }
+}
+
 /**
  * Fetch frozen advice and separate valuations, ignoring stale selection responses.
  * Read plan and simulations concurrently, displaying the original as soon as it arrives. Evidence loads only on disclosure.
@@ -1289,36 +1353,7 @@ async function showPlan(signal, background = false) {
     if (retainDisplayedPlan) {
         $("overview-status").textContent = "Loading plan update. Showing the previously loaded plan until the update is available.";
     } else {
-        periodCostPlan = null; periodCostKey = ""; periodCostRequest++;
-        const clearPrices = Boolean(id || priceInputPlanId);
-        if (clearPrices) {
-            priceInputPlanId = currentPriceWindow = null;
-            priceRequest++;
-            $("current-price-status").textContent = id ? "Loading selected plan prices…" : "Loading current price preview…";
-            $("price-chart").closest(".chart-wrap").hidden = true;
-        }
-        renderedPlanId = null;
-        planReadPending = false;
-        simulationReadPending = false;
-        $("overview-status").textContent = id ? "Loading selected plan…" : CONNECTED_MESSAGE;
-        $("plan-description").textContent = id ? "Loading selected plan…" : "No plan selected.";
-        inspectSteps = [];
-        clearLinkedInspection();
-        clearBatteryPlan();
-        for (const chartId of ["plan-chart", "reference-chart", "self-consumption-chart", "energy-chart", "forecast-chart", "price-chart"]) {
-            if (chartId === "price-chart" && !clearPrices) continue;
-            if (charts.has(chartId)) chart(chartId, [], {deferRange: true});
-        }
-        $("reference-issue").textContent = $("self-consumption-issue").textContent = "";
-        for (const caption of document.querySelectorAll(".scenario-period")) caption.textContent = id ? "Loading original plan comparison…" : "No plan selected.";
-        for (const costId of ["reference-costs", "self-consumption-costs", "ems-costs"]) renderScenarioCosts(costId, null, "", null, costId !== "reference-costs");
-        $("expected-benefit").textContent = "";
-        planEvidence = null;
-        $("inspect-time").disabled = true;
-        $("inspect-values").textContent = id ? "Loading original interval values…" : "No plan selected.";
-        $("evidence-period").textContent = ""; $("plan-evidence-status").textContent = id ? "Loading original whole-plan evidence…" : "No plan selected.";
-        evidenceCards($("plan-evidence"), []);
-        $("evidence-time").textContent = ""; $("evidence-issue").textContent = id ? "Loading original plan evidence…" : "No plan selected.";
+        resetPlanSelection(id);
         if (!id) {
             $("overview-status").textContent = CONNECTED_MESSAGE;
             return true;
@@ -1475,32 +1510,7 @@ async function showPlan(signal, background = false) {
         if (requestedPlan === id) requestedPlan = null;
         planReadPending = false;
         $("overview-status").textContent = "Plan loaded. Loading simulations…";
-        const evidenceRead = loadPlanEvidence();
-        let simulationsLoaded = false;
-        try {
-            const result = await simulationRead;
-            if (result.error) throw result.error;
-            const supplementary = result.value;
-            if (request !== selectionRequest) return false;
-            if (supplementary.plan_id !== id) throw new Error("Cannot read this view: The plan identity does not match. Please retry.");
-            renderPlanComparisons(supplementary, plan);
-            simulationReadPending = false;
-            simulationsLoaded = true;
-            return true;
-        } catch {
-            if (request !== selectionRequest) return false;
-            simulationReadPending = true;
-            const message = periodCostPlan ? "Simulation update is unavailable. Showing the previously loaded comparisons. Use Refresh overview to retry." : "Simulations are unavailable. Use Refresh overview to retry.";
-            $("overview-status").textContent = `Plan loaded. ${message}`;
-            for (const caption of document.querySelectorAll(".scenario-period")) caption.textContent = message;
-            return true;
-        } finally {
-            if (request === selectionRequest && simulationsLoaded && evidenceRequest) $("overview-status").textContent = "Plan loaded. Loading original plan evidence…";
-            await evidenceRead;
-            // A disclosure can start its shared read while the simulations are still loading.
-            if (request === selectionRequest) await evidenceRequest;
-            if (request === selectionRequest && simulationsLoaded) $("overview-status").textContent = CONNECTED_MESSAGE;
-        }
+        return await finishPlanSupplements(simulationRead, plan, id, request);
     } catch (error) {
         simulationController.abort();
         if (request === selectionRequest && retainDisplayedPlan) {
