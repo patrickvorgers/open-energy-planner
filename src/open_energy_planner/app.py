@@ -166,6 +166,56 @@ def _register_live_observations(
     app.router.add_post("/v1/observations", observations)
 
 
+def _register_plan_controls(
+    app, repository, live, planner, capture, lock, publish_plan_status, save_state
+):
+    """Register explicit enable and acknowledgement writes under the shared runtime lock."""
+    from .home_assistant.plan_api import command_mode
+
+    async def enabled(request):
+        """Persist explicit enable intent and request a fresh round for a new resume request."""
+        body = await request.json()
+        if not isinstance(body, dict) or type(body.get("enabled")) is not bool:
+            raise web.HTTPBadRequest(text="enabled must be boolean")
+        request_id = body.get("request_id")
+        if not isinstance(request_id, str) or not 1 <= len(request_id) <= MAX_REQUEST_ID_LENGTH:
+            raise web.HTTPBadRequest(text="A control request identifier is required")
+        async with lock:
+            if body["enabled"] and request_id != repository.state["last_control_id"]:
+                if live:
+                    await live.refresh_async(force=True)
+                else:
+                    planner.submit(capture())
+            repository.state["enabled"] = body["enabled"]
+            repository.state["last_control_id"] = request_id
+            publish_plan_status()
+            await save_state()
+            return web.json_response(
+                {
+                    "accepted": True,
+                    "enabled": repository.state["enabled"],
+                    "request_id": repository.state["last_control_id"],
+                }
+            )
+
+    async def acknowledge(request):
+        """Record acceptance only for the current plan ID. Reject stale acknowledgements."""
+        body = await request.json()
+        if not isinstance(body, dict):
+            raise web.HTTPBadRequest(text="Invalid acknowledgement")
+        async with lock:
+            state, _revision, current = command_mode(repository, live)
+            if current is None or body.get("plan_id") != current["plan_id"]:
+                raise web.HTTPConflict(text="Acknowledgement refers to an inactive plan")
+            if state["acknowledged_plan"] != body["plan_id"]:
+                repository.state["acknowledged_plan"] = body["plan_id"]
+                await save_state()
+        return web.json_response({"accepted": True})
+
+    app.router.add_put("/v1/enabled", enabled)
+    app.router.add_post("/v1/ack", acknowledge)
+
+
 def _register_plan_archive(app, repository):
     """Expose immutable archive reads independently of live command state."""
     from .runtime.diagnostics.http import phase
@@ -988,46 +1038,6 @@ def create_app(
             headers={"Cache-Control": "no-store"},
         )
 
-    async def enabled(request):
-        """Persist explicit enable intent and request a fresh round for a new resume request."""
-        body = await request.json()
-        if not isinstance(body, dict) or type(body.get("enabled")) is not bool:
-            raise web.HTTPBadRequest(text="enabled must be boolean")
-        request_id = body.get("request_id")
-        if not isinstance(request_id, str) or not 1 <= len(request_id) <= MAX_REQUEST_ID_LENGTH:
-            raise web.HTTPBadRequest(text="A control request identifier is required")
-        async with lock:
-            if body["enabled"] and request_id != repository.state["last_control_id"]:
-                if live:
-                    await live.refresh_async(force=True)
-                else:
-                    planner.submit(capture())
-            repository.state["enabled"] = body["enabled"]
-            repository.state["last_control_id"] = request_id
-            publish_plan_status()
-            await save_state()
-            return web.json_response(
-                {
-                    "accepted": True,
-                    "enabled": repository.state["enabled"],
-                    "request_id": repository.state["last_control_id"],
-                }
-            )
-
-    async def acknowledge(request):
-        """Record acceptance only for the current plan ID. Reject stale acknowledgements."""
-        body = await request.json()
-        if not isinstance(body, dict):
-            raise web.HTTPBadRequest(text="Invalid acknowledgement")
-        async with lock:
-            state, _revision, current = command_mode(repository, live)
-            if current is None or body.get("plan_id") != current["plan_id"]:
-                raise web.HTTPConflict(text="Acknowledgement refers to an inactive plan")
-            if state["acknowledged_plan"] != body["plan_id"]:
-                repository.state["acknowledged_plan"] = body["plan_id"]
-                await save_state()
-        return web.json_response({"accepted": True})
-
     async def startup(app):
         """Start synthetic planning only. Live mode waits for configured real observations."""
         if not live:
@@ -1104,8 +1114,9 @@ def create_app(
     app.router.add_get("/v1/snapshot", snapshot)
     app.router.add_get("/v1/readiness", readiness)
 
-    app.router.add_put("/v1/enabled", enabled)
-    app.router.add_post("/v1/ack", acknowledge)
+    _register_plan_controls(
+        app, repository, live, planner, capture, lock, publish_plan_status, save_state
+    )
     app.router.add_get("/v1/ha/requests", ha_requests)
     from .home_assistant.plan_api import register as register_ha_plan_api
 
