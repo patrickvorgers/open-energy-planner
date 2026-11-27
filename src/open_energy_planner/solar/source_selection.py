@@ -460,6 +460,26 @@ def _historical_scores(assessment, configuration, source, location, model_policy
     }
 
 
+def _capture_context(configuration, baseline, candidate, now):
+    """Prepare the immutable next-day capture fields shared by all configured sources."""
+    timezone = baseline.location.timezone
+    tomorrow = now.astimezone(ZoneInfo(timezone)).date() + DAY
+    future_hours, _end = comparison_hours(tomorrow, timezone)
+    return (
+        tomorrow,
+        future_hours,
+        {
+            "captured_at": now.isoformat(),
+            "day": tomorrow.isoformat(),
+            "timezone": timezone,
+            "hours": [instant.isoformat() for instant in future_hours],
+            "configuration_version": configuration.version,
+            "baseline_version": baseline.version,
+            "ml_version": candidate.version if candidate else None,
+        },
+    )
+
+
 def choose_sources(
     store,
     configuration,
@@ -510,17 +530,9 @@ def choose_sources(
     meter_hours = {entity: production_hours(history, now) for entity, history in histories.items()}
     inverters = {inverter.inverter_id: inverter for inverter in configuration.inverters}
     fitted = {row.source_id for row in calibrations}
-    tomorrow = now.astimezone(ZoneInfo(baseline.location.timezone)).date() + DAY
-    future_hours, _end = comparison_hours(tomorrow, baseline.location.timezone)
-    capture_context = {
-        "captured_at": now.isoformat(),
-        "day": tomorrow.isoformat(),
-        "timezone": baseline.location.timezone,
-        "hours": [instant.isoformat() for instant in future_hours],
-        "configuration_version": configuration.version,
-        "baseline_version": baseline.version,
-        "ml_version": candidate.version if candidate else None,
-    }
+    tomorrow, future_hours, capture_context = _capture_context(
+        configuration, baseline, candidate, now
+    )
     for source in configuration.sources:
         source_id = source.source_id
         siblings = tuple(
