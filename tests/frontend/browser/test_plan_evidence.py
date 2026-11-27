@@ -179,6 +179,7 @@ def test_plan_refresh_keeps_complete_comparison_until_replacement_arrives(
     """A delayed refresh retains the original amounts and evidence until a complete response arrives."""
     state = automatic_plan_overview
     page = state["page"]
+    page.evaluate("window.initialPlanTooltip = document.getElementById('plan-chart-tooltip')")
     benefit = page.locator("#ems-costs [data-benefit-state] dd").inner_text()
     costs = page.locator("#ems-costs").inner_text()
     evidence = page.locator("#plan-evidence").inner_text()
@@ -201,6 +202,9 @@ def test_plan_refresh_keeps_complete_comparison_until_replacement_arrives(
     assert page.evaluate(
         "window.initialPlanChart === Chart.getChart(document.getElementById('plan-chart'))"
     )
+    assert page.evaluate(
+        "window.initialPlanTooltip === document.getElementById('plan-chart-tooltip')"
+    )
     page.locator(".optimizer-scenario").screenshot(
         path=f"results/ci/planning-retained-{refresh}-{page.viewport_size['width']}.png"
     )
@@ -212,6 +216,8 @@ def test_plan_refresh_keeps_complete_comparison_until_replacement_arrives(
     plan_id = held.request.url.rsplit("/", 2)[1]
     held.fulfill(json=state["comparisons"][plan_id])
     expect(page.locator("#overview-status")).to_contain_text("Connected")
+    expect(page.locator("#plan-chart-tooltip")).to_have_count(1)
+    assert page.evaluate("!window.initialPlanTooltip.isConnected")
     if refresh == "publication":
         expect(page.locator("#plan-version option:checked")).to_contain_text("Minimize consumption")
 
