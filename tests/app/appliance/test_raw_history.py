@@ -80,6 +80,29 @@ def test_raw_profile_and_original_frame_survive_restart_without_retraining(servi
     assert record["training_usable"] is True
 
 
+def test_raw_projection_limit_keeps_the_original_frame_without_installing_the_profile(
+    service, monkeypatch
+):
+    """Reject a phase-heavy learner while preserving the frame and previously accepted profile."""
+    from open_energy_planner.appliances.cycles import service as service_module
+    from tests.app.appliance.support import NOW, readings
+
+    service.learn_history(ENTITY, POWER, readings(cycles=1), False, NOW)
+    previous = profile(service.state["devices"][ENTITY]["profile"])
+    body = raw_trace()
+    start_observing(service, body)
+    monkeypatch.setattr(service_module, "MAX_PROJECTED_IRREGULAR_PHASES", 0)
+    service.learn_raw_history(body, instant(body["end"]))
+
+    settings = service.state["devices"][ENTITY]
+    assert profile(settings["profile"]) == previous
+    assert settings["raw_history"]["status"] == "complexity_limited"
+    [record] = list(service.documents.iter_prefix("appliance-raw-"))
+    assert record["training_usable"] is False
+    assert record["rejection"] == "complexity_limited"
+    assert service.documents.read(record["history_ref"]) == body
+
+
 def test_raw_conflict_remains_visible_and_keeps_existing_statistics_profile(service):
     """A contradictory counter cannot scale away a real 3-kW peak or replace an existing usable profile."""
     from tests.app.appliance.support import NOW, readings
