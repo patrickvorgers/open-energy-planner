@@ -62,35 +62,8 @@ class InstallationBasisSource:
         """Borrow app-owned settings and independent runtime caches."""
         self.store, self.demand, self.solar = store, demand, solar
 
-    def current(self, configuration, now, *, report=None):
-        """Reject missing core inputs and compile every converter only at its own AC/DC boundary."""
-        settings = self.store.current
-        if self.store.issue:
-            raise InputsUnavailable(self.store.issue)
-        if settings is None:
-            return None
-        if configuration.revision != settings.version or report is None:
-            raise InputsUnavailable("installation_measurements_pending")
-        demand, solar = self.demand, self.solar
-        if demand.store.issue or demand.configuration is None or demand.forecast is None:
-            raise InputsUnavailable("demand_forecast_pending")
-        load = demand.forecast
-        if not demand_forecast_usable(demand.configuration, load, now):
-            raise InputsUnavailable("demand_forecast_expired")
-        if load.scope != "residual_household" or load.excluded_devices:
-            raise InputsUnavailable("separate_load_planning_not_configured")
-        if solar.store.issue or solar.configuration is None:
-            raise InputsUnavailable("solar_configuration_required")
-        pv = solar.forecast
-        if not forecast_usable(solar.configuration, pv, report.location, now):
-            raise InputsUnavailable("solar_forecast_unavailable")
-        converters = {
-            inverter_item.inverter_id: inverter_item for inverter_item in settings.inverters
-        }
-        for inverter in solar.configuration.inverters:
-            if inverter.inverter_id in converters and converters[inverter.inverter_id] != inverter:
-                raise InputsUnavailable("inverter_configuration_conflict")
-            converters[inverter.inverter_id] = inverter
+    def _battery_states(self, settings, configuration, report, converters, now):
+        """Resolve required SoC and power evidence and any active calibration directive."""
         readings = {reading.key: reading for reading in report.readings}
         specs = {binding.key: binding for binding in configuration.bindings}
         states = []
@@ -135,6 +108,38 @@ class InstallationBasisSource:
                     calibration_hold_until=hold_until,
                 )
             )
+        return states
+
+    def current(self, configuration, now, *, report=None):
+        """Reject missing core inputs and compile every converter only at its own AC/DC boundary."""
+        settings = self.store.current
+        if self.store.issue:
+            raise InputsUnavailable(self.store.issue)
+        if settings is None:
+            return None
+        if configuration.revision != settings.version or report is None:
+            raise InputsUnavailable("installation_measurements_pending")
+        demand, solar = self.demand, self.solar
+        if demand.store.issue or demand.configuration is None or demand.forecast is None:
+            raise InputsUnavailable("demand_forecast_pending")
+        load = demand.forecast
+        if not demand_forecast_usable(demand.configuration, load, now):
+            raise InputsUnavailable("demand_forecast_expired")
+        if load.scope != "residual_household" or load.excluded_devices:
+            raise InputsUnavailable("separate_load_planning_not_configured")
+        if solar.store.issue or solar.configuration is None:
+            raise InputsUnavailable("solar_configuration_required")
+        pv = solar.forecast
+        if not forecast_usable(solar.configuration, pv, report.location, now):
+            raise InputsUnavailable("solar_forecast_unavailable")
+        converters = {
+            inverter_item.inverter_id: inverter_item for inverter_item in settings.inverters
+        }
+        for inverter in solar.configuration.inverters:
+            if inverter.inverter_id in converters and converters[inverter.inverter_id] != inverter:
+                raise InputsUnavailable("inverter_configuration_conflict")
+            converters[inverter.inverter_id] = inverter
+        states = self._battery_states(settings, configuration, report, converters, now)
         rows = {source.source_id: [] for source in solar.configuration.sources}
         if rows:
             for row in pv.energies:
