@@ -1,6 +1,7 @@
 """Current physical AC/DC paths and independent converter saturation checks."""
 
 from dataclasses import replace
+from datetime import timedelta
 from fractions import Fraction
 
 import pytest
@@ -55,7 +56,8 @@ def test_conversion_paths_over_the_legacy_120_step_horizon(solver):
 
 
 @pytest.mark.parametrize(
-    "invalid", ["missing_inverter", "efficiency", "rating", "shared_without_hybrid"]
+    "invalid",
+    ["missing_inverter", "efficiency", "rating", "shared_without_hybrid", "midpoint_reserve"],
 )
 def test_invalid_topology_is_rejected(invalid):
     """Current configuration rejects missing converter references, invalid efficiency/rating and unmarked shared PV/storage."""
@@ -65,6 +67,7 @@ def test_invalid_topology_is_rejected(invalid):
         "efficiency": "Invalid solar quantity",
         "rating": "Invalid solar quantity",
         "shared_without_hybrid": "PV and battery sharing requires a hybrid inverter",
+        "midpoint_reserve": "Invalid original reserve checkpoints",
     }[invalid]
     with pytest.raises(ValueError, match=f"^{expected_issue}$"):
         if invalid == "missing_inverter":
@@ -73,5 +76,11 @@ def test_invalid_topology_is_rejected(invalid):
             replace(problem.inverters[0], efficiency=1.1)
         elif invalid == "rating":
             replace(problem.inverters[0], ac_limit_w=-1)
-        else:
+        elif invalid == "shared_without_hybrid":
             replace(problem, batteries=(replace(problem.batteries[0], inverter_id="pv-inverter"),))
+        else:
+            step = problem.intervals[0]
+            replace(
+                problem,
+                reserve_checkpoints=(step.start + timedelta(hours=step.duration_h / 2),),
+            )

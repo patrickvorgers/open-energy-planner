@@ -198,11 +198,13 @@ def test_historical_evidence_survives_restart_and_is_reused_without_retraining(
 
     monkeypatch.setattr(boosting, "fit_boosted_model", unexpected_training)
     restored = SolarStore(runtime.store.documents)
+    history = runtime.histories["sensor.pv0"]
+    later_hour = replace(history.hours[-1], start=NOW + timedelta(days=30))
     replay = assess_forecasts(
         runtime.configuration,
         runtime.configuration.sources[0],
         SITE,
-        runtime.histories["sensor.pv0"],
+        replace(history, hours=(*history.hours, later_hour)),
         runtime.forecast_runs,
         NOW,
         result.model.policy_version,

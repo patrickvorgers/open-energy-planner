@@ -549,6 +549,13 @@ def test_runtime_always_forecasts_and_keeps_unvalidated_ridge_in_shadow(tmp_path
     assert runtime.forecast.model == "weekday-hour-v2"
     assert runtime.candidate.model == "ridge-v2"
     assert runtime.model_status == "collecting_forward_accuracy"
+    baseline = result[6]
+    originals = store.documents.read("quality-candidates-" + runtime.forecast.version + ".json")
+    assert originals["forecasts"] == [
+        {"version": baseline.version, "model": "weekday-hour-v2"},
+        {"version": runtime.candidate.version, "model": "ridge-v2"},
+    ]
+    assert store.documents.exists("forecast-" + runtime.candidate.version + ".json")
     runtime.configure(replace(config(), annual_kwh=4000))
     assert not runtime.install(result, now)
     assert not runtime.failed(result[0], now)

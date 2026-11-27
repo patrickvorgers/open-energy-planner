@@ -160,6 +160,15 @@ def test_independent_validator_rejects_converter_energy_created_after_solve():
         validate(inputs, replace(plan, flows=(plan.flows[0], altered)))
 
 
+def test_independent_validator_rejects_two_grid_directions_before_balance():
+    """The validator checks grid direction even when equal import and export net out."""
+    inputs = problem()
+    plan = solve(inputs).plan
+    altered = replace(plan.flows[0], grid_import=0.01, grid_export=0.01)
+    with pytest.raises(ValueError, match="Grid direction"):
+        validate(inputs, replace(plan, flows=(altered, *plan.flows[1:])))
+
+
 @pytest.mark.parametrize("initial,expected_charge", [(0, 1), (0.9, 0.1), (1, 0)])
 @pytest.mark.planner_scenario
 def test_natural_clipping_requires_saturated_converter_and_storage_acceptance(

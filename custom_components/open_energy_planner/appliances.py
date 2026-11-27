@@ -323,6 +323,70 @@ def register_services(hass):
         )
 
 
+def _validate_cycle_profile(profile, reason):
+    """Require a bounded optional cycle profile and validate its duration."""
+    if profile is not None and (
+        not isinstance(profile, dict)
+        or not isinstance(profile.get("power_w"), list)
+        or not 1 <= len(profile["power_w"]) <= profile_phase_limit(profile)
+        or any(
+            type(power) not in (int, float)
+            or not isfinite(power)
+            or not 0 <= power <= MAX_CYCLE_POWER_W
+            for power in profile["power_w"]
+        )
+    ):
+        raise ValueError(reason)
+    if profile:
+        profile_duration(profile)
+
+
+def _validate_task(row):
+    """Validate accepted work and its correlated start request before any HA event."""
+    task = row.get("task")
+    if task is not None:
+        if (
+            not isinstance(task, dict)
+            or task.get("status") not in TASK_STATUSES
+            or not isinstance(task.get("id"), str)
+            or not 1 <= len(task["id"]) <= MAX_CORRELATION_LENGTH
+        ):
+            raise ValueError("Invalid appliance status")
+        _validate_cycle_profile(task.get("profile"), "Invalid accepted cycle profile")
+        timestamp(task["deadline"])
+        if task.get("scheduled_start"):
+            timestamp(task["scheduled_start"])
+        attempt = task.get("attempt")
+        if task["status"] in ("requested", "running", "start_not_confirmed") and attempt is None:
+            raise ValueError("Execution status requires its correlated attempt")
+        if attempt is not None:
+            if (
+                not isinstance(attempt, dict)
+                or not isinstance(attempt.get("id"), str)
+                or not 1 <= len(attempt["id"]) <= MAX_CORRELATION_LENGTH
+            ):
+                raise ValueError("Invalid appliance attempt")
+            timestamp(attempt["expires_at"])
+    if row.get("request"):
+        request = row["request"]
+        if not isinstance(request, dict):
+            raise ValueError("Invalid start request")
+        timestamp(request["expires_at"])
+        if any(
+            not isinstance(request.get(key), str)
+            or not 1 <= len(request[key]) <= MAX_CORRELATION_LENGTH
+            for key in ("task_id", "attempt_id")
+        ):
+            raise ValueError("Invalid appliance request identity")
+        if (
+            not task
+            or not task.get("attempt")
+            or request["task_id"] != task["id"]
+            or request["attempt_id"] != task["attempt"]["id"]
+        ):
+            raise ValueError("Start request does not match its task")
+
+
 def receive(coordinator, value):
     """Validate optional task projection and emit request/expiry events once per state transition."""
     from .wire_limits import MAX_APPLIANCE_RESPONSE_BYTES, validate_projection_size
@@ -342,21 +406,7 @@ def receive(coordinator, value):
         if row["entity_id"] in seen or type(row.get("shiftable")) is not bool:
             raise ValueError("Duplicate appliance or invalid permission")
         seen.add(row["entity_id"])
-        learned = row.get("profile")
-        if learned is not None and (
-            not isinstance(learned, dict)
-            or not isinstance(learned.get("power_w"), list)
-            or not 1 <= len(learned["power_w"]) <= profile_phase_limit(learned)
-            or any(
-                type(power) not in (int, float)
-                or not isfinite(power)
-                or not 0 <= power <= MAX_CYCLE_POWER_W
-                for power in learned["power_w"]
-            )
-        ):
-            raise ValueError("Invalid average cycle profile")
-        if learned:
-            profile_duration(learned)
+        _validate_cycle_profile(row.get("profile"), "Invalid average cycle profile")
         if row.get("finish_date") is not None:
             date.fromisoformat(row["finish_date"])
         if (
@@ -366,65 +416,7 @@ def receive(coordinator, value):
             raise ValueError("Invalid local finish time")
         if row.get("finish_before") is not None:
             timestamp(row["finish_before"])
-        task = row.get("task")
-        if task is not None:
-            if (
-                not isinstance(task, dict)
-                or task.get("status") not in TASK_STATUSES
-                or not isinstance(task.get("id"), str)
-                or not 1 <= len(task["id"]) <= MAX_CORRELATION_LENGTH
-            ):
-                raise ValueError("Invalid appliance status")
-            frozen_profile = task.get("profile")
-            if frozen_profile is not None and (
-                not isinstance(frozen_profile, dict)
-                or not isinstance(frozen_profile.get("power_w"), list)
-                or not 1 <= len(frozen_profile["power_w"]) <= profile_phase_limit(frozen_profile)
-                or any(
-                    type(power) not in (int, float)
-                    or not isfinite(power)
-                    or not 0 <= power <= MAX_CYCLE_POWER_W
-                    for power in frozen_profile["power_w"]
-                )
-            ):
-                raise ValueError("Invalid accepted cycle profile")
-            if frozen_profile:
-                profile_duration(frozen_profile)
-            timestamp(task["deadline"])
-            if task.get("scheduled_start"):
-                timestamp(task["scheduled_start"])
-            attempt = task.get("attempt")
-            if (
-                task["status"] in ("requested", "running", "start_not_confirmed")
-                and attempt is None
-            ):
-                raise ValueError("Execution status requires its correlated attempt")
-            if attempt is not None:
-                if (
-                    not isinstance(attempt, dict)
-                    or not isinstance(attempt.get("id"), str)
-                    or not 1 <= len(attempt["id"]) <= MAX_CORRELATION_LENGTH
-                ):
-                    raise ValueError("Invalid appliance attempt")
-                timestamp(attempt["expires_at"])
-        if row.get("request"):
-            request = row["request"]
-            if not isinstance(request, dict):
-                raise ValueError("Invalid start request")
-            timestamp(request["expires_at"])
-            if any(
-                not isinstance(request.get(key), str)
-                or not 1 <= len(request[key]) <= MAX_CORRELATION_LENGTH
-                for key in ("task_id", "attempt_id")
-            ):
-                raise ValueError("Invalid appliance request identity")
-            if (
-                not task
-                or not task.get("attempt")
-                or request["task_id"] != task["id"]
-                or request["attempt_id"] != task["attempt"]["id"]
-            ):
-                raise ValueError("Start request does not match its task")
+        _validate_task(row)
         rows.append(row)
     # Validate the entire optional document before publishing any event.
     for row in rows:

@@ -1686,6 +1686,10 @@ def test_central_bonus_budget_shows_opening_origin_and_preserves_price_draft(app
             channel["hours"][0][1] = 0
             channel["hours"][1][1] = -1.225398591486737e-7
     assert page.request.post(url + "/v1/history", headers=headers, data=history_body).ok
+    if origin == "concurrent":
+        # Only the manual refresh, confirmation and save should drive this race.
+        page.clock.install(time=now)
+        page.clock.pause_at(now + timedelta(seconds=1))
     page.goto(url + "/contract")
     page.get_by_label("Installation API token", exact=True).fill(TOKEN)
     page.get_by_role("button", name="Connect", exact=True).click()
@@ -1826,10 +1830,11 @@ def test_central_bonus_budget_shows_opening_origin_and_preserves_price_draft(app
         held_read = None
         superseded_read = None
         superseded_status = None
+        newer_read_started = False
 
         def fail_confirmation_read(route):
             """Fail the accepted write's read, optionally after a real save starts a newer read."""
-            nonlocal held_read, superseded_read, superseded_status
+            nonlocal held_read, superseded_read, superseded_status, newer_read_started
             if route.request.method == "POST":
                 held_read.fulfill(status=200, json=refreshed_budget)
                 expect(
@@ -1842,7 +1847,8 @@ def test_central_bonus_budget_shows_opening_origin_and_preserves_price_draft(app
             elif origin == "concurrent" and superseded_read is None:
                 superseded_read = route
                 page.get_by_role("button", name="Save contract", exact=True).click()
-            elif origin == "concurrent":
+            elif origin == "concurrent" and not newer_read_started:
+                newer_read_started = True
                 superseded_read.fulfill(status=503, json={"error": "Older read failed"})
                 try:
                     page.evaluate("() => window.confirmationFinished")
@@ -1851,6 +1857,8 @@ def test_central_bonus_budget_shows_opening_origin_and_preserves_price_draft(app
                     current = page.request.get(url + "/v1/contracts/budgets", headers=headers)
                     assert current.ok
                     route.fulfill(status=200, json=current.json())
+            elif origin == "concurrent":
+                route.fallback()
             else:
                 route.fulfill(status=503, json={"error": "Budget temporarily unavailable"})
 

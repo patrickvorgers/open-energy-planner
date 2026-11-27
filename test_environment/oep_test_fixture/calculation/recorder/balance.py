@@ -129,21 +129,13 @@ def frame_replacements(originals, frames, fine_maps, entities):
     return writes
 
 
-def repair_documents(hourly, fine, roles, consumers, controlled, *, sample):
-    """Reconstruct simulated source frames and grid flows without inventing measured device use.
+def _normalize_source_frames(originals, roles, sample):
+    """Return replacement views, notices and identities for simulated source counter resets.
 
-    Preserve unrelated deltas and counter states. Align fine sums with the last
-    completed hour so Recorder can compile subsequent hours without an origin jump.
-    An adjacent source decrease beyond COUNTER_TOLERANCE_KWH identifies an origin
-    transition. Reconstruct its complete affected hour from the canonical PV or
-    stationary-battery simulator profile, removing positive and negative spikes
-    together. Gaps at such transitions raise ValueError. Controlled meters use
-    recorded consumption. Only equal bounding counters establish a constant gap.
-    Return preview records and replacement sums, retaining original source states.
+    Source rows are left intact. Only complete affected frames can be reconstructed
+    from the simulator's quarter energy.
     """
-    from ..energy import quarter_energy
-
-    originals = {"hour": hourly, "5minute": fine}
+    hourly, fine = originals["hour"], originals["5minute"]
     normalized = {}
     source_repairs = []
     corrected_sources = set()
@@ -230,6 +222,27 @@ def repair_documents(hourly, fine, roles, consumers, controlled, *, sample):
             normalized[period][entity] = [
                 replacements.get(row["start"], row) for row in original[entity]
             ]
+    return normalized, source_repairs, corrected_sources
+
+
+def repair_documents(hourly, fine, roles, consumers, controlled, *, sample):
+    """Reconstruct simulated source frames and grid flows without inventing measured device use.
+
+    Preserve unrelated deltas and counter states. Align fine sums with the last
+    completed hour so Recorder can compile subsequent hours without an origin jump.
+    An adjacent source decrease beyond COUNTER_TOLERANCE_KWH identifies an origin
+    transition. Reconstruct its complete affected hour from the canonical PV or
+    stationary-battery simulator profile, removing positive and negative spikes
+    together. Gaps at such transitions raise ValueError. Controlled meters use
+    recorded consumption. Only equal bounding counters establish a constant gap.
+    Return preview records and replacement sums, retaining original source states.
+    """
+    from ..energy import quarter_energy
+
+    originals = {"hour": hourly, "5minute": fine}
+    normalized, source_repairs, corrected_sources = _normalize_source_frames(
+        originals, roles, sample
+    )
     hourly, fine = normalized["hour"], normalized["5minute"]
 
     grid = {

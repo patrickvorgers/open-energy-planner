@@ -591,29 +591,14 @@ class DemandRuntime:
             )
         if weather_reference and forecast.weather_version == weather_reference:
             forecast = replace(forecast, weather_valid_until=weather_until)
-        self.store.archive(baseline_forecast)
-        if not consumers[1]:
-            self.store.archive(forecast)
-        if candidate is not None and not consumers[1]:
-            self.store.archive(candidate)
-        candidates_path = "quality-candidates-" + forecast.version + ".json"
-        if not self.store.documents.exists(candidates_path):
-            self.store.documents.write(
-                candidates_path,
-                {
-                    "forecasts": [
-                        {"version": alternative.version, "model": alternative.model}
-                        for alternative in (baseline_forecast, candidate)
-                        if alternative is not None
-                        and not (alternative is candidate and consumers[1])
-                    ]
-                },
-            )
-        if composite is not None:
-            self.store.archive_composite(composite, consumer_result)
-        if composite is not None or consumer_result and consumer_result.get("devices"):
-            self.store.archive_components(forecast, composite, consumer_result)
-            self.store.archive_components(baseline_forecast, composite, consumer_result)
+        self._archive_forecasts(
+            forecast,
+            baseline_forecast,
+            candidate,
+            composite,
+            consumer_result,
+            separated=bool(consumers[1]),
+        )
         return (
             key,
             forecast,
@@ -631,6 +616,33 @@ class DemandRuntime:
             reconstruction.document(),
             daily_selection,
         )
+
+    def _archive_forecasts(
+        self, forecast, baseline_forecast, candidate, composite, consumer_result, *, separated
+    ):
+        """Retain original forecasts and quality candidates in their respective evidence archives."""
+        self.store.archive(baseline_forecast)
+        if not separated:
+            self.store.archive(forecast)
+        if candidate is not None and not separated:
+            self.store.archive(candidate)
+        candidates_path = "quality-candidates-" + forecast.version + ".json"
+        if not self.store.documents.exists(candidates_path):
+            self.store.documents.write(
+                candidates_path,
+                {
+                    "forecasts": [
+                        {"version": alternative.version, "model": alternative.model}
+                        for alternative in (baseline_forecast, candidate)
+                        if alternative is not None and not (alternative is candidate and separated)
+                    ]
+                },
+            )
+        if composite is not None:
+            self.store.archive_composite(composite, consumer_result)
+        if composite is not None or consumer_result and consumer_result.get("devices"):
+            self.store.archive_components(forecast, composite, consumer_result)
+            self.store.archive_components(baseline_forecast, composite, consumer_result)
 
     def install(self, result, now):
         """Reject a worker result superseded by configuration, history, weather or a quarter boundary."""

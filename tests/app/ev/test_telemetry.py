@@ -26,7 +26,10 @@ def test_republication_does_not_reset_charging_estimate():
     report["at"] = (NOW + timedelta(hours=1)).isoformat()
     report["vehicles"][0].update(observed_at=report["at"], reported_at=report["at"])
     report["points"][0]["energy_kwh"] = 102.3
-    telemetry = update_telemetry(telemetry, state, report)
+    previous = telemetry
+    telemetry = update_telemetry(previous, state, report)
+    assert previous["vehicles"][CAR]["stored_kwh"] == 0
+    assert previous["sessions"][POINT]["energy_kwh"] == 100
     estimate = vehicle_estimates(telemetry, state["vehicles"], NOW + timedelta(hours=1))[CAR]
     assert estimate["soc"] == pytest.approx(50 + 1.84 / 60 * 100)
     assert estimate["observed_at"] == NOW.isoformat()

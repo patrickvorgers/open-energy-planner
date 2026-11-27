@@ -14,6 +14,33 @@ DEFAULT_VALIDATION_TOLERANCE = 1e-07
 WHOLE_WATT_TOLERANCE = 1e-05
 
 
+def _validate_grid_exchange(problem, flow, duration_hours, interval_index, settled, tolerance):
+    """Enforce directional grid limits and the independent protected bonus boundary."""
+    for value, limit in (
+        (flow.grid_import, problem.grid_import_limit_w * duration_hours / WATTS_PER_KW),
+        (flow.grid_export, problem.grid_export_limit_w * duration_hours / WATTS_PER_KW),
+    ):
+        if not (isfinite(value) and -tolerance <= value <= limit + tolerance):
+            raise ValueError("Grid bound")
+    if not min(flow.grid_import, flow.grid_export) <= tolerance:
+        raise ValueError("Grid direction")
+    for bonus, result in zip(problem.export_bonuses, settled, strict=True):
+        if not bonus.prevent_battery_export or not bonus.prevent_battery_export[interval_index]:
+            continue
+        previous_counter = (
+            bonus.initial_kwh
+            if interval_index == 0
+            else result.counters_kwh[interval_index - 1]
+            if bonus.periods[interval_index] == bonus.periods[interval_index - 1]
+            else 0
+        )
+        if bonus.caps_kwh[interval_index] - previous_counter > tolerance and not (
+            min(flow.grid_export, sum(battery.discharge_kwh for battery in flow.batteries))
+            <= tolerance
+        ):
+            raise ValueError("Battery export during protected bonus window")
+
+
 def validate(problem, plan, tolerance=DEFAULT_VALIDATION_TOLERANCE):
     """Recompute conservation, limits, reserve, whole commands and costs without importing solver code."""
 
@@ -104,28 +131,7 @@ def validate(problem, plan, tolerance=DEFAULT_VALIDATION_TOLERANCE):
             and set(solar_flows) == {pv_source.source_id for pv_source in problem.pv_sources},
             "PV identities",
         )
-        for value, limit in (
-            (flow.grid_import, problem.grid_import_limit_w * duration_hours / WATTS_PER_KW),
-            (flow.grid_export, problem.grid_export_limit_w * duration_hours / WATTS_PER_KW),
-        ):
-            require(isfinite(value) and -tolerance <= value <= limit + tolerance, "Grid bound")
-        require(min(flow.grid_import, flow.grid_export) <= tolerance, "Grid direction")
-        for bonus, result in zip(problem.export_bonuses, settled, strict=True):
-            if not bonus.prevent_battery_export or not bonus.prevent_battery_export[interval_index]:
-                continue
-            previous_counter = (
-                bonus.initial_kwh
-                if interval_index == 0
-                else result.counters_kwh[interval_index - 1]
-                if bonus.periods[interval_index] == bonus.periods[interval_index - 1]
-                else 0
-            )
-            if bonus.caps_kwh[interval_index] - previous_counter > tolerance:
-                require(
-                    min(flow.grid_export, sum(battery.discharge_kwh for battery in flow.batteries))
-                    <= tolerance,
-                    "Battery export during protected bonus window",
-                )
+        _validate_grid_exchange(problem, flow, duration_hours, interval_index, settled, tolerance)
         require(
             close(
                 flow.grid_import
