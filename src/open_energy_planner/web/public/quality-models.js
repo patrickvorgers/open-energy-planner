@@ -8,6 +8,14 @@ const HISTORY_IMPORT_MESSAGES = {
     history_cache_unreadable: "Saved production history cannot be read. Check the saved database and restore a working backup if needed.",
 };
 
+/** Separate an incomplete comparison from an active choice made by the daily-total check. */
+function solarReadiness(choice, training, calibration) {
+    if (!choice) return calibration;
+    const collectsAccuracy = choice.requested === "automatic" || choice.requested === "ml" && training?.status === "nonlinear_shadow";
+    if (collectsAccuracy && choice.complete_days < choice.required_days) return "collecting_accuracy_evidence";
+    return choice.issue && !choice.daily_total_comparison?.ml_held ? "comparison_unavailable" : "active";
+}
+
 /** Associate current readiness and selection with stable forecast IDs, never historical names. */
 export function currentModelRows(current = {}, selection = {}) {
     const rows = new Map();
@@ -15,8 +23,7 @@ export function currentModelRows(current = {}, selection = {}) {
     const solar = current.solar || {}, consumers = current.consumers || {};
     for (const [index, source] of (solar.configuration?.sources || []).entries()) {
         const choice = solar.source_selection?.[source.source_id], training = solar.learning?.[source.source_id];
-        const collecting = choice && choice.complete_days < choice.required_days && (choice.requested === "automatic" || choice.requested === "ml" && training?.status === "nonlinear_shadow");
-        const readiness = choice ? collecting ? "collecting_accuracy_evidence" : choice.issue ? "comparison_unavailable" : "active" : solar.calibration_status?.[source.source_id];
+        const readiness = solarReadiness(choice, training, solar.calibration_status?.[source.source_id]);
         rows.set(source.source_id, {id: source.source_id, scope: "solar", label: solar.source_names?.[source.source_id] || `Solar ${index + 1}`, active: solar.source_model_labels?.[source.source_id] || solar.source_models?.[source.source_id], readiness, solarSelection: choice, solarLearning: solar.calibration_status?.[source.source_id], solarTraining: solar.learning?.[source.source_id], solarWeatherService: solar.weather_service, solarHistory: solar.history_import?.[source.entity_id], solarLearningStart: source.learning_start, issue: solar.history_issues?.[source.entity_id] || solar.feedback_issues?.[source.curtailment_entity_id] || solar.issue});
     }
     for (const device of consumers.result?.devices || []) rows.set(device.entity_id, {id: device.entity_id, scope: "devices", label: consumers.options?.find(row => row.entity_id === device.entity_id)?.name || device.entity_id, active: device.forecast.model, readiness: device.status ?? consumers.result.status, temperature: device.weather_features_used, weatherLearning: device.weather_learning, dailySelection: device.model_selection});
@@ -48,10 +55,11 @@ function selectionReason(row) {
 export function renderCurrentModel(parent, row, expanded = false) {
     const current = document.createElement("section"), active = document.createElement("p"), reason = document.createElement("p");
     current.className = "quality-current-summary"; current.setAttribute("aria-label", "Current forecast model");
-    active.textContent = `${row.scope === "devices" ? "Component forecast model" : "Active forecast model"}: ${row.active || "Waiting for forecast"}`;
+    const activeLabel = row.scope === "solar" ? "Active forecast model now" : row.scope === "devices" ? "Component forecast model" : "Active forecast model";
+    active.textContent = `${activeLabel}: ${row.active || "Waiting for forecast"}`;
     reason.textContent = selectionReason(row);
     current.append(active, reason);
-    parent.querySelector("h2")?.after(current);
+    (parent.querySelector(".quality-original-model") || parent.querySelector("h2"))?.after(current);
     const details = document.createElement("details"), summary = document.createElement("summary");
     details.className = "quality-current-model"; details.dataset.modelSource = row.id; details.open = expanded;
     summary.textContent = "Current model and learning"; details.append(summary);
@@ -177,10 +185,46 @@ function appendWeatherLearning(learning, paragraph) {
     paragraph("This predicts consumption. Home Assistant retains control of operating mode, comfort and safety.");
 }
 
+const SOLAR_MODEL_NAMES = {automatic: "Automatic", pvwatts: "PVWatts", ha: "Home Assistant", ml: "Machine learning"};
+const SOLAR_COMPARISON_EXCLUSIONS = {
+    unreadable_capture: "Saved forecast evidence is unreadable.",
+    missing_capture: "No comparable forecast was saved before this day.",
+    missing_models: "The saved forecast lacks one or more current models.",
+    ha_configuration_changed: "The Home Assistant forecast configuration has changed.",
+    outside_learning_period: "Outside the configured learning period.",
+    restricted_or_unverified_production: "Production was restricted or unrestricted production could not be verified.",
+    missing_measurements: "Production measurements are incomplete.",
+    inverter_limit_evidence: "Production may have been limited by the shared inverter.",
+};
+
+/** Show which captured days passed and display the daily totals separately from hourly MAE. */
+function appendSolarComparisonEvidence(solar, paragraph, section) {
+    if (solar.hourly_comparison_required_days) paragraph(`Hourly accuracy: ${solar.complete_days} of ${solar.hourly_comparison_required_days} comparable days.`, section);
+    if (solar.comparison_days?.length) paragraph(`Matched days for hourly accuracy: ${solar.comparison_days.map(dateLabel).join(", ")}.`, section);
+    const totals = solar.daily_total_comparison;
+    if (totals) {
+        const energy = value => value.toLocaleString(undefined, {maximumFractionDigits: 2});
+        paragraph(`Daily totals: ${totals.days.length} of ${totals.required_days} comparable days. Measured across those days: ${energy(totals.measured_kwh)} kWh.`, section);
+        for (const [model, result] of Object.entries(totals.models)) {
+            paragraph(`${SOLAR_MODEL_NAMES[model]}: ${energy(result.bias_kwh)} kWh total forecast difference. Sum of absolute daily errors: ${energy(result.absolute_error_kwh)} kWh. Days with material underestimation: ${result.materially_underestimated_days}.`, section);
+        }
+    }
+    if (!solar.comparison_exclusions?.length) return;
+    const details = document.createElement("details"), summary = document.createElement("summary"), list = document.createElement("ul");
+    summary.textContent = "Why days were excluded";
+    for (const {day, reason} of solar.comparison_exclusions) {
+        const item = document.createElement("li");
+        item.textContent = `${dateLabel(day)}: ${SOLAR_COMPARISON_EXCLUSIONS[reason] || "Comparable evidence was unavailable."}`;
+        list.append(item);
+    }
+    details.append(summary, list);
+    section.append(details);
+}
+
 function appendSolarSelection(row, paragraph, comparison) {
     if (row.solarSelection) {
         const solar = row.solarSelection;
-        const names = {automatic: "Automatic", pvwatts: "PVWatts", ha: "Home Assistant", ml: "Machine learning"};
+        const names = SOLAR_MODEL_NAMES;
         const complete = comparison("Complete forecast comparison");
         paragraph(`Forecast source: ${names[solar.requested]}: Active: ${names[solar.active]}`, complete);
         if (solar.admission_basis === "historical_forecast_backtest") paragraph("Machine learning passed the historical forecast assessment. Home Assistant forecasts retain their separate captured comparison.", complete);
@@ -189,6 +233,7 @@ function appendSolarSelection(row, paragraph, comparison) {
         if (solar.admission_basis === "historical_forecast_backtest") paragraph("Historical admission scores are shown in the historical forecast backtest below. They are not real captured forecast scores.", complete);
         else if (Object.keys(solar.mae_kwh || {}).length) appendModelErrors(complete, Object.entries(solar.mae_kwh).map(([source, error]) => [source === "ml" ? "Machine learning" : names[source], error]));
         else paragraph("Captured comparison scores are unavailable. Check the historical assessment and usable production history below.", complete);
+        appendSolarComparisonEvidence(solar, paragraph, complete);
         if (solar.issue) paragraph(solar.issue, complete);
         if (row.solarLearning && !row.solarTraining) paragraph(`ML learning: ${optionLabel(row.solarLearning)}`, complete);
     }

@@ -1150,9 +1150,36 @@ def test_solar_satellite_reference_units_coverage_and_shared_subject_selection(a
                     "roof": {
                         "requested": "ha",
                         "active": "ha",
-                        "complete_days": 0,
+                        "complete_days": 1,
                         "required_days": 3,
                         "issue": None,
+                        "comparison_days": ["2026-10-24"],
+                        "hourly_comparison_required_days": 3,
+                        "comparison_exclusions": [
+                            {"day": "2026-10-25", "reason": "missing_measurements"}
+                        ],
+                        "daily_total_comparison": {
+                            "days": ["2026-10-24"],
+                            "required_days": 7,
+                            "measured_kwh": 10,
+                            "models": {
+                                "ml": {
+                                    "bias_kwh": -3,
+                                    "absolute_error_kwh": 3,
+                                    "materially_underestimated_days": 1,
+                                },
+                                "pvwatts": {
+                                    "bias_kwh": 1,
+                                    "absolute_error_kwh": 1,
+                                    "materially_underestimated_days": 0,
+                                },
+                                "ha": {
+                                    "bias_kwh": 2,
+                                    "absolute_error_kwh": 2,
+                                    "materially_underestimated_days": 0,
+                                },
+                            },
+                        },
                     }
                 },
             }
@@ -1190,10 +1217,29 @@ def test_solar_satellite_reference_units_coverage_and_shared_subject_selection(a
     ).to_be_visible()
     # The current choice is deliberately different from the frozen day's ML forecast.
     current = page.locator(".quality-current-summary")
-    expect(current).to_contain_text("Active forecast model: Current HA forecast")
+    expect(page.locator(".quality-original-model")).to_have_text(
+        "Forecast used on 10/26/2026: ML forecast"
+    )
+    expect(current).to_contain_text("Active forecast model now: Current HA forecast")
     expect(current).to_contain_text("Manually selected forecast source.")
     assert current.bounding_box()["y"] < page.locator(".quality-daily").bounding_box()["y"]
     expect(page.locator(".quality-current-model")).not_to_have_attribute("open", "")
+    page.get_by_text("Current model and learning", exact=True).click()
+    comparison = page.get_by_role("region", name="Complete forecast comparison", exact=True)
+    expect(comparison).to_contain_text("Hourly accuracy: 1 of 3 comparable days.")
+    expect(comparison).to_contain_text("Daily totals: 1 of 7 comparable days.")
+    expect(comparison).to_contain_text("Machine learning: -3 kWh total forecast difference")
+    comparison.get_by_text("Why days were excluded", exact=True).click()
+    expect(
+        comparison.get_by_text("10/25/2026: Production measurements are incomplete.")
+    ).to_be_visible()
+    capture = Path("results/ci/solar-forecast-diagnostics")
+    capture.mkdir(parents=True, exist_ok=True)
+    page.evaluate("window.scrollTo(0, 0)")
+    page.screenshot(
+        path=str(capture / f"forecast-quality-{page.viewport_size['width']}.png"), full_page=True
+    )
+    page.get_by_text("Current model and learning", exact=True).click()
     evidence = show_hour(page, 12)
     expect(evidence).to_contain_text("Measured: Unavailable kWh")
     expect(evidence).to_contain_text("ML forecast: Original choice: 0.900 kWh")
@@ -1292,7 +1338,7 @@ def test_solar_satellite_reference_units_coverage_and_shared_subject_selection(a
     )
     body["current_models"]["solar"]["source_model_labels"]["roof"] = "PVWatts fallback"
     page.get_by_role("button", name="Refresh evidence", exact=True).click()
-    expect(current).to_contain_text("Active forecast model: PVWatts fallback")
+    expect(current).to_contain_text("Active forecast model now: PVWatts fallback")
     expect(current).to_contain_text("Selected forecast unavailable. PVWatts is active")
     choice["issue"] = None
     page.get_by_role("button", name="Refresh evidence", exact=True).click()
