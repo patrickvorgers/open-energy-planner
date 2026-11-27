@@ -1134,7 +1134,10 @@ def test_advance_publication_failure_recovers_without_blocking_or_resending(monk
     assert client.state()["phase"] in {"sending", "coderabbit"}
     monkeypatch.setattr(client, "post", original_post)
     client.run()
-    assert client.state()["phase"] == "coderabbit"
+    recovered = client.state()
+    assert recovered["phase"] == "coderabbit"
+    assert recovered["queries"] == recovered["reviews"] == 1
+    assert recovered["sequence"] == 2
     assert client.provider_commands() == ["@coderabbitai rate limit", "@coderabbitai review"]
     assert "PRIVATE-REVIEW-PUBLICATION-SENTINEL" not in json.dumps(client.comments)
 
