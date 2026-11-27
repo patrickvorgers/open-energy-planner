@@ -889,6 +889,93 @@ def _recover_command_receipt(state, comments):
     return published
 
 
+def _coderabbit_availability_reply(fresh):
+    """Select at most one recognized availability reply from the current request."""
+    replies = []
+    for row in fresh:
+        if (
+            is_bot(row, "coderabbitai[bot]")
+            and "<!-- This is an auto-generated reply by CodeRabbit -->" in row["body"]
+        ):
+            availability, resume = quota_reply(row["body"], instant(row["created_at"]))
+            if availability != "unrelated":
+                replies.append((row, availability, resume))
+    if len(replies) > 1:
+        raise VerificationError("Ambiguous CodeRabbit availability replies")
+    return replies[0] if replies else None
+
+
+def _advance_coderabbit(repository, number, state, subject, client, now, publisher, checks, fresh):
+    """Handle availability replies or let an active review reach its completion check."""
+    parsed = _coderabbit_availability_reply(fresh)
+    if parsed:
+        reply, availability, resume = parsed
+        if availability == "unknown":
+            raise VerificationError("Unknown CodeRabbit availability. No provider was selected")
+        if now - instant(reply["created_at"]) > REPLY_TIMEOUT:
+            if provider_active(checks):
+                return True
+            send_command(
+                repository,
+                number,
+                state,
+                "quota",
+                subject,
+                client,
+                now,
+                publisher,
+                availability_reply=reply,
+            )
+            return True
+        if availability == "limited":
+            if provider_active(checks):
+                return True
+            state["resume"] = resume.isoformat() if resume is not None else None
+            if not state["greptile_used"] and not state["kody_used"]:
+                send_command(
+                    repository,
+                    number,
+                    state,
+                    greptile_fallback_target(),
+                    subject,
+                    client,
+                    now,
+                    publisher,
+                    availability_reply=reply,
+                )
+            elif resume is not None:
+                state.update(
+                    phase="waiting",
+                    message=f"CodeRabbit quota is exhausted. Recheck at {state['resume']}.",
+                )
+                save_state(state, subject, client)
+            else:
+                raise VerificationError("CodeRabbit supplied no usable retry interval")
+            return True
+        if state["phase"] == "quota":
+            if availability != "available":
+                raise VerificationError("Unknown CodeRabbit availability. No provider was selected")
+            send_command(
+                repository,
+                number,
+                state,
+                "coderabbit",
+                subject,
+                client,
+                now,
+                publisher,
+                availability_reply=reply,
+            )
+            return True
+    if state["phase"] == "quota":
+        if now - instant(state["sent"]) > REPLY_TIMEOUT:
+            raise VerificationError(
+                "CodeRabbit availability reply timed out. No fallback was inferred"
+            )
+        return True
+    return False
+
+
 def advance(repository, number, state, comments, client, now, publisher=None):
     """Resume one request using fresh provider metadata, without interpreting findings as failures."""
     if state["phase"] in TERMINAL:
@@ -957,85 +1044,10 @@ def advance(repository, number, state, comments, client, now, publisher=None):
         if now >= instant(state["resume"]):
             send_command(repository, number, state, "quota", subject, client, now, publisher)
         return
-    if state["phase"] in {"quota", "coderabbit"}:
-        replies = []
-        for row in fresh:
-            if (
-                is_bot(row, "coderabbitai[bot]")
-                and "<!-- This is an auto-generated reply by CodeRabbit -->" in row["body"]
-            ):
-                availability, resume = quota_reply(row["body"], instant(row["created_at"]))
-                if availability != "unrelated":
-                    replies.append((row, availability, resume))
-        if len(replies) > 1:
-            raise VerificationError("Ambiguous CodeRabbit availability replies")
-        if replies:
-            reply, availability, resume = replies[0]
-            if availability == "unknown":
-                raise VerificationError("Unknown CodeRabbit availability. No provider was selected")
-            if now - instant(reply["created_at"]) > REPLY_TIMEOUT:
-                if provider_active(checks):
-                    return
-                send_command(
-                    repository,
-                    number,
-                    state,
-                    "quota",
-                    subject,
-                    client,
-                    now,
-                    publisher,
-                    availability_reply=reply,
-                )
-                return
-            if availability == "limited":
-                if provider_active(checks):
-                    return
-                state["resume"] = resume.isoformat() if resume is not None else None
-                if not state["greptile_used"] and not state["kody_used"]:
-                    send_command(
-                        repository,
-                        number,
-                        state,
-                        greptile_fallback_target(),
-                        subject,
-                        client,
-                        now,
-                        publisher,
-                        availability_reply=reply,
-                    )
-                elif resume is not None:
-                    state.update(
-                        phase="waiting",
-                        message=f"CodeRabbit quota is exhausted. Recheck at {state['resume']}.",
-                    )
-                    save_state(state, subject, client)
-                else:
-                    raise VerificationError("CodeRabbit supplied no usable retry interval")
-                return
-            if state["phase"] == "quota":
-                if availability != "available":
-                    raise VerificationError(
-                        "Unknown CodeRabbit availability. No provider was selected"
-                    )
-                send_command(
-                    repository,
-                    number,
-                    state,
-                    "coderabbit",
-                    subject,
-                    client,
-                    now,
-                    publisher,
-                    availability_reply=reply,
-                )
-                return
-        if state["phase"] == "quota":
-            if now - instant(state["sent"]) > REPLY_TIMEOUT:
-                raise VerificationError(
-                    "CodeRabbit availability reply timed out. No fallback was inferred"
-                )
-            return
+    if state["phase"] in {"quota", "coderabbit"} and _advance_coderabbit(
+        repository, number, state, subject, client, now, publisher, checks, fresh
+    ):
+        return
     if state["phase"] == "codex":
         if now - instant(state["sent"]) > REVIEW_TIMEOUT:
             raise VerificationError(

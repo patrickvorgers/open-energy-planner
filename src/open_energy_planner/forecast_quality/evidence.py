@@ -250,6 +250,20 @@ def _append_demand_evidence(
             result["issues"].append("Original household or component forecast evidence unavailable")
 
 
+def _solar_feedback_for(source, feedback_by_source, unavailable_sensors, solar_documents, now):
+    """Prefer current feedback and use the archive only for bindings without a live result."""
+    sensor = source.get("curtailment_entity_id")
+    if not sensor or sensor in unavailable_sensors:
+        return None
+    key = source["source_id"], source["entity_id"], sensor
+    if key in feedback_by_source:
+        return feedback_by_source[key]
+    try:
+        return load_feedback(solar_documents, sensor, now)
+    except (OSError, KeyError, ValueError, TypeError):
+        return None
+
+
 def _append_solar_evidence(
     result,
     entries,
@@ -306,18 +320,9 @@ def _append_solar_evidence(
                         )
                 actual, receipt = meter_readings[source["entity_id"]]
                 inverter = inverters[source["inverter_id"]]
-                feedback = None
-                if source.get("curtailment_entity_id"):
-                    sensor = source["curtailment_entity_id"]
-                    key = identity, source["entity_id"], sensor
-                    if sensor not in unavailable_sensors:
-                        if key in feedback_by_source:
-                            feedback = feedback_by_source[key]
-                        else:
-                            try:
-                                feedback = load_feedback(solar_documents, sensor, now)
-                            except (OSError, KeyError, ValueError, TypeError):
-                                pass
+                feedback = _solar_feedback_for(
+                    source, feedback_by_source, unavailable_sensors, solar_documents, now
+                )
                 hourly_issues = _solar_hourly_issues(
                     source, inverter, siblings, meter_readings, feedback, start, end
                 )

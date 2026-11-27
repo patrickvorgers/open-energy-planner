@@ -160,11 +160,20 @@ def simulations_response(page, url):
 
 
 @pytest.mark.parametrize("app_site", ["documentation"], indirect=True)
-def test_simulation_failure_keeps_plan_and_evidence_can_retry_independently(app_page):
+@pytest.mark.parametrize("failure", ["http-error", "wrong-plan"])
+def test_simulation_failure_keeps_plan_and_evidence_can_retry_independently(app_page, failure):
     """Neither a simulation failure nor a failed evidence disclosure removes the plan or its prices."""
     page, url = app_page
     page.clock.set_fixed_time(START)
-    page.route("**/comparison?view=simulations", lambda route: route.fulfill(status=503))
+
+    def fail_simulations(route):
+        """Return a failed request or a successful response belonging to a different plan."""
+        if failure == "http-error":
+            route.fulfill(status=503)
+        else:
+            route.fulfill(json={"plan_id": "different-plan"})
+
+    page.route("**/comparison?view=simulations", fail_simulations)
     page.route("**/comparison?view=evidence", lambda route: route.fulfill(status=503))
     page.goto(url + "/overview")
     page.get_by_label("Installation API token", exact=True).fill(TOKEN)

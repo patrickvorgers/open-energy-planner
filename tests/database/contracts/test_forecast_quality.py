@@ -652,7 +652,7 @@ def frozen_plan(archive):
     return plan, solar
 
 
-@pytest.mark.parametrize("guard", ["none", "hybrid", "shared", "clipping", "late"])
+@pytest.mark.parametrize("guard", ["none", "hybrid", "shared", "clipping", "late", "unavailable"])
 def test_solar_feedback_excludes_only_affected_plan_hours_and_alternatives(archive, guard):
     """Only two checked unrestricted hours score. Their original/alternative MAEs are independently 1/.5 kWh."""
     from open_energy_planner.solar.curtailment import CurtailmentHistory, save_feedback
@@ -733,7 +733,15 @@ def test_solar_feedback_excludes_only_affected_plan_hours_and_alternatives(archi
         ),
         START - timedelta(hours=1),
     )
-    result = evidence(plan, archive, archive.documents, solar, START + timedelta(hours=6))
+    unavailable = {("roof", "sensor.pv", "binary_sensor.roof"): None}
+    result = evidence(
+        plan,
+        archive,
+        archive.documents,
+        solar,
+        START + timedelta(hours=6),
+        solar_feedback=unavailable if guard == "unavailable" else None,
+    )
     source = next(row for row in result["series"] if row["scope"] == "solar")
     for row, expected_mae in [(source, 1), (source["alternatives"][0], 0.5)]:
         eligible = {
@@ -742,6 +750,7 @@ def test_solar_feedback_excludes_only_affected_plan_hours_and_alternatives(archi
             "shared": [0, 2],
             "clipping": [0],
             "late": [2],
+            "unavailable": [],
         }[guard]
         assert row["coverage"] == {"hours": 5, "measured_hours": 5, "paired_hours": len(eligible)}
         assert row["metrics"]["mae_kwh"] == (expected_mae if eligible else None)
