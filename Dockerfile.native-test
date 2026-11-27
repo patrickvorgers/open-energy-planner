@@ -2,7 +2,7 @@ FROM python:3.14.8-slim-bookworm@sha256:48b13b003dda20b16f9442b8475aa05fe21bf657
 WORKDIR /workspace
 COPY requirements.lock ./
 RUN python -m pip install --no-cache-dir --only-binary=:all: --require-hashes -r requirements.lock
-RUN python -m pip install --no-cache-dir pytest==9.1.1 ruff==0.17.1 iniconfig==2.3.0 pluggy==1.6.0 packaging==26.3 pygments==2.21.0
+RUN python -m pip install --no-cache-dir pytest==9.1.1 ruff==0.17.1 iniconfig==2.3.0 pluggy==1.6.0 packaging==26.3 pygments==2.21.0 lizard==1.26.1 pathspec==1.1.1
 COPY . .
 RUN mkdir -p results
 ENV PYTHONPATH=/workspace/src PYTHONDONTWRITEBYTECODE=1 OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 MKL_NUM_THREADS=1

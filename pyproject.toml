@@ -10,7 +10,13 @@ dependencies = ["astral==3.2", "aiohttp==3.14.5", "highspy==1.15.1", "numpy==2.5
 open_energy_planner = ["build-info.json", "web/pages/**/*.html", "web/partials/*.html", "web/public/*.css", "web/public/*.js", "web/public/*.txt", "web/public/icons/*.svg", "web/public/fonts/*.ttf", "web/public/fonts/*.txt", "web/public/fonts/*.json"]
 
 [project.optional-dependencies]
-dev = ["pytest>=9,<10", "ruff==0.17.1"]
+dev = [
+    "pytest>=9,<10",
+    "ruff==0.17.1",
+    "lizard==1.26.1",
+    "pathspec==1.1.1",
+    "pygments==2.21.0",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
