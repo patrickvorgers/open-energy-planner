@@ -495,6 +495,102 @@ def _register_archive_lifecycle(app, repository, lock, save_state):
     app.cleanup_ctx.append(archive_lifecycle)
 
 
+def _prepare_contract_basis(
+    basis_source, get_prices, contracts, bonus_counters, live, installation, owns_market_prices
+):
+    """Prepare contract-controlled future inputs and activate them when configured."""
+    contract_basis = ContractBasisSource(
+        basis_source, get_prices, lambda: contracts.current, lambda: bonus_counters.current
+    )
+    if live and (
+        installation.current is not None
+        or owns_market_prices
+        or contracts.current is not None
+        or contracts.issue
+    ):
+        live.basis_source = contract_basis
+    return contract_basis
+
+
+async def _publish_daily_prices(service, daily_prices, price_timezone, savings_mutation_lock):
+    """Publish price-day evidence only for complete installation settings."""
+    timezone = price_timezone()
+    if timezone and service.market_area and not getattr(service, "configuration_issue", None):
+        async with savings_mutation_lock:
+            daily_now = datetime.now(UTC)
+            cancellation = await complete_write(
+                daily_prices.update,
+                service.daily_timeline(daily_now),
+                service.market_area,
+                timezone,
+                daily_now,
+            )
+            if cancellation is not None:
+                raise cancellation
+
+
+def _register_price_worker(app, factory, install, refresh_requested, live, lock, update_daily):
+    """Own scheduled price refresh, wakeups and worker cleanup for the active service."""
+
+    async def price_lifecycle(_app):
+        """Install the price service for the same lifetime as its background worker."""
+        async with factory() as prices:
+            install(prices)
+            price_logger = BackgroundLog(_LOGGER, "Market price refresh")
+
+            async def update_prices():
+                """Check due source requests without blocking HTTP. Diagnose unexpected failures."""
+                readiness_pending = False
+                while True:
+                    try:
+                        readiness_pending = readiness_pending or refresh_requested.is_set()
+                        refresh_requested.clear()
+                        now = datetime.now(UTC)
+                        prices_changed = await prices.refresh(now)
+                        readiness_pending = readiness_pending or prices_changed
+                        if live and readiness_pending:
+                            async with lock:
+                                await live.refresh_async()
+                            readiness_pending = False
+                        await update_daily(prices)
+                        if price_logger.failure_key is not None:
+                            price_logger.success("Price refresh processing is running again.")
+                    except Exception:
+                        price_logger.exception(
+                            "Previously accepted prices keep their original expiry. Check source and storage status.",
+                            retry_seconds=PRICE_SCHEDULE_POLL_SECONDS,
+                        )
+                    try:
+                        await asyncio.wait_for(
+                            refresh_requested.wait(), PRICE_SCHEDULE_POLL_SECONDS
+                        )
+                    except TimeoutError:
+                        pass
+
+            task = asyncio.create_task(update_prices())
+            try:
+                yield
+            finally:
+                task.cancel()
+                with suppress(asyncio.CancelledError):
+                    await task
+
+    app.cleanup_ctx.append(price_lifecycle)
+
+
+def _register_planning_activity(app, engine, planner, notification_center, timezone):
+    """Attach activity and planning performance to the same installation calendar."""
+    from .activities.api import register as register_activities
+    from .optimization.performance import register as register_performance
+
+    events = register_activities(app, engine, notification_center, timezone)
+    planner.events = events
+    planner.record_calculation = register_performance(
+        app, SqlDocuments(engine, "planning"), timezone
+    )
+    return events
+
+
 def create_app(
     directory,
     token,
@@ -702,8 +798,6 @@ def create_app(
             return (*(notices or ()), notice)
         return notices
 
-    from .optimization.performance import register as register_performance
-
     planner = PlanningCoordinator(
         PlanningService(solver or ProcessSolver()), publish, explain=notification_center.explain
     )
@@ -821,26 +915,14 @@ def create_app(
 
     _register_archive_lifecycle(app, repository, lock, save_state)
 
-    from .activities.api import register as register_activities
+    def installation_timezone():
+        """Use the installation calendar, allowing UTC only for explicit synthetic mode."""
+        return (setup_catalogue.value or {}).get("timezone") or (
+            "UTC" if source == "synthetic" else None
+        )
 
-    events = register_activities(
-        app,
-        repository.engine,
-        notification_center,
-        lambda: (
-            (setup_catalogue.value or {}).get("timezone")
-            or ("UTC" if source == "synthetic" else None)
-        ),
-    )
-    planner.events = events
-
-    planner.record_calculation = register_performance(
-        app,
-        SqlDocuments(repository.engine, "planning"),
-        lambda: (
-            (setup_catalogue.value or {}).get("timezone")
-            or ("UTC" if source == "synthetic" else None)
-        ),
+    events = _register_planning_activity(
+        app, repository.engine, planner, notification_center, installation_timezone
     )
 
     pairing = Pairing(directory, repository.state["instance_id"])
@@ -853,26 +935,19 @@ def create_app(
     price_refresh_requested = asyncio.Event()
     daily_prices = DailyPrices(SqlDocuments(repository.engine, "prices"))
 
-    def price_timezone():
-        """Use the installation calendar, allowing UTC only for explicit synthetic mode."""
-        return (setup_catalogue.value or {}).get("timezone") or (
-            "UTC" if source == "synthetic" else None
-        )
-
     from .storage.api import register as register_storage
 
-    register_storage(app, repository.engine, price_timezone)
+    register_storage(app, repository.engine, installation_timezone)
 
-    contract_basis = ContractBasisSource(
-        basis_source, lambda: prices, lambda: contracts.current, lambda: bonus_counters.current
+    contract_basis = _prepare_contract_basis(
+        basis_source,
+        lambda: prices,
+        contracts,
+        bonus_counters,
+        live,
+        installation,
+        price_factory is not None,
     )
-    if live and (
-        installation.current is not None
-        or price_factory is not None
-        or contracts.current is not None
-        or contracts.issue
-    ):
-        live.basis_source = contract_basis
 
     async def persist_then_install(
         save,
@@ -971,72 +1046,26 @@ def create_app(
 
     if price_factory is not None:
 
-        async def price_lifecycle(_app):
-            """Start cached-price refresh independently of request latency and solver timing."""
+        def install_price_service(service):
+            """Expose the pricing service and share savings mutation ordering."""
             nonlocal prices
-            async with price_factory(repository.engine) as prices:
-                prices.persistence_lock = savings_mutation_lock
-                prices.events = events
-                price_logger = BackgroundLog(_LOGGER, "Market price refresh")
+            prices = service
+            prices.persistence_lock = savings_mutation_lock
+            prices.events = events
 
-                async def update_prices():
-                    """Check due source requests without blocking HTTP. Diagnose unexpected failures."""
-                    readiness_pending = False
-                    while True:
-                        try:
-                            readiness_pending = (
-                                readiness_pending or price_refresh_requested.is_set()
-                            )
-                            price_refresh_requested.clear()
-                            now = datetime.now(UTC)
-                            prices_changed = await prices.refresh(now)
-                            readiness_pending = readiness_pending or prices_changed
-                            if live and readiness_pending:
-                                async with lock:
-                                    await live.refresh_async()
-                                readiness_pending = False
-                            timezone = price_timezone()
-                            if (
-                                timezone
-                                and prices.market_area
-                                and not getattr(prices, "configuration_issue", None)
-                            ):
-                                async with savings_mutation_lock:
-                                    daily_now = datetime.now(UTC)
-                                    cancellation = await complete_write(
-                                        daily_prices.update,
-                                        prices.daily_timeline(daily_now),
-                                        prices.market_area,
-                                        timezone,
-                                        daily_now,
-                                    )
-                                    if cancellation is not None:
-                                        raise cancellation
-                            if price_logger.failure_key is not None:
-                                price_logger.success("Price refresh processing is running again.")
-                        except Exception:
-                            price_logger.exception(
-                                "Previously accepted prices keep their original expiry. Check source and storage status.",
-                                retry_seconds=PRICE_SCHEDULE_POLL_SECONDS,
-                            )
-                        try:
-                            await asyncio.wait_for(
-                                price_refresh_requested.wait(), PRICE_SCHEDULE_POLL_SECONDS
-                            )
-                        except TimeoutError:
-                            pass
+        _register_price_worker(
+            app,
+            lambda: price_factory(repository.engine),
+            install_price_service,
+            price_refresh_requested,
+            live,
+            lock,
+            lambda service: _publish_daily_prices(
+                service, daily_prices, installation_timezone, savings_mutation_lock
+            ),
+        )
 
-                task = asyncio.create_task(update_prices())
-                try:
-                    yield
-                finally:
-                    task.cancel()
-                    with suppress(asyncio.CancelledError):
-                        await task
-
-        app.cleanup_ctx.append(price_lifecycle)
-
-    register_prices(app, lambda: prices, contracts, live, lock, daily_prices, price_timezone)
+    register_prices(app, lambda: prices, contracts, live, lock, daily_prices, installation_timezone)
 
     async def snapshot(request):
         """Dispatch once the snapshot's app-owned services have been registered."""

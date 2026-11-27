@@ -572,6 +572,46 @@ class ApplianceService:
         ):
             task.update(status="execution_observed", scheduled_start=None, plan_id=None)
 
+    def _validate_raw_profile_projection(self, data, entity, candidate):
+        """Check the refined profile against phase and encoded projection limits before installation."""
+        import json
+
+        from .model import MAX_PROFILE_STEPS, MAX_VARIABLE_PROFILE_STEPS
+
+        projected = {**data["devices"], entity: candidate}
+        active = {row["entity_id"] for row in self.consumers.selected}
+        projected_phases = sum(
+            len(value["power_w"])
+            for identity, device in projected.items()
+            if identity in active
+            for value in (
+                device.get("profile"),
+                device.get("learned_profile"),
+                device.get("additional_profile"),
+                device.get("observed_run", {}).get("profile"),
+                device.get("observed_run", {}).get("additional_profile"),
+            )
+            if value and value.get("phase_durations_seconds") is not None
+        ) + sum(
+            len(value["power_w"])
+            for identity, task in data["tasks"].items()
+            if identity in active
+            for value in (task["profile"], task.get("additional_profile"))
+            if value and value.get("phase_durations_seconds") is not None
+        )
+        if projected_phases > MAX_PROJECTED_IRREGULAR_PHASES:
+            raise ValueError("Cycle profile exceeds bounded phase complexity")
+        projected_bytes = len(
+            json.dumps(self._projection({**data, "devices": projected}), allow_nan=False).encode()
+        )
+        if projected_bytes > MAX_APPLIANCE_PROJECTION_BYTES - RAW_PROJECTION_RESERVE_BYTES:
+            raise ValueError("Cycle profile exceeds bounded phase complexity")
+        if (
+            len(candidate.get("learned_profile", {}).get("power_w", ()))
+            > MAX_VARIABLE_PROFILE_STEPS - MAX_PROFILE_STEPS
+        ):
+            raise ValueError("Cycle profile exceeds bounded phase complexity")
+
     def learn_raw_history(self, body, now, *, processing_started=None):
         """Atomically retain original Recorder frames, conserved cycles and bounded current curves.
 
@@ -584,7 +624,6 @@ class ApplianceService:
         import json
 
         from .evidence import refine
-        from .model import MAX_PROFILE_STEPS, MAX_VARIABLE_PROFILE_STEPS
         from .raw import MAX_RAW_BODY_BYTES, analyze
         from .report_coverage import advance, covers
 
@@ -664,44 +703,7 @@ class ApplianceService:
                 candidate = deepcopy(settings)
                 try:
                     refine(candidate, list(candidate_records.values()))
-                    projected = {**data["devices"], entity: candidate}
-                    active = {row["entity_id"] for row in self.consumers.selected}
-                    projected_phases = sum(
-                        len(value["power_w"])
-                        for identity, device in projected.items()
-                        if identity in active
-                        for value in (
-                            device.get("profile"),
-                            device.get("learned_profile"),
-                            device.get("additional_profile"),
-                            device.get("observed_run", {}).get("profile"),
-                            device.get("observed_run", {}).get("additional_profile"),
-                        )
-                        if value and value.get("phase_durations_seconds") is not None
-                    ) + sum(
-                        len(value["power_w"])
-                        for identity, task in data["tasks"].items()
-                        if identity in active
-                        for value in (task["profile"], task.get("additional_profile"))
-                        if value and value.get("phase_durations_seconds") is not None
-                    )
-                    if projected_phases > MAX_PROJECTED_IRREGULAR_PHASES:
-                        raise ValueError("Cycle profile exceeds bounded phase complexity")
-                    projected_bytes = len(
-                        json.dumps(
-                            self._projection({**data, "devices": projected}), allow_nan=False
-                        ).encode()
-                    )
-                    if (
-                        projected_bytes
-                        > MAX_APPLIANCE_PROJECTION_BYTES - RAW_PROJECTION_RESERVE_BYTES
-                    ):
-                        raise ValueError("Cycle profile exceeds bounded phase complexity")
-                    if (
-                        len(candidate.get("learned_profile", {}).get("power_w", ()))
-                        > MAX_VARIABLE_PROFILE_STEPS - MAX_PROFILE_STEPS
-                    ):
-                        raise ValueError("Cycle profile exceeds bounded phase complexity")
+                    self._validate_raw_profile_projection(data, entity, candidate)
                 except ValueError as error:
                     if str(error) != "Cycle profile exceeds bounded phase complexity":
                         raise
@@ -941,6 +943,84 @@ class ApplianceService:
         self.commit(data, extra=((request_key, {"request": request, "task_id": task["id"]}),))
         return task
 
+    def _collect_planning_work(self, intervals, now, excluded_entities):
+        """Collect open tasks and observed cycles with feasible origins in planning order."""
+        from .observed import work as observed_work
+        from .programs import CycleProgram
+
+        works, task_windows, entities = [], [], set(excluded_entities)
+        origins_by_entity = {}
+        for entity, task in self.state["tasks"].items():
+            if task["status"] == "execution_observed" or (
+                self.observed(entity) and not task["attempt"]
+            ):
+                continue
+            if task["status"] not in OPEN_STATUSES:
+                continue
+            try:
+                self.member(entity)
+            except ValueError:
+                continue
+            attempt = task["attempt"]
+            run = self.observed(entity)
+            observed = (
+                observed_work(entity, run, now) if run and run["status"] == "observed" else None
+            )
+            fixed = None
+            if attempt and attempt["status"] != "not_started":
+                fixed = instant(attempt.get("started_at") or attempt["start"])
+                if not attempt.get("started_at") and observed:
+                    fixed = observed.fixed_start
+            detected_additional = (
+                observed
+                and not task.get("program")
+                and (run.get("program") == CycleProgram.ADDITIONAL)
+            )
+            work = ApplianceWork(
+                task["id"],
+                entity,
+                instant(task["ready_at"]),
+                instant(task["deadline"]),
+                observed.profile if detected_additional else profile(task["profile"]),
+                fixed,
+            )
+            starts = candidates(work, intervals)
+            if starts:
+                origins_by_entity[entity] = starts
+                works.append(work)
+                entities.add(entity)
+                task_windows.append(
+                    (
+                        work,
+                        min(starts),
+                        max(starts) + timedelta(seconds=work.profile.duration_seconds),
+                    )
+                )
+        for observed in self._unrepresented_observed_work(entities, now):
+            origins_by_entity[observed.entity_id] = (observed.fixed_start,)
+            works.append(observed)
+            entities.add(observed.entity_id)
+            task_windows.append((observed, observed.fixed_start, observed.deadline))
+        return works, task_windows, entities, origins_by_entity
+
+    def _unrepresented_observed_work(self, entities, now):
+        """Yield active observed cycles whose meter is not already represented."""
+        from .observed import work as observed_work
+
+        for entity in self.state["devices"]:
+            if entity in entities:
+                continue
+            run = self.observed(entity)
+            if not run or run["status"] != "observed":
+                continue
+            try:
+                self.member(entity)
+            except ValueError:
+                continue
+            observed = observed_work(entity, run, now)
+            if observed:
+                yield observed
+
     def _admit_phase_windows(
         self, intervals, task_windows, origins_by_entity, entities, excluded_entities
     ):
@@ -1053,76 +1133,12 @@ class ApplianceService:
             validate_components,
         )
 
-        from .observed import work as observed_work
-        from .programs import CycleProgram
-
         problem = snapshot.problem
         self.issue = None
         self._phase_limited_entities = set()
-        works, task_windows, entities = [], [], set(excluded_entities)
-        origins_by_entity = {}
-        for entity, task in self.state["tasks"].items():
-            if task["status"] == "execution_observed" or (
-                self.observed(entity) and not task["attempt"]
-            ):
-                continue
-            if task["status"] not in OPEN_STATUSES:
-                continue
-            try:
-                self.member(entity)
-            except ValueError:
-                continue
-            attempt = task["attempt"]
-            run = self.observed(entity)
-            observed = (
-                observed_work(entity, run, now) if run and run["status"] == "observed" else None
-            )
-            fixed = None
-            if attempt and attempt["status"] != "not_started":
-                fixed = instant(attempt.get("started_at") or attempt["start"])
-                if not attempt.get("started_at") and observed:
-                    fixed = observed.fixed_start
-            detected_additional = (
-                observed
-                and not task.get("program")
-                and (run.get("program") == CycleProgram.ADDITIONAL)
-            )
-            work = ApplianceWork(
-                task["id"],
-                entity,
-                instant(task["ready_at"]),
-                instant(task["deadline"]),
-                observed.profile if detected_additional else profile(task["profile"]),
-                fixed,
-            )
-            starts = candidates(work, problem.intervals)
-            if starts:
-                origins_by_entity[entity] = starts
-                works.append(work)
-                entities.add(entity)
-                task_windows.append(
-                    (
-                        work,
-                        min(starts),
-                        max(starts) + timedelta(seconds=work.profile.duration_seconds),
-                    )
-                )
-        for entity in self.state["devices"]:
-            if entity in entities:
-                continue
-            run = self.observed(entity)
-            if not run or run["status"] != "observed":
-                continue
-            try:
-                self.member(entity)
-            except ValueError:
-                continue
-            observed = observed_work(entity, run, now)
-            if observed:
-                origins_by_entity[entity] = (observed.fixed_start,)
-                works.append(observed)
-                entities.add(entity)
-                task_windows.append((observed, observed.fixed_start, observed.deadline))
+        works, task_windows, entities, origins_by_entity = self._collect_planning_work(
+            problem.intervals, now, excluded_entities
+        )
         if not works and not entities and not self.consumers.selected:
             return replace(snapshot, appliance_revision=self.planning_revision)
         task_windows, uniform_boundaries = self._admit_phase_windows(

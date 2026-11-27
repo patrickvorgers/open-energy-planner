@@ -735,27 +735,8 @@ function overviewValueAxes({id, unit, minimum, balance, hasSoc, linked}) {
     };
 }
 
-/**
- * Render series into canvas id, destroying its previous chart, removing its tooltip
- * and rebuilding its accessible legend. Current-price series retain their visibility.
- * Same-plan callers retain explicit checkbox choices by immutable legend group identity.
- * Points/segments are timed lines with null
- * gaps. Price points retain their published/forecast kind for interval-specific strokes.
- * Balance intervals are projected onto quarter-hour bars with explicit coverage.
- * axis: "soc" uses the right-hand 0–100% axis. utcDays selects UTC date labels.
- * Calendar headings, alternating bands and midnight separators follow installation
- * time unless utcDays selects UTC. Timestamped charts reserve heading space and
- * remove their headings on destruction. Clock ticks show installation time
- * without timezone names while the headings supply the weekday and date.
- * unit names the default y unit. Minimum fixes a physical y baseline. balance stacks series
- * sharing a stack and includes zero. Rendering applies the selected planning range
- * without category-style end padding. Interval timestamps already determine bar widths.
- */
-function chart(id, series, {utcDays = false, calendarDates = false, unit = "", minimum = null, balance = false, preserveVisibility = false, deferRange = false, gridSteps = null} = {}) {
-    let balanceTime = null, priceHoverTime = null;
-    const batteryPlan = id === "battery-plan-chart";
-    if (balance) series = quarterBalanceSeries(series);
-    charts.get(id)?.destroy();
+/** Own one chart's tooltip, scroll positioning, and keyboard dismissal. */
+function createOverviewTooltip(id) {
     $(`${id}-tooltip`)?.remove();
     const tooltip = document.createElement("div"); tooltip.id = `${id}-tooltip`; tooltip.className = "chart-tooltip chart-tooltip-point";
     tooltip.hidden = true; tooltip.setAttribute("role", "tooltip"); document.body.append(tooltip);
@@ -788,21 +769,70 @@ function chart(id, series, {utcDays = false, calendarDates = false, unit = "", m
             positionDayTooltip(tooltip, owner);
         } else hideTooltip();
     }, {capture: true, signal: tooltipEvents.signal});
+    return {tooltip, daySummary, hideTooltip, tooltipEvents};
+}
+
+/** Convert the original line or interval evidence into one Chart.js dataset. */
+function overviewDataset(entry, index, id, unit) {
+    const values = [];
+    for (const segment of entry.segments || [entry.points || []]) {
+        if (values.length) values.push({x: segment[0][0], y: null});
+        values.push(...segment.map(([x, y, priceKind]) => ({x, y, priceKind})));
+    }
+    if (entry.intervals) values.push(...entry.intervals.map(({start, end, value, coveredStart, coveredEnd}) => ({x: (start + end) / 2, y: value, start, end, coveredStart, coveredEnd})));
+    const color = entry.color || palette[index % palette.length];
+    return {
+        label: entry.name,
+        data: values,
+        hidden: id === "price-chart" && hiddenPriceSeries.has(entry.name),
+        type: entry.type || "line",
+        stack: entry.stack,
+        yAxisID: entry.axis || "y",
+        unit: entry.unit || unit,
+        tooltipGroup: entry.tooltipGroup,
+        deviceState: entry.deviceState,
+        swatchColor: color,
+        borderColor: entry.outlineColor || color,
+        backgroundColor: deviceFill(color, entry.deviceState),
+        borderWidth: entry.outlineColor ? ({raw}) => raw?.y ? {top: 1, bottom: 1} : 0 : entry.type === "bar" ? 0 : 2,
+        borderSkipped: entry.outlineColor ? false : undefined,
+        borderDash: entry.reference ? [6, 4] : [],
+        segment: {borderDash: ({p0}) => p0.raw.priceKind === "forecast" ? FORECAST_PRICE_DASH : undefined},
+        pointRadius: 0,
+        pointHitRadius: 10,
+        spanGaps: false,
+        order: entry.axis === "soc" ? 0 : entry.stackOrder ?? 1,
+    };
+}
+
+/**
+ * Render series into canvas id, destroying its previous chart, removing its tooltip
+ * and rebuilding its accessible legend. Current-price series retain their visibility.
+ * Same-plan callers retain explicit checkbox choices by immutable legend group identity.
+ * Points/segments are timed lines with null
+ * gaps. Price points retain their published/forecast kind for interval-specific strokes.
+ * Balance intervals are projected onto quarter-hour bars with explicit coverage.
+ * axis: "soc" uses the right-hand 0–100% axis. utcDays selects UTC date labels.
+ * Calendar headings, alternating bands and midnight separators follow installation
+ * time unless utcDays selects UTC. Timestamped charts reserve heading space and
+ * remove their headings on destruction. Clock ticks show installation time
+ * without timezone names while the headings supply the weekday and date.
+ * unit names the default y unit. Minimum fixes a physical y baseline. balance stacks series
+ * sharing a stack and includes zero. Rendering applies the selected planning range
+ * without category-style end padding. Interval timestamps already determine bar widths.
+ */
+function chart(id, series, {utcDays = false, calendarDates = false, unit = "", minimum = null, balance = false, preserveVisibility = false, deferRange = false, gridSteps = null} = {}) {
+    let balanceTime = null, priceHoverTime = null;
+    const batteryPlan = id === "battery-plan-chart";
+    if (balance) series = quarterBalanceSeries(series);
+    charts.get(id)?.destroy();
+    const {tooltip, daySummary, hideTooltip, tooltipEvents} = createOverviewTooltip(id);
     const canvas = $(id), legend = $(`${id}-legend`);
     const linked = isLinkedChart(id);
     const hasSoc = series.some(entry => entry.axis === "soc");
     const {planningLegend, syncLegend, renderLegend} = createOverviewLegend(id, series, {preserveVisibility, signal: tooltipEvents.signal, gridSteps, legend});
     const axisTime = calendarDates ? value => dateLabel(localDate(value)) : utcDays ? (value) => dateLabel(new Date(value).toISOString().slice(0, 10)) : value => when(value);
-    const datasets = series.map((s, index) => {
-        const values = [];
-        for (const segment of s.segments || [s.points || []]) {
-            if (values.length) values.push({x: segment[0][0], y: null});
-            values.push(...segment.map(([x, y, priceKind]) => ({x, y, priceKind})));
-        }
-        if (s.intervals) values.push(...s.intervals.map(({start, end, value, coveredStart, coveredEnd}) => ({x: (start + end) / 2, y: value, start, end, coveredStart, coveredEnd})));
-        const color = s.color || palette[index % palette.length];
-        return {label: s.name, data: values, hidden: id === "price-chart" && hiddenPriceSeries.has(s.name), type: s.type || "line", stack: s.stack, yAxisID: s.axis || "y", unit: s.unit || unit, tooltipGroup: s.tooltipGroup, deviceState: s.deviceState, swatchColor: color, borderColor: s.outlineColor || color, backgroundColor: deviceFill(color, s.deviceState), borderWidth: s.outlineColor ? ({raw}) => raw?.y ? {top: 1, bottom: 1} : 0 : s.type === "bar" ? 0 : 2, borderSkipped: s.outlineColor ? false : undefined, borderDash: s.reference ? [6, 4] : [], segment: {borderDash: ({p0}) => p0.raw.priceKind === "forecast" ? FORECAST_PRICE_DASH : undefined}, pointRadius: 0, pointHitRadius: 10, spanGaps: false, order: s.axis === "soc" ? 0 : s.stackOrder ?? 1};
-    });
+    const datasets = series.map((entry, index) => overviewDataset(entry, index, id, unit));
     const result = new Chart(canvas, {
         type: "line", data: {datasets: planningLegend ? [] : datasets}, plugins: [intervalWidths, ...(id === "price-chart" ? [dailyPriceExtremes] : []), ...(calendarDates ? [] : [calendarDays]), ...(gridSteps ? [gridModeStrip(gridSteps, positionDayTooltip)] : []), ...(linked ? [linkedChartInteraction(canvas, tooltip, hideTooltip, tooltipEvents.signal)] : []), {
             id: "deviceLegend",
@@ -1398,6 +1428,53 @@ function appendIntervalBatteryEvidence({plan, flow, command, intervalIndex, batt
     }
 }
 
+/** Update labels for the original plan and retain a matching comparison. */
+function renderOriginalPlanHeader(plan, id) {
+    const samePlan = renderedPlanId === id;
+    if (!samePlan) clearPlanComparisons();
+    const selectedOption = [...$("plan-version").options].find(option => option.value === id);
+    if (selectedOption) selectedOption.textContent = planName(plan);
+    $("inspect-time").disabled = false;
+    const currency = plan.currency || "";
+    $("reference-description").textContent = plan.reference_policy === "unoptimized-loads-v1"
+        ? "Without battery or price-based load shifting. Both references charge vehicles as soon as permitted, start ready cycles and maintain heating targets within physical limits."
+        : "Archived comparison: Without battery storage, retaining the original EV and heating schedule. Ready appliance cycles start at their earliest allowed time.";
+    $("plan-description").textContent = "";
+    if (plan.consumption_objective) {
+        const objective = plan.consumption_objective;
+        $("plan-description").textContent = `Primary objective: ${number(objective.grid_import_kwh)} kWh grid import + ${number(objective.terminal_replacement_kwh)} kWh hypothetical stock replacement = ${number(objective.corrected_import_kwh)} kWh: Replacement is an end-of-horizon correction, not measured consumption or a charging command.`;
+    }
+    return {samePlan, currency};
+}
+
+/** Render the selected plan's original charts together on the active range. */
+function renderOriginalPlanCharts(plan, balance, batteryLabels, points, {id, currency, samePlan, bonusRules}) {
+    const {spot, buy, sell, bonusSell, demandForecast, solarForecast} = points;
+    chart("plan-chart", balance.series, {unit: "kW", balance: true, preserveVisibility: samePlan, deferRange: true, gridSteps: plan.steps});
+    pendingBatterySeries = batteryPlanSeries(plan, batteryLabels);
+    if (pendingBatterySeries.length) {
+        batteryPlanPanel.hidden = false;
+        drawBatteryPlan(true);
+    } else clearBatteryPlan();
+    if (balance.missing) {
+        const warning = document.createElement("p"); warning.className = "balance-warning";
+        warning.textContent = `${balance.missing} interval(s) have missing or inconsistent physical evidence. Their balance bars are unavailable. No losses or flows are invented.`;
+        $("plan-chart-legend").append(warning);
+    }
+    chart("energy-chart", gridExchangeSeries(plan, periodCostPlan?.projection.comparison || periodCostPlan?.scenarios?.self_consumption?.comparison, periodCostPlan?.scenarios?.without_battery?.comparison), {unit: "W", preserveVisibility: samePlan, deferRange: true});
+    chart("forecast-chart", [{name: "Household demand forecast: AC", points: demandForecast, color: "#23965e"}, {name: "Available solar forecast: DC", points: solarForecast, color: "#b58900"}], {unit: "kW", minimum: 0, preserveVisibility: samePlan, deferRange: true});
+    applyIntervalTariffEvidence(plan, {spot, buy, sell});
+    const priceSeries = [{name: "Spot market rate", points: spot, color: "#d9a300"}, {name: "Import rate", points: buy, color: "#d56788"}, {name: "Export rate", points: sell, color: "#399bc1"}];
+    if (bonusRules.length) priceSeries.push({name: "Export rate incl. bonus", points: bonusSell, color: "#9255b7"});
+    priceInputPlanId = id;
+    currentPriceWindow = null;
+    $("price-chart").closest(".chart-wrap").hidden = false;
+    $("current-price-status").textContent = "";
+    chart("price-chart", priceSeries, {unit: `${currency}/kWh`, deferRange: true});
+    if (samePlan && periodCostPlan) renderPlanComparisons(periodCostPlan.projection, plan, {deferRange: true});
+    $("inspect-time").max = Math.max(0, inspectSteps.length - 1); $("inspect-time").value = 0; inspect(); applyRange();
+}
+
 /**
  * Fetch frozen advice and separate valuations, ignoring stale selection responses.
  * Read plan and simulations concurrently, displaying the original as soon as it arrives. Evidence loads only on disclosure.
@@ -1433,20 +1510,7 @@ async function showPlan(signal, background = false) {
         if (request !== selectionRequest) { simulationController.abort(); return false; }
         const plan = data.plan;
         if (plan?.plan_id !== id) throw new Error("Cannot read this view: The plan identity does not match. Please retry.");
-        const samePlan = renderedPlanId === id;
-        if (!samePlan) clearPlanComparisons();
-        const selectedOption = [...$("plan-version").options].find(option => option.value === id);
-        if (selectedOption) selectedOption.textContent = planName(plan);
-        $("inspect-time").disabled = false;
-        const currency = plan.currency || "";
-        $("reference-description").textContent = plan.reference_policy === "unoptimized-loads-v1"
-            ? "Without battery or price-based load shifting. Both references charge vehicles as soon as permitted, start ready cycles and maintain heating targets within physical limits."
-            : "Archived comparison: Without battery storage, retaining the original EV and heating schedule. Ready appliance cycles start at their earliest allowed time.";
-        $("plan-description").textContent = "";
-        if (plan.consumption_objective) {
-            const objective = plan.consumption_objective;
-            $("plan-description").textContent = `Primary objective: ${number(objective.grid_import_kwh)} kWh grid import + ${number(objective.terminal_replacement_kwh)} kWh hypothetical stock replacement = ${number(objective.corrected_import_kwh)} kWh: Replacement is an end-of-horizon correction, not measured consumption or a charging command.`;
-        }
+        const {samePlan, currency} = renderOriginalPlanHeader(plan, id);
         const buy = [], sell = [], spot = [], bonusSell = [], demandForecast = [], solarForecast = [];
         const bonusRules = plan.input_snapshot?.problem?.export_bonuses || [];
         const batteryLabels = new Map();
@@ -1515,30 +1579,10 @@ async function showPlan(signal, background = false) {
                 return result;
             });
         });
-        const balance = balances[0];
-        chart("plan-chart", balance.series, {unit: "kW", balance: true, preserveVisibility: samePlan, deferRange: true, gridSteps: plan.steps});
-        pendingBatterySeries = batteryPlanSeries(plan, batteryLabels);
-        if (pendingBatterySeries.length) {
-            batteryPlanPanel.hidden = false;
-            drawBatteryPlan(true);
-        } else clearBatteryPlan();
-        if (balance.missing) {
-            const warning = document.createElement("p"); warning.className = "balance-warning";
-            warning.textContent = `${balance.missing} interval(s) have missing or inconsistent physical evidence. Their balance bars are unavailable. No losses or flows are invented.`;
-            $("plan-chart-legend").append(warning);
-        }
-        chart("energy-chart", gridExchangeSeries(plan, periodCostPlan?.projection.comparison || periodCostPlan?.scenarios?.self_consumption?.comparison, periodCostPlan?.scenarios?.without_battery?.comparison), {unit: "W", preserveVisibility: samePlan, deferRange: true});
-        chart("forecast-chart", [{name: "Household demand forecast: AC", points: demandForecast, color: "#23965e"}, {name: "Available solar forecast: DC", points: solarForecast, color: "#b58900"}], {unit: "kW", minimum: 0, preserveVisibility: samePlan, deferRange: true});
-        applyIntervalTariffEvidence(plan, {spot, buy, sell});
-        const priceSeries = [{name: "Spot market rate", points: spot, color: "#d9a300"}, {name: "Import rate", points: buy, color: "#d56788"}, {name: "Export rate", points: sell, color: "#399bc1"}];
-        if (bonusRules.length) priceSeries.push({name: "Export rate incl. bonus", points: bonusSell, color: "#9255b7"});
-        priceInputPlanId = id;
-        currentPriceWindow = null;
-        $("price-chart").closest(".chart-wrap").hidden = false;
-        $("current-price-status").textContent = "";
-        chart("price-chart", priceSeries, {unit: `${currency}/kWh`, deferRange: true});
-        if (samePlan && periodCostPlan) renderPlanComparisons(periodCostPlan.projection, plan, {deferRange: true});
-        $("inspect-time").max = Math.max(0, inspectSteps.length - 1); $("inspect-time").value = 0; inspect(); applyRange();
+        renderOriginalPlanCharts(
+            plan, balances[0], batteryLabels, {buy, sell, spot, bonusSell, demandForecast, solarForecast},
+            {id, currency, samePlan, bonusRules}
+        );
         renderedPlanId = id;
         planSourceNamesGeneration = sourceNamesAtRequest;
         if (requestedPlan === id) requestedPlan = null;

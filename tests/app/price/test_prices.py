@@ -816,10 +816,16 @@ def test_price_endpoint_is_authenticated_and_serves_cached_normalized_data(
         service = PriceService("NL", None, None, store)
         assert service.timeline(datetime.now(UTC)).status is PriceCoverage(expected_status)
 
+        lifecycle = []
+
         @asynccontextmanager
         async def factory(_database_engine):
-            """Yield a cached service without enabling external network access in CI."""
-            yield service
+            """Track the injected price service across real app startup and cleanup."""
+            lifecycle.append("opened")
+            try:
+                yield service
+            finally:
+                lifecycle.append("closed")
 
         runner = web.AppRunner(
             create_app(
@@ -830,6 +836,7 @@ def test_price_endpoint_is_authenticated_and_serves_cached_normalized_data(
             )
         )
         await runner.setup()
+        assert lifecycle == ["opened"]
         site = web.TCPSite(runner, "127.0.0.1", 0)
         await site.start()
         url = f"http://127.0.0.1:{site._server.sockets[0].getsockname()[1]}/v1/prices"
@@ -853,6 +860,7 @@ def test_price_endpoint_is_authenticated_and_serves_cached_normalized_data(
                     assert data["market_area"] == "NL"
         finally:
             await runner.cleanup()
+        assert lifecycle == ["opened", "closed"]
 
     asyncio.run(scenario())
 

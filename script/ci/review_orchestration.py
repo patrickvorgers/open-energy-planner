@@ -582,6 +582,47 @@ def require_previous_feedback(state, comments, target, availability_reply):
         raise VerificationError("Provider feedback changed since the preceding command")
 
 
+def _reserve_provider_command(state, target, checks, comments):
+    """Consume the authorized provider allowance and prepare its exact command.
+
+    Returns the command and its provider-specific Kody text when applicable.
+    Mutates the counter or usage flag in the pending outbox state.
+    """
+    kody_command = None
+    if target == "quota":
+        if state["queries"] >= MAX_QUOTA_QUERIES:
+            raise VerificationError("Quota checks reached the bounded request limit")
+        state["queries"] += 1
+        command = "@coderabbitai rate limit"
+    elif target == "coderabbit":
+        if state["reviews"] >= MAX_CODERABBIT_REQUESTS:
+            raise VerificationError("CodeRabbit attempts reached the bounded request limit")
+        state["reviews"] += 1
+        command = f"@coderabbitai review\n<!-- oep-coderabbit-head:{state['head']} -->"
+    elif target == "kody":
+        if state["kody_used"]:
+            raise VerificationError("Kody was already requested for this revision")
+        kody_command = kody_request_command(checks)
+        state["kody_used"] = True
+        command = f"{kody_command}\n<!-- oep-kody-head:{state['head']} -->"
+    elif target in {"greptile", "codex"}:
+        if state[f"{target}_used"]:
+            raise VerificationError("This provider was already requested for this revision")
+        if any(
+            f"<!-- oep-{target}-head:{state['head']} -->" in row["body"].splitlines()
+            for row in comments
+        ):
+            raise VerificationError("This provider already has a same-head request")
+        state[f"{target}_used"] = True
+        provider_command = (
+            "@greptileai review this draft" if target == "greptile" else "@codex review"
+        )
+        command = f"{provider_command}\n<!-- oep-{target}-head:{state['head']} -->"
+    else:
+        raise VerificationError("Unknown review provider")
+    return command, kody_command
+
+
 def send_command(
     repository,
     number,
@@ -645,37 +686,7 @@ def send_command(
         raise VerificationError("Codex already has uncompleted work for this revision")
     require_original_requester(repository, number, state, client)
     publisher_id = require_command_account(repository, state, client, publisher)
-    if target == "quota":
-        if state["queries"] >= MAX_QUOTA_QUERIES:
-            raise VerificationError("Quota checks reached the bounded request limit")
-        state["queries"] += 1
-        command = "@coderabbitai rate limit"
-    elif target == "coderabbit":
-        if state["reviews"] >= MAX_CODERABBIT_REQUESTS:
-            raise VerificationError("CodeRabbit attempts reached the bounded request limit")
-        state["reviews"] += 1
-        command = f"@coderabbitai review\n<!-- oep-coderabbit-head:{state['head']} -->"
-    elif target == "kody":
-        if state["kody_used"]:
-            raise VerificationError("Kody was already requested for this revision")
-        kody_command = kody_request_command(checks)
-        state["kody_used"] = True
-        command = f"{kody_command}\n<!-- oep-kody-head:{state['head']} -->"
-    elif target in {"greptile", "codex"}:
-        if state[f"{target}_used"]:
-            raise VerificationError("This provider was already requested for this revision")
-        if any(
-            f"<!-- oep-{target}-head:{state['head']} -->" in row["body"].splitlines()
-            for row in comments
-        ):
-            raise VerificationError("This provider already has a same-head request")
-        state[f"{target}_used"] = True
-        provider_command = (
-            "@greptileai review this draft" if target == "greptile" else "@codex review"
-        )
-        command = f"{provider_command}\n<!-- oep-{target}-head:{state['head']} -->"
-    else:
-        raise VerificationError("Unknown review provider")
+    command, kody_command = _reserve_provider_command(state, target, checks, comments)
     state.update(
         phase="sending",
         publisher_id=publisher_id,
