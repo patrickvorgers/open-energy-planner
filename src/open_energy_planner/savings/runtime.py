@@ -68,6 +68,49 @@ def quarter(instant):
     return datetime.fromtimestamp(int(instant.timestamp()) // seconds * seconds, UTC)
 
 
+def _settlement_frames(pending, body, now):
+    """Parse the reported frames and validate their bounds independently of meter roles."""
+    if not isinstance(body, dict) or body.get("request_version") != pending["version"]:
+        raise ValueError("Settlement request changed")
+    sparse = "scanned_until" in body
+    if set(body) != {"request_version", "frames", "imports", "exports"} | (
+        {"scanned_until"} if sparse else set()
+    ):
+        raise ValueError("Invalid settlement response")
+    frames = body["frames"]
+    if (
+        not isinstance(frames, list)
+        or not (0 if sparse else 1) <= len(frames) <= MAX_BATCH_INTERVALS
+    ):
+        raise ValueError("Invalid settlement batch")
+    frames = tuple(parse_frame(row) for row in frames)
+    start, end = (
+        datetime.fromisoformat(pending["start"]),
+        datetime.fromisoformat(pending["end"]),
+    )
+    scanned = datetime.fromisoformat(body["scanned_until"]) if sparse else frames[-1].end
+    if (
+        scanned.utcoffset() is None
+        or not start < scanned <= min(end, now)
+        or any(frame.start < start or frame.end > scanned for frame in frames)
+        or (not sparse and frames[0].start != start)
+    ):
+        raise ValueError("Settlement response outside requested coverage")
+    if any(
+        previous_item.end > next_item.start or (not sparse and previous_item.end != next_item.start)
+        for previous_item, next_item in pairwise(frames)
+    ):
+        raise ValueError("Settlement batch has gaps or overlaps")
+    # Only request edges may split a quarter when physical configuration changes.
+    if (scanned != end and scanned != quarter(scanned)) or any(
+        (frame.start != start and frame.start != quarter(frame.start))
+        or (frame.end != end and frame.end != quarter(frame.end))
+        for frame in frames
+    ):
+        raise ValueError("Settlement frame does not end on a requested quarter boundary")
+    return frames, start, scanned
+
+
 def capture_start(instant):
     """Start at the first complete quarter after publication, preserving an exactly aligned midnight."""
     boundary = quarter(instant)
@@ -253,45 +296,7 @@ class SavingsRuntime:
         other transaction failures leave no durable partial frames or pointer
         advance. The caller serializes ingestion with other settlement mutations.
         """
-        if not isinstance(body, dict) or body.get("request_version") != pending["version"]:
-            raise ValueError("Settlement request changed")
-        sparse = "scanned_until" in body
-        if set(body) != {"request_version", "frames", "imports", "exports"} | (
-            {"scanned_until"} if sparse else set()
-        ):
-            raise ValueError("Invalid settlement response")
-        frames = body["frames"]
-        if (
-            not isinstance(frames, list)
-            or not (0 if sparse else 1) <= len(frames) <= MAX_BATCH_INTERVALS
-        ):
-            raise ValueError("Invalid settlement batch")
-        frames = tuple(parse_frame(row) for row in frames)
-        start, end = (
-            datetime.fromisoformat(pending["start"]),
-            datetime.fromisoformat(pending["end"]),
-        )
-        scanned = datetime.fromisoformat(body["scanned_until"]) if sparse else frames[-1].end
-        if (
-            scanned.utcoffset() is None
-            or not start < scanned <= min(end, now)
-            or any(frame.start < start or frame.end > scanned for frame in frames)
-            or (not sparse and frames[0].start != start)
-        ):
-            raise ValueError("Settlement response outside requested coverage")
-        if any(
-            previous_item.end > next_item.start
-            or (not sparse and previous_item.end != next_item.start)
-            for previous_item, next_item in pairwise(frames)
-        ):
-            raise ValueError("Settlement batch has gaps or overlaps")
-        # Only request edges may split a quarter when physical configuration changes.
-        if (scanned != end and scanned != quarter(scanned)) or any(
-            (frame.start != start and frame.start != quarter(frame.start))
-            or (frame.end != end and frame.end != quarter(frame.end))
-            for frame in frames
-        ):
-            raise ValueError("Settlement frame does not end on a requested quarter boundary")
+        frames, start, scanned = _settlement_frames(pending, body, now)
         terms = {
             energy_term["entity_id"]: energy_term["sign"]
             for energy_term in pending["bindings"]["terms"]
