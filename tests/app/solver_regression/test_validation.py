@@ -50,6 +50,16 @@ def test_corrupted_route_or_state_is_rejected(plans, mutation, expected_issue):
         validate(CORE[0].problem, replace(plan, flows=(flow, *plan.flows[1:])))
 
 
+def test_converter_clipping_flag_requires_a_boolean(plans):
+    """Reject a numeric clipping flag even when both energy balances still close."""
+    plan = plans[0]
+    flow = plan.flows[0]
+    first_inverter, *remaining_inverters = flow.inverters
+    corrupted = replace(flow, inverters=(replace(first_inverter, clipping=0), *remaining_inverters))
+    with pytest.raises(ValueError, match="^Converter bounds$"):
+        validate(CORE[0].problem, replace(plan, flows=(corrupted, *plan.flows[1:])))
+
+
 @pytest.mark.parametrize(
     "component", ["import_cost", "bonus_income", "wear_cost", "terminal_value", "objective"]
 )

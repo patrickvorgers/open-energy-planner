@@ -106,6 +106,153 @@ def _validate_bonus_settlement(problem, plan, settled, require, close):
     return revenue
 
 
+def _validate_batteries(
+    problem,
+    step,
+    interval_index,
+    battery_flows,
+    previous,
+    calibration_commands,
+    wear,
+    tolerance,
+    require,
+    close,
+):
+    """Validate stored energy, limits and constant calibration commands in plan order."""
+    duration_hours = step.duration_h
+    commands = []
+    for unit in problem.batteries:
+        battery, battery_flow = unit.battery, battery_flows[unit.device_id]
+        if unit.calibration_charge or unit.calibration_hold_until is not None:
+            require(
+                battery_flow.discharge_kwh <= tolerance,
+                "Battery calibration forbids active discharge",
+            )
+        require(
+            all(
+                isfinite(value_item) and value_item >= -tolerance
+                for value_item in (
+                    battery_flow.charge_kwh,
+                    battery_flow.discharge_kwh,
+                    battery_flow.end_kwh,
+                )
+            ),
+            "Finite battery energy",
+        )
+        require(
+            battery_flow.charge_kwh
+            <= battery.charge_limit_w * duration_hours / WATTS_PER_KW + tolerance
+            and battery_flow.discharge_kwh
+            <= battery.discharge_limit_w * duration_hours / WATTS_PER_KW + tolerance
+            and min(battery_flow.charge_kwh, battery_flow.discharge_kwh) <= tolerance,
+            "Battery terminal bounds",
+        )
+        require(
+            min(battery.minimum_kwh, previous[unit.device_id]) - tolerance
+            <= battery_flow.end_kwh
+            <= battery.capacity_kwh + tolerance,
+            "Battery reserve",
+        )
+        require(
+            close(
+                battery_flow.end_kwh,
+                previous[unit.device_id]
+                + battery_flow.charge_kwh * battery.charge_efficiency
+                - battery_flow.discharge_kwh / battery.discharge_efficiency,
+            ),
+            "Stored energy conservation",
+        )
+        remaining_charge = (
+            battery.capacity_kwh - previous[unit.device_id]
+        ) / battery.charge_efficiency
+        previous[unit.device_id] = battery_flow.end_kwh
+        power = (
+            (battery_flow.discharge_kwh - battery_flow.charge_kwh) * WATTS_PER_KW / duration_hours
+        )
+        if unit.calibration_charge and close(battery_flow.end_kwh, battery.capacity_kwh):
+            from math import ceil
+
+            power = -ceil(max(0, -power) - WHOLE_WATT_TOLERANCE)
+            require(
+                -power <= battery.charge_limit_w + tolerance,
+                "Whole-watt calibration charge limit",
+            )
+        else:
+            require(abs(power - round(power)) <= WHOLE_WATT_TOLERANCE, "Whole-watt command")
+        if unit.calibration_charge:
+            group_key = (step.control_group or interval_index, unit.device_id)
+            power = calibration_commands.setdefault(group_key, round(power))
+            require(-battery.charge_limit_w <= power <= 0, "Whole-watt calibration charge limit")
+            require(
+                close(
+                    battery_flow.charge_kwh,
+                    min(-power * duration_hours / WATTS_PER_KW, remaining_charge),
+                ),
+                "Calibration charge must follow its whole-watt request until full",
+            )
+        commands.append((unit.device_id, round(power)))
+        wear += (
+            battery.wear_cost_per_kwh * battery_flow.discharge_kwh / battery.discharge_efficiency
+        )
+    return commands, wear
+
+
+def _validate_inverters(
+    problem, duration_hours, inverter_flows, battery_flows, solar_flows, tolerance, require, close
+):
+    """Validate DC conservation and the evidence required to declare clipping."""
+    for inverter in problem.inverters:
+        inverter_flow = inverter_flows[inverter.inverter_id]
+        cap = inverter.ac_limit_w * duration_hours / WATTS_PER_KW
+        require(
+            type(inverter_flow.clipping) is bool
+            and all(
+                isfinite(value_item) and -tolerance <= value_item <= cap + tolerance
+                for value_item in (inverter_flow.import_kwh, inverter_flow.export_kwh)
+            )
+            and min(inverter_flow.import_kwh, inverter_flow.export_kwh) <= tolerance,
+            "Converter bounds",
+        )
+        local = [
+            (battery_flows[battery_entry.device_id], battery_entry.dc_efficiency)
+            for battery_entry in problem.batteries
+            if battery_entry.inverter_id == inverter.inverter_id
+        ]
+        require(
+            close(
+                sum(
+                    solar_flows[pv_source.source_id].used_kwh
+                    for pv_source in problem.pv_sources
+                    if pv_source.inverter_id == inverter.inverter_id
+                )
+                + sum(
+                    battery_flow_entry.discharge_kwh * efficiency
+                    for battery_flow_entry, efficiency in local
+                )
+                + inverter_flow.import_kwh * inverter.efficiency,
+                sum(
+                    battery_flow_entry.charge_kwh / efficiency
+                    for battery_flow_entry, efficiency in local
+                )
+                + inverter_flow.export_kwh / inverter.efficiency,
+            ),
+            "DC conservation",
+        )
+        if inverter_flow.clipping:
+            require(close(inverter_flow.export_kwh, cap), "Clipping requires saturated AC output")
+            for unit in problem.batteries:
+                if unit.inverter_id == inverter.inverter_id:
+                    battery = battery_flows[unit.device_id]
+                    require(
+                        close(battery.end_kwh, unit.battery.capacity_kwh)
+                        or close(
+                            battery.charge_kwh,
+                            unit.battery.charge_limit_w * duration_hours / WATTS_PER_KW,
+                        ),
+                        "Clipping requires saturated storage acceptance",
+                    )
+
+
 def validate(problem, plan, tolerance=DEFAULT_VALIDATION_TOLERANCE):
     """Recompute conservation, limits, reserve, whole commands and costs without importing solver code."""
 
@@ -189,86 +336,18 @@ def validate(problem, plan, tolerance=DEFAULT_VALIDATION_TOLERANCE):
             ),
             "AC conservation",
         )
-        commands = []
-        for unit in problem.batteries:
-            battery, battery_flow = unit.battery, battery_flows[unit.device_id]
-            if unit.calibration_charge or unit.calibration_hold_until is not None:
-                require(
-                    battery_flow.discharge_kwh <= tolerance,
-                    "Battery calibration forbids active discharge",
-                )
-            require(
-                all(
-                    isfinite(value_item) and value_item >= -tolerance
-                    for value_item in (
-                        battery_flow.charge_kwh,
-                        battery_flow.discharge_kwh,
-                        battery_flow.end_kwh,
-                    )
-                ),
-                "Finite battery energy",
-            )
-            require(
-                battery_flow.charge_kwh
-                <= battery.charge_limit_w * duration_hours / WATTS_PER_KW + tolerance
-                and battery_flow.discharge_kwh
-                <= battery.discharge_limit_w * duration_hours / WATTS_PER_KW + tolerance
-                and min(battery_flow.charge_kwh, battery_flow.discharge_kwh) <= tolerance,
-                "Battery terminal bounds",
-            )
-            require(
-                min(battery.minimum_kwh, previous[unit.device_id]) - tolerance
-                <= battery_flow.end_kwh
-                <= battery.capacity_kwh + tolerance,
-                "Battery reserve",
-            )
-            require(
-                close(
-                    battery_flow.end_kwh,
-                    previous[unit.device_id]
-                    + battery_flow.charge_kwh * battery.charge_efficiency
-                    - battery_flow.discharge_kwh / battery.discharge_efficiency,
-                ),
-                "Stored energy conservation",
-            )
-            remaining_charge = (
-                battery.capacity_kwh - previous[unit.device_id]
-            ) / battery.charge_efficiency
-            previous[unit.device_id] = battery_flow.end_kwh
-            power = (
-                (battery_flow.discharge_kwh - battery_flow.charge_kwh)
-                * WATTS_PER_KW
-                / duration_hours
-            )
-            if unit.calibration_charge and close(battery_flow.end_kwh, battery.capacity_kwh):
-                from math import ceil
-
-                power = -ceil(max(0, -power) - WHOLE_WATT_TOLERANCE)
-                require(
-                    -power <= battery.charge_limit_w + tolerance,
-                    "Whole-watt calibration charge limit",
-                )
-            else:
-                require(abs(power - round(power)) <= WHOLE_WATT_TOLERANCE, "Whole-watt command")
-            if unit.calibration_charge:
-                group_key = (step.control_group or interval_index, unit.device_id)
-                power = calibration_commands.setdefault(group_key, round(power))
-                require(
-                    -battery.charge_limit_w <= power <= 0, "Whole-watt calibration charge limit"
-                )
-                require(
-                    close(
-                        battery_flow.charge_kwh,
-                        min(-power * duration_hours / WATTS_PER_KW, remaining_charge),
-                    ),
-                    "Calibration charge must follow its whole-watt request until full",
-                )
-            commands.append((unit.device_id, round(power)))
-            wear += (
-                battery.wear_cost_per_kwh
-                * battery_flow.discharge_kwh
-                / battery.discharge_efficiency
-            )
+        commands, wear = _validate_batteries(
+            problem,
+            step,
+            interval_index,
+            battery_flows,
+            previous,
+            calibration_commands,
+            wear,
+            tolerance,
+            require,
+            close,
+        )
         for source in problem.pv_sources:
             solar_flow = solar_flows[source.source_id]
             available = dict(step.pv_sources)[source.source_id]
@@ -286,58 +365,16 @@ def validate(problem, plan, tolerance=DEFAULT_VALIDATION_TOLERANCE):
             elif available - solar_flow.used_kwh > tolerance:
                 require(inverter_flows[source.inverter_id].clipping, "Undeclared PV clipping")
             commands.append((source.source_id, solar_flow.enabled))
-        for inverter in problem.inverters:
-            inverter_flow = inverter_flows[inverter.inverter_id]
-            cap = inverter.ac_limit_w * duration_hours / WATTS_PER_KW
-            require(
-                type(inverter_flow.clipping) is bool
-                and all(
-                    isfinite(value_item) and -tolerance <= value_item <= cap + tolerance
-                    for value_item in (inverter_flow.import_kwh, inverter_flow.export_kwh)
-                )
-                and min(inverter_flow.import_kwh, inverter_flow.export_kwh) <= tolerance,
-                "Converter bounds",
-            )
-            local = [
-                (battery_flows[battery_entry.device_id], battery_entry.dc_efficiency)
-                for battery_entry in problem.batteries
-                if battery_entry.inverter_id == inverter.inverter_id
-            ]
-            require(
-                close(
-                    sum(
-                        solar_flows[pv_source.source_id].used_kwh
-                        for pv_source in problem.pv_sources
-                        if pv_source.inverter_id == inverter.inverter_id
-                    )
-                    + sum(
-                        battery_flow_entry.discharge_kwh * efficiency
-                        for battery_flow_entry, efficiency in local
-                    )
-                    + inverter_flow.import_kwh * inverter.efficiency,
-                    sum(
-                        battery_flow_entry.charge_kwh / efficiency
-                        for battery_flow_entry, efficiency in local
-                    )
-                    + inverter_flow.export_kwh / inverter.efficiency,
-                ),
-                "DC conservation",
-            )
-            if inverter_flow.clipping:
-                require(
-                    close(inverter_flow.export_kwh, cap), "Clipping requires saturated AC output"
-                )
-                for unit in problem.batteries:
-                    if unit.inverter_id == inverter.inverter_id:
-                        battery = battery_flows[unit.device_id]
-                        require(
-                            close(battery.end_kwh, unit.battery.capacity_kwh)
-                            or close(
-                                battery.charge_kwh,
-                                unit.battery.charge_limit_w * duration_hours / WATTS_PER_KW,
-                            ),
-                            "Clipping requires saturated storage acceptance",
-                        )
+        _validate_inverters(
+            problem,
+            duration_hours,
+            inverter_flows,
+            battery_flows,
+            solar_flows,
+            tolerance,
+            require,
+            close,
+        )
         if step.control_group:
             require(
                 groups.setdefault(step.control_group, commands) == commands,
