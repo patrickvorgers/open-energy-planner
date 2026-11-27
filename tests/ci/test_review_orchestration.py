@@ -465,6 +465,17 @@ def test_unknown_or_contradictory_availability_never_infers_quota(answer, initia
     assert client.state()["phase"] == "blocked"
 
 
+def test_two_fresh_coderabbit_replies_do_not_select_a_provider():
+    """Even two separately valid replies are ambiguous for a single availability query."""
+    client = GitHubEvidence()
+    client.run(explicit=True)
+    client.reply(AVAILABLE)
+    client.reply(AVAILABLE)
+    client.run()
+    assert client.state()["phase"] == "blocked"
+    assert client.provider_commands() == ["@coderabbitai rate limit"]
+
+
 @pytest.mark.parametrize("permission", ["read", "triage", "none", None])
 def test_unauthorized_request_cannot_publish_provider_commands(permission):
     """A commenter who neither owns this PR nor has write authority cannot request its review."""
