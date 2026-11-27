@@ -80,6 +80,9 @@ def test_price_daily_marks_and_accessible_description_follow_backend(app_page):
     expect(page.locator("#price-daily-detail")).to_have_count(0)
     description = page.get_by_role("img", name="Price inputs", exact=True)
     expect(description).to_have_accessible_description(re.compile("12 most expensive quarters"))
+    expect(
+        description.locator("..").get_by_role("list", name="Chart calendar days")
+    ).to_be_visible()
     page.get_by_role("button", name="Full period", exact=True).click()
     directory = Path("results/ci")
     directory.mkdir(parents=True, exist_ok=True)
@@ -245,9 +248,19 @@ def test_linked_price_readout_uses_original_cash_rates_and_keeps_missing_values_
     price = page.locator("#price-chart")
     price.press("Home")
     reading = page.locator("#linked-chart-reading")
-    expect(reading).to_contain_text("Grid import: 1.25 kWh. Cost: 0.38 EUR at 0.30 EUR/kWh.")
+    popup = page.locator("#price-chart-tooltip")
+    expect(popup.locator(".chart-linked-cost th[scope=rowgroup]")).to_have_text(
+        ["Grid import", "Grid export"]
+    )
+    imports = popup.locator(".chart-linked-cost tbody").first
+    expect(imports.locator("th[scope=row]")).to_have_text(["Energy", "Rate", "Cost"])
+    expect(imports.locator(".chart-tooltip-value")).to_have_text(["1.25", "0.30", "0.38"])
+    expect(imports.locator(".chart-tooltip-unit")).to_have_text(["kWh", "EUR/kWh", "EUR"])
+    expect(reading).to_contain_text("Grid import Energy 1.25 kWh Rate 0.30 EUR/kWh Cost 0.38 EUR")
     price.press("End")
-    expect(reading).to_contain_text("Grid import: Unavailable. Cost: Unavailable at 0.30 EUR/kWh.")
+    expect(imports.locator(".chart-tooltip-value")).to_have_text(
+        ["Unavailable", "0.30", "Unavailable"]
+    )
 
 
 @pytest.mark.parametrize("app_site", ["documentation"], indirect=True)
@@ -282,3 +295,8 @@ def test_hovering_the_peer_chart_dismisses_a_different_pinned_interval(app_page)
     current_quarter = page.locator("#plan-chart-tooltip .chart-tooltip-title")
     expect(current_quarter).to_be_visible()
     assert current_quarter.inner_text() != original_quarter
+    expect(page.locator("#plan-chart-tooltip .chart-linked-cost")).to_have_count(0)
+    optimizer.press("Home")
+    expect(page.locator("#plan-chart-tooltip")).to_contain_text("Total production")
+    expect(reading).to_contain_text("Total production")
+    expect(reading).not_to_contain_text("Revenue before bonus")

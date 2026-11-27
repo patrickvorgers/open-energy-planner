@@ -23,7 +23,6 @@
 .linked-price > .chart-legend { padding-top:4px; }
 .linked-price .price-daily-key { gap:4px 16px; }
 .workspace .linked-price .chart-wrap { height:220px; }
-.chart-linked-cost { margin:4px 0 8px; line-height:1.5; }
 .workspace { background:#f4f6f9; color:#1d2b42; }
 .sidebar { position:fixed; inset:0 auto 0 0; width:224px; padding:32px 20px; background:#102b33; color:#b8cbd0; display:flex; flex-direction:column; z-index:10; }
 .brand { display:flex; gap:12px; align-items:center; color:white; text-decoration:none; font-size:16px; line-height:1.25; }
@@ -182,6 +181,10 @@
 .chart-tooltip-day { pointer-events:auto; max-height:calc(100dvh - 24px); overflow-y:auto; }
 .chart-tooltip table { width:100%; margin:0; border-collapse:collapse; }
 .chart-tooltip td { padding:3px 4px; border:0; color:inherit; font-size:12px; vertical-align:top; }
+.chart-tooltip .chart-linked-cost { margin:0 0 8px; }
+.chart-tooltip .chart-linked-cost th { position:static; padding:3px 4px; border:0; background:none; color:inherit; text-align:start; font-size:inherit; font-weight:400; }
+.chart-linked-cost th[scope="rowgroup"] { font-weight:700; }
+.chart-linked-cost tbody + tbody th[scope="rowgroup"] { padding-top:7px; border-top:1px solid #ffffff40; }
 .chart-tooltip .series-swatch { margin-right:7px; }
 .chart-tooltip .chart-tooltip-value { text-align:right; font-variant-numeric:tabular-nums; white-space:nowrap; }
 .chart-tooltip .chart-tooltip-unit { white-space:nowrap; }

@@ -414,7 +414,8 @@ def test_rendered_balances_keep_real_widths_zero_sum_soc_and_accessible_inspecti
             "Chart.getChart(document.getElementById('plan-chart')).getDatasetMeta(0).data[0].getCenterPoint()"
         )
         canvas.tap(position=point)
-        expect(popup).to_contain_text("Revenue before bonus")
+        expect(popup).to_contain_text("Total production")
+        expect(popup.locator(".chart-linked-cost")).to_have_count(0)
         expect(page.locator("#plan-evidence-panel")).to_have_js_property("open", False)
         expect(page.locator("#inspect-time")).to_have_value("0")
     if not page.get_by_label("Inspect planning time", exact=True).is_visible():
