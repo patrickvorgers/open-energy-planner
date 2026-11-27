@@ -90,6 +90,25 @@ def include(scenario, result, frame, estimated):
     scenario["estimated_seconds"] += seconds if estimated else 0.0
 
 
+def _include_matched_cash(paired, matched_components, accepted, frame, estimated):
+    """Count only time and cash shared by both valid scenarios."""
+    if all(kind in accepted for kind in SCENARIOS):
+        for kind, components in matched_components.items():
+            for component in components:
+                components[component] = fsum((components[component], accepted[kind][component]))
+        actual_cost = accepted["actual"]["grid_cash"]
+        without_cost = accepted["without_battery"]["grid_cash"]
+        for key, value in (
+            ("actual_cost", actual_cost),
+            ("without_battery_cost", without_cost),
+            ("savings", without_cost - actual_cost),
+        ):
+            paired[key] = fsum((paired[key] or 0.0, value))
+        seconds = (frame.end - frame.start).total_seconds()
+        paired["coverage_seconds"] += seconds
+        paired["estimated_seconds"] += seconds if estimated else 0.0
+
+
 class DailySavings:
     """Serialize one completed calendar day per worker round using the existing settlement lock."""
 
@@ -259,7 +278,7 @@ class DailySavings:
                 if frame.start > cursor:
                     for scenario in scenarios.values():
                         missing(scenario, cursor, frame.start, MISSING_MEASUREMENTS)
-                accepted, flows, missing_reasons = {}, {}, {}
+                accepted, missing_reasons = {}, {}
                 context = row["context"]
                 try:
                     bindings = context["bindings"]
@@ -306,41 +325,16 @@ class DailySavings:
                         for key in ("currency", "market_area")
                     ):
                         raise PendingSettlement("Historical market identity changed")
-                    flows["actual"] = (
-                        fsum(frame.channels[entity] for entity in bindings["imports"]),
-                        fsum(frame.channels[entity] for entity in bindings["exports"]),
+                    self._bill_frame(
+                        contract,
+                        frame,
+                        context,
+                        bindings,
+                        market_rows,
+                        accepted,
+                        missing_reasons,
+                        price_versions,
                     )
-                    try:
-                        flows.update(measured_cash_flows(frame, bindings))
-                    except (ValueError, KeyError, TypeError) as error:
-                        missing_reasons["without_battery"] = self._problem(error)
-                    frame_start, frame_end = stamp(frame.start), stamp(frame.end)
-                    prices = [
-                        price
-                        for price in market_rows
-                        if price["start"] < frame_end and price["end"] > frame_start
-                    ]
-                    site = SiteLocation(**context["location"]) if context["location"] else None
-                    for kind, (imported, exported) in flows.items():
-                        try:
-                            result = bill(
-                                contract,
-                                frame,
-                                imported,
-                                exported,
-                                None,
-                                (),
-                                prices,
-                                site,
-                                uncapped=True,
-                            )
-                            result.update(import_kwh=imported, export_kwh=exported)
-                            accepted[kind] = result
-                            price_versions.update(
-                                tariff["source_version"] for tariff in accepted[kind]["tariffs"]
-                            )
-                        except (ValueError, KeyError, TypeError) as error:
-                            missing_reasons[kind] = self._problem(error)
                 except (ValueError, KeyError, TypeError) as error:
                     reason = self._problem(error)
                     missing_reasons = dict.fromkeys(SCENARIOS, reason)
@@ -357,23 +351,7 @@ class DailySavings:
                             frame.end,
                             missing_reasons.get(kind, MISSING_ACCOUNT),
                         )
-                if all(kind in accepted for kind in SCENARIOS):
-                    for kind, components in matched_components.items():
-                        for component in components:
-                            components[component] = fsum(
-                                (components[component], accepted[kind][component])
-                            )
-                    actual_cost = accepted["actual"]["grid_cash"]
-                    without_cost = accepted["without_battery"]["grid_cash"]
-                    for key, value in (
-                        ("actual_cost", actual_cost),
-                        ("without_battery_cost", without_cost),
-                        ("savings", without_cost - actual_cost),
-                    ):
-                        paired[key] = fsum((paired[key] or 0.0, value))
-                    seconds = (frame.end - frame.start).total_seconds()
-                    paired["coverage_seconds"] += seconds
-                    paired["estimated_seconds"] += seconds if estimated else 0.0
+                _include_matched_cash(paired, matched_components, accepted, frame, estimated)
                 cursor = frame.end
         if cursor < end:
             for scenario in scenarios.values():
@@ -408,6 +386,55 @@ class DailySavings:
             "matched_components": matched_components if paired["coverage_seconds"] else None,
             "checkpoint": {"end": end.isoformat()},
         }
+
+    def _bill_frame(
+        self,
+        contract,
+        frame,
+        context,
+        bindings,
+        market_rows,
+        accepted,
+        missing_reasons,
+        price_versions,
+    ):
+        """Price each available scenario while retaining independent failures."""
+        flows = {}
+        flows["actual"] = (
+            fsum(frame.channels[entity] for entity in bindings["imports"]),
+            fsum(frame.channels[entity] for entity in bindings["exports"]),
+        )
+        try:
+            flows.update(measured_cash_flows(frame, bindings))
+        except (ValueError, KeyError, TypeError) as error:
+            missing_reasons["without_battery"] = self._problem(error)
+        frame_start, frame_end = stamp(frame.start), stamp(frame.end)
+        prices = [
+            price
+            for price in market_rows
+            if price["start"] < frame_end and price["end"] > frame_start
+        ]
+        site = SiteLocation(**context["location"]) if context["location"] else None
+        for kind, (imported, exported) in flows.items():
+            try:
+                result = bill(
+                    contract,
+                    frame,
+                    imported,
+                    exported,
+                    None,
+                    (),
+                    prices,
+                    site,
+                    uncapped=True,
+                )
+                result.update(import_kwh=imported, export_kwh=exported)
+                accepted[kind] = result
+                price_versions.update(
+                    tariff["source_version"] for tariff in accepted[kind]["tariffs"]
+                )
+            except (ValueError, KeyError, TypeError) as error:
+                missing_reasons[kind] = self._problem(error)
 
     def _problem(self, error):
         """Return owned interval guidance and preserve the first failure for runtime status."""
