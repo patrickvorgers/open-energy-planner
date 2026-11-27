@@ -678,6 +678,53 @@ def _register_runtime_status(app, notification_center, ha_lifecycle, source):
         notification_center.register("versions", version_notices)
 
 
+def _register_planning_lifecycle(app, planner, live, capture, lock, appliances, repository):
+    """Start and drain the planning workers within the application's lifecycle."""
+
+    async def startup(_app):
+        """Start synthetic planning only. Live mode waits for configured real observations."""
+        if not live:
+            planner.submit(capture())
+
+    async def cleanup(_app):
+        """Own the live clock and drain planning before outer resources close."""
+        schedule = asyncio.create_task(live.run(lock)) if live else None
+
+        async def tick_appliances():
+            """Expire appliance execution attempts under the durable writer's lock."""
+            while True:
+                await asyncio.sleep(APPLIANCE_LIFECYCLE_TICK_SECONDS)
+                if not appliances.state["tasks"]:
+                    continue
+                try:
+                    async with lock:
+                        cancellation = await complete_write(
+                            appliances.tick,
+                            datetime.now(UTC),
+                            repository.state["enabled"],
+                            repository.state["plan"],
+                        )
+                        if cancellation is not None:
+                            raise cancellation
+                except OSError:
+                    _LOGGER.exception("Appliance execution state could not be updated")
+
+        appliance_clock = asyncio.create_task(tick_appliances())
+        try:
+            yield
+        finally:
+            tasks = [task for task in (schedule, appliance_clock) if task is not None]
+            for task in tasks:
+                task.cancel()
+            try:
+                await asyncio.gather(*tasks, return_exceptions=True)
+            finally:
+                await planner.close()
+
+    app.on_startup.append(startup)
+    app.cleanup_ctx.append(cleanup)
+
+
 def create_app(
     directory,
     token,
@@ -1104,46 +1151,6 @@ def create_app(
             headers={"Cache-Control": "no-store"},
         )
 
-    async def startup(app):
-        """Start synthetic planning only. Live mode waits for configured real observations."""
-        if not live:
-            planner.submit(capture())
-
-    async def cleanup(app):
-        """Own the live clock and drain planning before outer resources close."""
-        schedule = asyncio.create_task(live.run(lock)) if live else None
-
-        async def tick_appliances():
-            """Expire appliance execution attempts under the durable writer's lock."""
-            while True:
-                await asyncio.sleep(APPLIANCE_LIFECYCLE_TICK_SECONDS)
-                if not appliances.state["tasks"]:
-                    continue
-                try:
-                    async with lock:
-                        cancellation = await complete_write(
-                            appliances.tick,
-                            datetime.now(UTC),
-                            repository.state["enabled"],
-                            repository.state["plan"],
-                        )
-                        if cancellation is not None:
-                            raise cancellation
-                except OSError:
-                    _LOGGER.exception("Appliance execution state could not be updated")
-
-        appliance_clock = asyncio.create_task(tick_appliances())
-        try:
-            yield
-        finally:
-            tasks = [task for task in (schedule, appliance_clock) if task is not None]
-            for task in tasks:
-                task.cancel()
-            try:
-                await asyncio.gather(*tasks, return_exceptions=True)
-            finally:
-                await planner.close()
-
     async def replan(request):
         """Request a fresh live round or validate explicitly synthetic state overrides."""
         if live:
@@ -1167,8 +1174,7 @@ def create_app(
             planner.submit(snapshot_input)
         return await snapshot(request)
 
-    app.on_startup.append(startup)
-    app.cleanup_ctx.append(cleanup)
+    _register_planning_lifecycle(app, planner, live, capture, lock, appliances, repository)
     app.router.add_post("/v1/replan", replan)
 
     if live:

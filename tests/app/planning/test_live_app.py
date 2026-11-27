@@ -73,6 +73,57 @@ def test_ev_forecast_blocker_logs_no_source_identity_but_keeps_authenticated_con
     asyncio.run(scenario())
 
 
+@pytest.mark.parametrize("source", ["synthetic", "home_assistant"])
+def test_planning_workers_start_and_drain_through_app_lifecycle(tmp_path, monkeypatch, source):
+    """Only synthetic starts a solve. Live clock cancellation drains before planner shutdown."""
+    from open_energy_planner.live_inputs import LiveInputs
+    from open_energy_planner.planning import PlanningCoordinator
+
+    events = []
+    close_planner = PlanningCoordinator.close
+
+    def submit(_coordinator, _snapshot):
+        """Observe the startup submission without running an unrelated optimization."""
+        events.append("synthetic-submitted")
+
+    async def live_clock(_live, _lock):
+        """Stand in for a clock that needs time to drain after cancellation."""
+        events.append("live-started")
+        clock_started.set()
+        try:
+            await asyncio.Future()
+        finally:
+            await asyncio.sleep(0)
+            events.append("live-drained")
+
+    async def observe_close(coordinator):
+        """Record when the real coordinator is closed."""
+        events.append("planner-closed")
+        await close_planner(coordinator)
+
+    monkeypatch.setattr(PlanningCoordinator, "submit", submit)
+    monkeypatch.setattr(PlanningCoordinator, "close", observe_close)
+    monkeypatch.setattr(LiveInputs, "run", live_clock)
+    clock_started = asyncio.Event()
+
+    async def scenario():
+        """Exercise aiohttp startup and cleanup on the app's public factory."""
+        app = create_app(tmp_path, TOKEN, source=source, basis_source=FutureSource())
+        runner = web.AppRunner(app)
+        await runner.setup()
+        try:
+            if source == "home_assistant":
+                await asyncio.wait_for(clock_started.wait(), 2)
+        finally:
+            await runner.cleanup()
+
+    asyncio.run(scenario())
+    if source == "synthetic":
+        assert events == ["synthetic-submitted", "planner-closed"]
+    else:
+        assert events == ["live-started", "live-drained", "planner-closed"]
+
+
 class FutureSource:
     """Explicit test forecast/price provider, never a production fallback."""
 
