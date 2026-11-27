@@ -225,6 +225,62 @@ def _normalize_source_frames(originals, roles, sample):
     return normalized, source_repairs, corrected_sources
 
 
+def _mark_fine_grid_discontinuities(repairs, maps, grid):
+    """Include affected hours where only the fine grid counter reveals a reset."""
+    for entity in grid:
+        for previous, current in pairwise(sorted(maps.get(entity, {}))):
+            if (
+                current - previous == FINE_SECONDS
+                and maps[entity][current]["sum"] - maps[entity][previous]["sum"]
+                < -COUNTER_TOLERANCE_KWH
+            ):
+                start = current // HOUR_SECONDS * HOUR_SECONDS
+                repairs.setdefault(
+                    start,
+                    {
+                        "start": datetime.fromtimestamp(start, UTC).isoformat(),
+                        "reason": "fine_grid_origin_discontinuity",
+                    },
+                )
+
+
+def _align_recorder_origins(writes, repairs, hours, maps, original_fine, entities):
+    """Align the fine sums with the completed hours that Recorder will compile."""
+    for entity in entities:
+        revised_hours = {
+            **hours.get(entity, {}),
+            **{row["start"]: row for row in writes["hour"].get(entity, [])},
+        }
+        revised_fine = {
+            **maps.get(entity, {}),
+            **{row["start"]: row for row in writes["5minute"].get(entity, [])},
+        }
+        anchors = [
+            stamp for stamp in revised_hours if stamp + HOUR_SECONDS - FINE_SECONDS in revised_fine
+        ]
+        if not anchors:
+            raise ValueError("A shared completed hour is required to align Recorder sum origins")
+        anchor = max(anchors)
+        shift = (
+            revised_hours[anchor]["sum"] - revised_fine[anchor + HOUR_SECONDS - FINE_SECONDS]["sum"]
+        )
+        if abs(shift) <= COUNTER_TOLERANCE_KWH:
+            continue
+        writes["5minute"][entity] = [
+            {**row, "sum": revised_fine[row["start"]]["sum"] + shift}
+            for row in original_fine.get(entity, [])
+            if abs(revised_fine[row["start"]]["sum"] + shift - row["sum"]) > COUNTER_TOLERANCE_KWH
+        ]
+        repairs.setdefault(
+            anchor,
+            {
+                "start": datetime.fromtimestamp(anchor, UTC).isoformat(),
+                "reason": "recorder_origin_alignment",
+            },
+        )
+        repairs[anchor].setdefault("fine_origin_shifts", {})[entity] = shift
+
+
 def repair_documents(hourly, fine, roles, consumers, controlled, *, sample):
     """Reconstruct simulated source frames and grid flows without inventing measured device use.
 
@@ -254,21 +310,7 @@ def repair_documents(hourly, fine, roles, consumers, controlled, *, sample):
         datetime.fromisoformat(row["start"]).timestamp(): row
         for row in proposal(hourly, roles, consumers, controlled)
     }
-    for entity in grid:
-        for previous, current in pairwise(sorted(maps.get(entity, {}))):
-            if (
-                current - previous == FINE_SECONDS
-                and maps[entity][current]["sum"] - maps[entity][previous]["sum"]
-                < -COUNTER_TOLERANCE_KWH
-            ):
-                start = current // HOUR_SECONDS * HOUR_SECONDS
-                repairs.setdefault(
-                    start,
-                    {
-                        "start": datetime.fromtimestamp(start, UTC).isoformat(),
-                        "reason": "fine_grid_origin_discontinuity",
-                    },
-                )
+    _mark_fine_grid_discontinuities(repairs, maps, grid)
     frames = {}
     for start in sorted(repairs):
         stamps = [
@@ -373,38 +415,7 @@ def repair_documents(hourly, fine, roles, consumers, controlled, *, sample):
             ]
             if changed:
                 entities[entity] = changed
-    # Recorder copies the last fine sum into its hourly table. Both must share an origin.
-    for entity in (*grid, *corrected_sources):
-        revised_hours = {
-            **hours.get(entity, {}),
-            **{row["start"]: row for row in writes["hour"].get(entity, [])},
-        }
-        revised_fine = {
-            **maps.get(entity, {}),
-            **{row["start"]: row for row in writes["5minute"].get(entity, [])},
-        }
-        anchors = [
-            stamp for stamp in revised_hours if stamp + HOUR_SECONDS - FINE_SECONDS in revised_fine
-        ]
-        if not anchors:
-            raise ValueError("A shared completed hour is required to align Recorder sum origins")
-        anchor = max(anchors)
-        shift = (
-            revised_hours[anchor]["sum"] - revised_fine[anchor + HOUR_SECONDS - FINE_SECONDS]["sum"]
-        )
-        if abs(shift) <= COUNTER_TOLERANCE_KWH:
-            continue
-        writes["5minute"][entity] = [
-            {**row, "sum": revised_fine[row["start"]]["sum"] + shift}
-            for row in originals["5minute"].get(entity, [])
-            if abs(revised_fine[row["start"]]["sum"] + shift - row["sum"]) > COUNTER_TOLERANCE_KWH
-        ]
-        repairs.setdefault(
-            anchor,
-            {
-                "start": datetime.fromtimestamp(anchor, UTC).isoformat(),
-                "reason": "recorder_origin_alignment",
-            },
-        )
-        repairs[anchor].setdefault("fine_origin_shifts", {})[entity] = shift
+    _align_recorder_origins(
+        writes, repairs, hours, maps, originals["5minute"], (*grid, *corrected_sources)
+    )
     return [*repairs.values(), *source_repairs], writes

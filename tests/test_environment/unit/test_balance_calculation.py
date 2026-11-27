@@ -201,6 +201,7 @@ def test_simulated_source_origin_drop_preserves_states_and_zero_night_production
         {"dish"},
         sample=lambda _: {"pv": 0},
     )
+    assert {"hour": hourly, "5minute": fine} == original
     assert any(
         row["reason"] == "simulated_source_origin_discontinuity" and row["expected_kwh"] == 0
         for row in repairs
