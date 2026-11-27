@@ -126,6 +126,8 @@ def _assert_linked_plot_layout_and_inspection(page, optimizer):
     )
     assert plan.evaluate("canvas => Chart.getChart(canvas).scales.x.options.display") is False
     assert price.evaluate("canvas => Chart.getChart(canvas).scales.x.options.display") is True
+    expect(plan.locator("..").get_by_role("list", name="Chart calendar days")).to_be_visible()
+    expect(price.locator("..").get_by_role("list", name="Chart calendar days")).to_have_count(0)
     scales = page.evaluate("""() => ["plan-chart", "price-chart"].map(id => {
         const chart = Chart.getChart(id);
         return [chart.scales.x.min, chart.scales.x.max, chart.chartArea.left, chart.chartArea.right];
@@ -156,7 +158,10 @@ def _assert_linked_plot_layout_and_inspection(page, optimizer):
     page.keyboard.press("ArrowRight")
     assert all(before != after for before, after in zip(idle, page.evaluate(images), strict=True))
     expect(page.locator("#linked-chart-reading")).to_contain_text("Revenue before bonus")
-    expect(page.locator("#price-chart-tooltip")).to_be_visible()
+    price_tooltip = page.locator("#price-chart-tooltip")
+    expect(price_tooltip).to_be_visible()
+    expect(price_tooltip.locator(".chart-linked-cost tbody")).to_have_count(2)
+    page.screenshot(path=str(directory / f"price-tooltip-{page.viewport_size['width']}.png"))
     page.keyboard.press("Escape")
     expect(page.locator("#price-chart-tooltip")).to_be_hidden()
     if page.viewport_size["width"] < 500:
