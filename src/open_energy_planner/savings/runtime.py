@@ -231,28 +231,40 @@ class SavingsRuntime:
                 report = self.store.day(after=first, before=last, finalized=False)
                 if report is None:
                     return None
-            for gap in report["scenarios"]["actual"]["missing"]:
-                if gap["reason"] == MISSING_MEASUREMENTS:
-                    start, end = (datetime.fromisoformat(gap[key]) for key in ("start", "end"))
-                    start = max(start, cursor)
-                    end = min(
-                        end,
-                        quarter(now - SETTLEMENT_RECORDER_DELAY),
-                        start + SETTLEMENT_INTERVAL * MAX_BATCH_INTERVALS,
-                    )
-                    if start >= end:
-                        continue
-                    while start < end:
-                        retained = self.store.frames(start, end=end)
-                        if not retained:
-                            return start, end
-                        for row in retained:
-                            frame = parse_frame(row["frame"])
-                            if frame.start > start:
-                                return start, frame.start
-                            start = max(start, frame.end)
+            gap = self._recoverable_gap(report, cursor, quarter(now - SETTLEMENT_RECORDER_DELAY))
+            if gap is not None:
+                return gap
             cursor = datetime.fromisoformat(report["end"])
             self._recovery_search = checkpoint, cursor
+        return None
+
+    def _recoverable_gap(self, report, cursor, recorded_until):
+        """Find the first absent measurement span in this report's bounded recovery window."""
+        for gap in report["scenarios"]["actual"]["missing"]:
+            if gap["reason"] != MISSING_MEASUREMENTS:
+                continue
+            start = max(datetime.fromisoformat(gap["start"]), cursor)
+            end = min(
+                datetime.fromisoformat(gap["end"]),
+                recorded_until,
+                start + SETTLEMENT_INTERVAL * MAX_BATCH_INTERVALS,
+            )
+            missing = self._first_unretained_span(start, end)
+            if missing is not None:
+                return missing
+        return None
+
+    def _first_unretained_span(self, start, end):
+        """Skip retained frames, including across pages, without moving the recovery cursor."""
+        while start < end:
+            retained = self.store.frames(start, end=end)
+            if not retained:
+                return start, end
+            for row in retained:
+                frame = parse_frame(row["frame"])
+                if frame.start > start:
+                    return start, frame.start
+                start = max(start, frame.end)
         return None
 
     def receive(
