@@ -109,7 +109,9 @@ def test_many_partial_uniform_profiles_keep_other_tasks_and_household_energy(
     )
     prepared = service.prepare(snapshot, SimpleNamespace(), NOW)
     assert service.issue is None
-    admitted = {work.entity_id for work in prepared.problem.appliances}
+    admitted_in_order = tuple(work.entity_id for work in prepared.problem.appliances)
+    admitted = set(admitted_in_order)
+    assert admitted_in_order == tuple(entity for entity in entities if entity in admitted)
     assert other in admitted
     assert (
         (45 if fixed else 13) <= len(admitted) < len(entities)
