@@ -39,5 +39,9 @@ def test_next_day_calculation_uses_a_new_published_price_receipt(settlement):
     assert first["cash"]["actual_cost"] == pytest.approx(0.20)
     assert corrected["cash"]["actual_cost"] == pytest.approx(0.90)
     assert corrected["cash"]["savings"] == 0
+    assert corrected["cash"]["coverage_seconds"] == first["cash"]["coverage_seconds"] == 1800
+    for scenario in ("actual", "without_battery"):
+        assert first["matched_components"][scenario]["purchase"] == pytest.approx(0.20)
+        assert corrected["matched_components"][scenario]["purchase"] == pytest.approx(0.90)
     assert first["published_price_versions"] != corrected["published_price_versions"]
     assert plans.get_plan("original-plan") == original

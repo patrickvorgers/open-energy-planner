@@ -227,6 +227,7 @@ def test_model_and_weather_cannot_be_backdated_before_they_were_known():
         "fractional_index",
         "checksum",
         "category_shape",
+        "tree_id",
         "nonfinite",
         "metadata_time",
     ],
@@ -242,6 +243,8 @@ def test_restore_rejects_incompatible_or_unsafe_native_tree_data(damage):
         native["learner"]["feature_names"].reverse()
     elif damage == "cycle":
         native["learner"]["gradient_booster"]["model"]["trees"][0]["left_children"][0] = 0
+    elif damage == "tree_id":
+        native["learner"]["gradient_booster"]["model"]["trees"][0]["id"] = 1
     elif damage == "category_shape":
         native["learner"]["gradient_booster"]["model"]["cats"] = None
     elif damage == "nonfinite":

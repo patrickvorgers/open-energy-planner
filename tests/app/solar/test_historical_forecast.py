@@ -71,6 +71,10 @@ def test_original_forecast_backtest_selects_ml_without_collecting_three_new_days
     assert report.matched_pairs == 384 and report.unique_hours == 288
     assert [score.matched_hours for score in report.per_origin] == [192, 192]
     assert len(report.windows) == 8
+    for window in report.windows:
+        training = runtime.store.documents.read(f"historical-fit-{window.training_reference}.json")
+        assert training["cutoff"] == window.origin.isoformat()
+        assert window.run_reference in training["run_references"]
     assert all(
         window.training_end <= window.origin and window.model_created_at == NOW
         for window in report.windows

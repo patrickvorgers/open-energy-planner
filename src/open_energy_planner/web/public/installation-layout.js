@@ -179,13 +179,28 @@ export class InstallationLayout {
     sync() {
         const locked = this.saveState.busy;
         if (this.wizard && this.area < 4) this.editing = this.ready;
-        if (!locked) for (const [control, managed] of this.controls) if (control.isConnected) control.disabled = managed || !this.editing;
-        if (!locked) find("export").disabled = this.controls.get(find("export")) !== false || !this.editing || !find("allow-feed-in").checked;
+        if (!locked) this.#syncOwnedControls();
         this.#syncStrategy();
         const priceControls = [...document.querySelectorAll("[data-price-preference]")];
         for (const control of priceControls) control.disabled = !this.editing || locked;
         const canEdit = this.area === 5 ? priceControls.length > 0 : this.area === 4 ? this.controls.get(find("strategy")) === false : this.ready && [0, 1, 2].includes(this.area);
         const wizardArea = this.wizard && this.area < 4;
+        this.#syncNavigation(wizardArea, locked);
+        this.#syncActions(wizardArea, locked, canEdit, priceControls.length);
+        this.#syncPanels(locked);
+        this.summary();
+        this.capacities();
+    }
+
+    #syncOwnedControls() {
+        for (const [control, managed] of this.controls) {
+            if (control.isConnected) control.disabled = managed || !this.editing;
+        }
+        const exportLimit = find("export");
+        exportLimit.disabled = this.controls.get(exportLimit) !== false || !this.editing || !find("allow-feed-in").checked;
+    }
+
+    #syncNavigation(wizardArea, locked) {
         find("installation-heading").textContent = this.wizard ? "Set up Open Energy Planner" : "Installation settings";
         document.body.classList.toggle("installation-readonly", !this.editing);
         find("installation-toolbar").hidden = wizardArea;
@@ -198,6 +213,9 @@ export class InstallationLayout {
         find("installation-sources-shortcut").hidden = !this.wizard;
         find("installation-wizard-actions").hidden = !wizardArea;
         find("installation-area").disabled = locked || this.editing;
+    }
+
+    #syncActions(wizardArea, locked, canEdit, priceControlCount) {
         find("edit-installation").hidden = wizardArea || this.editing || !canEdit;
         find("edit-installation").disabled = locked;
         find("save").hidden = !this.editing || (wizardArea && this.area !== 3);
@@ -205,10 +223,13 @@ export class InstallationLayout {
         find("discard-installation").hidden = !this.editing || wizardArea;
         find("discard-installation").textContent = "Cancel";
         if (this.editing && !locked) find("discard-installation").disabled = false;
-        find("installation-save-bar").hidden = !this.ready && this.area !== 4 && !(this.area === 5 && priceControls.length);
+        find("installation-save-bar").hidden = !this.ready && this.area !== 4 && !(this.area === 5 && priceControlCount);
         // The same SaveBar moves with the wizard actions. There is still one saved/unsaved status.
         const actions = wizardArea ? find("installation-wizard-actions") : find("installation-toolbar").querySelector(".settings-actions");
         if (find("installation-save-bar").parentElement !== actions) actions.append(find("installation-save-bar"));
+    }
+
+    #syncPanels(locked) {
         for (const panel of document.querySelectorAll("#wizard > [data-step]")) {
             panel.hidden = Number(panel.dataset.step) !== this.area || (!this.editing && [0, 1, 2].includes(this.area));
         }
@@ -220,7 +241,6 @@ export class InstallationLayout {
             const parent = !this.editing && this.area === area ? find("installation-device-toolbar") : find(container).parentElement;
             if (label.parentElement !== parent) parent.insertBefore(label, parent === find("installation-device-toolbar") ? null : find(container));
         }
-        this.summary(); this.capacities();
     }
 
     /** Keep the strategy panel in its active area and summarize the current saved goal. */

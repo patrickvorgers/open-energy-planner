@@ -264,6 +264,91 @@ def _features(instant, weather, geometry, duration_h=1):
     )
 
 
+def _validate_tree_links(tree, count):
+    """Verify traversal and parent links for every node in the tree."""
+    pending, seen = [(0, 0, 2147483647)], set()
+    while pending:
+        node, depth, parent = pending.pop()
+        if type(node) is not int or not 0 <= node < count or node in seen:
+            raise ValueError("Invalid solar tree links")
+        seen.add(node)
+        if tree["parents"][node] != parent:
+            raise ValueError("Inconsistent solar tree parent")
+        left, right = tree["left_children"][node], tree["right_children"][node]
+        if left == right == -1:
+            continue
+        if depth >= TREE_DEPTH or type(tree["split_indices"][node]) is not int:
+            raise ValueError("Invalid solar tree depth")
+        if not 0 <= tree["split_indices"][node] < len(FEATURE_NAMES):
+            raise ValueError("Invalid solar tree feature")
+        pending.extend(((left, depth + 1, node), (right, depth + 1, node)))
+    if len(seen) != count:
+        raise ValueError("Unreachable solar tree nodes")
+
+
+def _validate_tree(tree, tree_index):
+    """Check the exact metadata and node arrays before traversing a tree."""
+    node_count = tree["tree_param"]["num_nodes"]
+    if node_count not in tuple(str(count) for count in range(1, 2 ** (TREE_DEPTH + 1))):
+        raise ValueError("Invalid solar tree size")
+    count = int(node_count)
+    if (
+        type(tree["id"]) is not int
+        or tree["id"] != tree_index
+        or tree["tree_param"]
+        != {
+            "num_deleted": "0",
+            "num_feature": str(len(FEATURE_NAMES)),
+            "num_nodes": node_count,
+            "size_leaf_vector": "1",
+        }
+    ):
+        raise ValueError("Unsupported solar tree parameters")
+    for array_name in (
+        "base_weights",
+        "default_left",
+        "left_children",
+        "loss_changes",
+        "parents",
+        "right_children",
+        "split_conditions",
+        "split_indices",
+        "split_type",
+        "sum_hessian",
+    ):
+        if not isinstance(tree[array_name], list) or len(tree[array_name]) != count:
+            raise ValueError("Invalid solar tree arrays")
+        if any(
+            type(value) not in (int, float) or not isfinite(value) for value in tree[array_name]
+        ):
+            raise ValueError("Invalid solar tree quantity")
+    if any(
+        tree[array_name]
+        for array_name in (
+            "categories",
+            "categories_nodes",
+            "categories_segments",
+            "categories_sizes",
+        )
+    ):
+        raise ValueError("Categorical solar trees are unsupported")
+    if tree["split_type"] != [0] * count or any(
+        value not in (0, 1) for value in tree["default_left"]
+    ):
+        raise ValueError("Unsupported solar tree splits")
+    for array_name in (
+        "left_children",
+        "right_children",
+        "parents",
+        "split_indices",
+        "split_type",
+        "default_left",
+    ):
+        if any(type(value) is not int for value in tree[array_name]):
+            raise ValueError("Invalid solar tree index")
+    _validate_tree_links(tree, count)
+
+
 def _validate_json(model_json):
     """Reject oversized, incompatible or cyclic trees before calling a native model loader."""
     if not isinstance(model_json, str) or len(model_json.encode()) > MAX_MODEL_JSON_BYTES:
@@ -300,82 +385,7 @@ def _validate_json(model_json):
             raise ValueError("Invalid solar model base score")
         number(base[0], 0, MAX_SOLAR_ENERGY_KWH)
         for tree_index, tree in enumerate(trees):
-            node_count = tree["tree_param"]["num_nodes"]
-            if node_count not in tuple(str(count) for count in range(1, 2 ** (TREE_DEPTH + 1))):
-                raise ValueError("Invalid solar tree size")
-            count = int(node_count)
-            if (
-                type(tree["id"]) is not int
-                or tree["id"] != tree_index
-                or tree["tree_param"]
-                != {
-                    "num_deleted": "0",
-                    "num_feature": str(len(FEATURE_NAMES)),
-                    "num_nodes": node_count,
-                    "size_leaf_vector": "1",
-                }
-            ):
-                raise ValueError("Unsupported solar tree parameters")
-            for field in (
-                "base_weights",
-                "default_left",
-                "left_children",
-                "loss_changes",
-                "parents",
-                "right_children",
-                "split_conditions",
-                "split_indices",
-                "split_type",
-                "sum_hessian",
-            ):
-                if not isinstance(tree[field], list) or len(tree[field]) != count:
-                    raise ValueError("Invalid solar tree arrays")
-                if any(
-                    type(value) not in (int, float) or not isfinite(value) for value in tree[field]
-                ):
-                    raise ValueError("Invalid solar tree quantity")
-            if any(
-                tree[field]
-                for field in (
-                    "categories",
-                    "categories_nodes",
-                    "categories_segments",
-                    "categories_sizes",
-                )
-            ):
-                raise ValueError("Categorical solar trees are unsupported")
-            if tree["split_type"] != [0] * count or any(
-                value not in (0, 1) for value in tree["default_left"]
-            ):
-                raise ValueError("Unsupported solar tree splits")
-            for field in (
-                "left_children",
-                "right_children",
-                "parents",
-                "split_indices",
-                "split_type",
-                "default_left",
-            ):
-                if any(type(value) is not int for value in tree[field]):
-                    raise ValueError("Invalid solar tree index")
-            pending, seen = [(0, 0, 2147483647)], set()
-            while pending:
-                node, depth, parent = pending.pop()
-                if type(node) is not int or not 0 <= node < count or node in seen:
-                    raise ValueError("Invalid solar tree links")
-                seen.add(node)
-                if tree["parents"][node] != parent:
-                    raise ValueError("Inconsistent solar tree parent")
-                left, right = tree["left_children"][node], tree["right_children"][node]
-                if left == right == -1:
-                    continue
-                if depth >= TREE_DEPTH or type(tree["split_indices"][node]) is not int:
-                    raise ValueError("Invalid solar tree depth")
-                if not 0 <= tree["split_indices"][node] < len(FEATURE_NAMES):
-                    raise ValueError("Invalid solar tree feature")
-                pending.extend(((left, depth + 1, node), (right, depth + 1, node)))
-            if len(seen) != count:
-                raise ValueError("Unreachable solar tree nodes")
+            _validate_tree(tree, tree_index)
     except (AttributeError, KeyError, TypeError, OverflowError, RecursionError) as error:
         raise ValueError("Invalid solar model archive") from error
 
