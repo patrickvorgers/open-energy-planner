@@ -17,8 +17,9 @@ from tests.ha_contract.support.commands import command_plan
 TOKEN = "local-test-only-0123456789abcdef"
 
 
-def test_demo_restart_retains_plan_intent_and_immutable_previous_plans(tmp_path):
-    """Start the app again with current-schema commands and retain the active plan and disabled intent."""
+@pytest.mark.parametrize("source", ["synthetic", "home_assistant"])
+def test_restart_preserves_archived_plan_and_applies_source_authority(tmp_path, source):
+    """Restart both input modes. Retain plan history and clear live command authority."""
     original = command_plan()
     original["input_sha256"] = "a" * 64
     with closing(SqlPlanRepository(tmp_path)) as first:
@@ -26,9 +27,9 @@ def test_demo_restart_retains_plan_intent_and_immutable_previous_plans(tmp_path)
         first.save()
 
     with closing(SqlPlanRepository(tmp_path)) as restarted:
-        create_app(tmp_path, TOKEN, database_engine=restarted.engine)
+        create_app(tmp_path, TOKEN, source=source, database_engine=restarted.engine)
         loaded = read_state(tmp_path)
-        assert loaded["plan"] == original
+        assert loaded["plan"] == (original if source == "synthetic" else None)
         assert loaded["enabled"] is False
     assert read_plan(tmp_path, original["plan_id"]) == original
 
