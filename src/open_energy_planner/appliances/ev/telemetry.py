@@ -68,6 +68,62 @@ def configure_telemetry(previous, before, after):
     return updated
 
 
+def _apply_meter_delta(checkpoint, previous_session, point, evidence, charger, cars):
+    """Advance a continuous meter checkpoint and credit only provable delivered energy.
+
+    The checkpoint and vehicle evidence belong to the caller's detached copy.
+    Missing, reset and implausible readings affect the checkpoint without adding energy.
+    """
+    vehicle_id = checkpoint["vehicle_id"]
+    meter_at = checkpoint["energy_at"]
+    baseline_at = previous_session["energy_at"]
+    current_energy, previous_energy = (
+        point.get("energy_kwh"),
+        previous_session.get("energy_kwh"),
+    )
+    if current_energy is None or current_energy == previous_energy:
+        checkpoint["energy_at"] = baseline_at
+        if current_energy is not None and point.get("energy_observed_at") and evidence:
+            credit_from = max(
+                instant(checkpoint["attributed_at"]), instant(evidence["observed_at"])
+            )
+            if instant(baseline_at) < credit_from <= instant(meter_at):
+                checkpoint["energy_at"] = meter_at
+    if current_energy is None:
+        checkpoint.update(
+            energy_kwh=previous_energy,
+            energy_issue="meter_unavailable",
+        )
+    elif previous_energy is not None and evidence:
+        delta = current_energy - previous_energy
+        hours = (instant(meter_at) - instant(baseline_at)).total_seconds()
+        hours /= SECONDS_PER_HOUR
+        maximum = min(charger["maximum_w"], cars[vehicle_id]["maximum_w"])
+        limit = maximum * hours / WATTS_PER_KW
+        if hours < 0:
+            checkpoint.update(
+                energy_kwh=previous_energy,
+                energy_at=baseline_at,
+                energy_issue="meter_discontinuity",
+            )
+        elif delta < 0:
+            checkpoint["energy_issue"] = "meter_reset"
+        elif delta > limit * (1 + POWER_TOLERANCE_FRACTION) + ENERGY_TOLERANCE_KWH:
+            checkpoint["energy_issue"] = "meter_discontinuity"
+        elif (
+            delta > 0
+            and hours > 0
+            and instant(baseline_at) >= instant(evidence["observed_at"])
+            and instant(baseline_at) >= instant(checkpoint["attributed_at"])
+        ):
+            average_w = min(maximum, delta * WATTS_PER_KW / hours)
+            points = delivery_points(vehicle_efficiency_stages(cars[vehicle_id]))
+            useful = delta * delivered_power(average_w, points) / average_w
+            evidence["stored_kwh"] += useful
+            evidence["estimate_updated_at"] = checkpoint["at"]
+            checkpoint["credited_kwh"] += useful
+
+
 def update_telemetry(previous, state, report):
     """Apply each real sample or meter delta once, never a plan's predicted energy.
 
@@ -162,52 +218,9 @@ def update_telemetry(previous, state, report):
         }
         evidence = updated["vehicles"].get(vehicle_id)
         if continuous:
-            baseline_at = previous_session["energy_at"]
-            current_energy, previous_energy = (
-                point.get("energy_kwh"),
-                previous_session.get("energy_kwh"),
+            _apply_meter_delta(
+                checkpoint, previous_session, point, evidence, configured[point["id"]], cars
             )
-            if current_energy is None or current_energy == previous_energy:
-                checkpoint["energy_at"] = baseline_at
-                if current_energy is not None and point.get("energy_observed_at") and evidence:
-                    credit_from = max(
-                        instant(checkpoint["attributed_at"]), instant(evidence["observed_at"])
-                    )
-                    if instant(baseline_at) < credit_from <= instant(meter_at):
-                        checkpoint["energy_at"] = meter_at
-            if current_energy is None:
-                checkpoint.update(
-                    energy_kwh=previous_energy,
-                    energy_issue="meter_unavailable",
-                )
-            elif previous_energy is not None and evidence:
-                delta = current_energy - previous_energy
-                hours = (instant(meter_at) - instant(baseline_at)).total_seconds()
-                hours /= SECONDS_PER_HOUR
-                maximum = min(configured[point["id"]]["maximum_w"], cars[vehicle_id]["maximum_w"])
-                limit = maximum * hours / WATTS_PER_KW
-                if hours < 0:
-                    checkpoint.update(
-                        energy_kwh=previous_energy,
-                        energy_at=baseline_at,
-                        energy_issue="meter_discontinuity",
-                    )
-                elif delta < 0:
-                    checkpoint["energy_issue"] = "meter_reset"
-                elif delta > limit * (1 + POWER_TOLERANCE_FRACTION) + ENERGY_TOLERANCE_KWH:
-                    checkpoint["energy_issue"] = "meter_discontinuity"
-                elif (
-                    delta > 0
-                    and hours > 0
-                    and instant(baseline_at) >= instant(evidence["observed_at"])
-                    and instant(baseline_at) >= instant(checkpoint["attributed_at"])
-                ):
-                    average_w = min(maximum, delta * WATTS_PER_KW / hours)
-                    points = delivery_points(vehicle_efficiency_stages(cars[vehicle_id]))
-                    useful = delta * delivered_power(average_w, points) / average_w
-                    evidence["stored_kwh"] += useful
-                    evidence["estimate_updated_at"] = report["at"]
-                    checkpoint["credited_kwh"] += useful
         sessions[point["id"]] = checkpoint
     updated["sessions"] = sessions
     return updated
