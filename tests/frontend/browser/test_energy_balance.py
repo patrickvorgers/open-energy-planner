@@ -9,6 +9,7 @@ from playwright.sync_api import expect
 from tests.frontend.browser.helpers import (
     TOKEN,
     balances,
+    open_chart_series,
     physical_plan,
 )
 
@@ -270,6 +271,45 @@ def test_balance_axis_bounds_change_after_real_legend_and_time_controls(app_page
     assert limited_bounds[2][:2] == pytest.approx([-20, 20])
 
 
+def _assert_inspection_with_only_battery_state_visible(page, canvas, popup):
+    """The opening quarter retains its recorded 50% SoC and 16 kW balance with every flow hidden."""
+    open_chart_series(page, "plan-chart")
+    legend = page.locator("#plan-chart-legend")
+    legend.get_by_role("button", name="Deselect all", exact=True).click()
+    legend.locator("label").filter(has_text="SoC").get_by_role("checkbox").check()
+    page.keyboard.press("Escape")
+
+    def expect_balance():
+        """Check only the visible series and the totals of the independently specified flows."""
+        expect(popup).to_contain_text("SoC at start")
+        expect(popup.locator(".chart-tooltip-state .chart-tooltip-value")).to_have_text("50.0")
+        expect(popup.locator(".chart-tooltip-total .chart-tooltip-value")).to_have_text(
+            ["16", "-16"]
+        )
+        expect(popup).not_to_contain_text("Household demand")
+        expect(page.locator("#linked-chart-reading")).to_contain_text("SoC at start")
+
+    canvas.press("Home")
+    expect_balance()
+    if page.viewport_size["width"] < 500:
+        canvas.press("Escape")
+        midpoint = datetime(2026, 10, 23, 0, 7, 30, tzinfo=UTC).timestamp() * 1000
+        point = canvas.evaluate(
+            """(canvas, time) => {
+                const chart = Chart.getChart(canvas);
+                return {x: chart.scales.x.getPixelForValue(time),
+                        y: (chart.chartArea.top + chart.chartArea.bottom) / 2};
+            }""",
+            midpoint,
+        )
+        canvas.tap(position=point)
+        expect_balance()
+    open_chart_series(page, "plan-chart")
+    legend.get_by_role("button", name="Select all", exact=True).click()
+    page.keyboard.press("Escape")
+    page.mouse.move(0, 0)
+
+
 @pytest.mark.parametrize("app_site", ["savings"], indirect=True)
 def test_rendered_balances_keep_real_widths_zero_sum_soc_and_accessible_inspection(app_page):
     """Desktop/mobile use equal quarter widths and zero sums while preserving exact interval inspection and SoC."""
@@ -334,12 +374,13 @@ def test_rendered_balances_keep_real_widths_zero_sum_soc_and_accessible_inspecti
     expect(page.get_by_role("heading", name="Battery converter", exact=False)).to_have_count(0)
     expect(page.locator("#plan-chart-legend label .series-swatch")).to_have_count(9)
     canvas = page.locator("#plan-chart")
+    popup = page.locator("#plan-chart-tooltip")
+    _assert_inspection_with_only_battery_state_visible(page, canvas, popup)
     canvas.scroll_into_view_if_needed()
     point = page.evaluate(
         "Chart.getChart(document.getElementById('plan-chart')).getDatasetMeta(0).data[0].getCenterPoint()"
     )
     canvas.hover(position={"x": point["x"], "y": point["y"]})
-    popup = page.locator("#plan-chart-tooltip")
     expect(popup).to_be_visible()
     formatted_timestamps = page.evaluate(
         "values => values.map(value => new Date(value).toLocaleString('en-US', {year: 'numeric', month: 'numeric', day: 'numeric', hour: 'numeric', minute: '2-digit', timeZone: 'UTC'}))",

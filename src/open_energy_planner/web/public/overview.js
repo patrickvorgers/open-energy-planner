@@ -189,9 +189,9 @@ function renderTooltip({chart: instance, tooltip}, node, balance = false, balanc
         });
         if (bars.length) items = bars;
     }
-    const interval = balance && items.find(item => item.raw.start != null);
+    const interval = balance ? balanceTooltipInterval(items, tooltip.interval) : null;
     const title = document.createElement("p"); title.className = "chart-tooltip-title";
-    title.textContent = interval ? `From ${when(interval.raw.start)} to ${when(interval.raw.end)}` : tooltip.title.join(" - "); node.append(title);
+    title.textContent = interval ? `From ${when(interval.start)} to ${when(interval.end)}` : tooltip.title.join(" - "); node.append(title);
     if (tooltip.periodLabel) {
         const period = document.createElement("p");
         period.className = "chart-tooltip-period";
@@ -202,14 +202,14 @@ function renderTooltip({chart: instance, tooltip}, node, balance = false, balanc
         // Flow bars use midpoints. Attach only recorded start states, never interpolate a missing SoC.
         instance.data.datasets.forEach((dataset, index) => {
             if (dataset.tooltipGroup !== "Battery state" || !instance.isDatasetVisible(index)) return;
-            const point = dataset.data.find(point => point.x === (interval.raw.coveredStart ?? interval.raw.start) && point.y != null);
+            const point = dataset.data.find(point => point.x === (interval.coveredStart ?? interval.start) && point.y != null);
             if (point && !items.some(item => item.dataset === dataset)) items.push({dataset: {...dataset, label: `${dataset.label} at start`}, parsed: point});
         });
     }
     if (batteryPlan) items = items.filter(item => item.dataset.type !== "bar" || Math.abs(item.parsed.y) >= BATTERY_FLOW_DISPLAY_MIN);
     // Totals retain original flows even when the legend or display threshold hides a series.
     const totalItems = interval && !batteryPlan ? instance.data.datasets.filter(dataset => dataset.type === "bar").map(dataset => {
-        const point = dataset.data.find(point => point.start === interval.raw.start && point.end === interval.raw.end);
+        const point = dataset.data.find(point => point.start === interval.start && point.end === interval.end);
         return {dataset, parsed: {y: point?.y}};
     }) : tooltip.balanceItems || [];
     const groupedBalance = balance && !batteryPlan;
@@ -217,13 +217,17 @@ function renderTooltip({chart: instance, tooltip}, node, balance = false, balanc
     const sections = tooltipSections(items, totalItems, groupedBalance, tooltip.balanceItems);
     if (instance.canvas.id === "price-chart" && linkedInterval) node.append(linkedCostTable(linkedInterval));
     node.append(sections);
-    const notes = [...(interval ? balanceNotes(interval.raw, instance.canvas.id, when) : tooltip.afterBody)];
+    const notes = [...(interval ? balanceNotes(interval, instance.canvas.id, when) : tooltip.afterBody)];
     if (totalItems.length) notes.push("Totals include all flows, including hidden series. Supply is positive. Use is negative.");
     if (notes.length) {
         const explanation = document.createElement("p"); explanation.className = "chart-tooltip-explanation";
         explanation.textContent = notes.join("\n"); node.append(explanation);
     }
     positionChartTooltip(node, instance.canvas, tooltip.caretX, tooltip.caretY);
+}
+/** Use the pinned interval when the legend hides all matching flow rows. */
+function balanceTooltipInterval(items, pinnedInterval) {
+    return items.find(item => item.raw.start != null)?.raw ?? pinnedInterval;
 }
 /** Show plan cash flows before bonus and battery valuation. Missing evidence remains unknown. */
 function linkedCostTable({gridImport, gridExport, buyRate, sellRate, currency}) {
@@ -282,17 +286,23 @@ function clearLinkedInspection() {
     $("linked-chart-reading").textContent = "";
 }
 
+/** Keep the plotted quarter and its recorded coverage independently of which series are visible. */
+function linkedBalanceInterval(chart, time, {start, end}) {
+    const coverage = chart.data.datasets.find(dataset => dataset.type === "bar")
+        ?.data.find(point => point.start <= time && time < point.end);
+    return coverage ?? {start, end, coveredStart: start, coveredEnd: end};
+}
+
 /** Render the selected quarter for the chart that received the input. */
 function renderLinkedTooltip(chart, tooltip, interval, y) {
     const time = (interval.start + interval.end) / 2;
     const x = chart.scales.x.getPixelForValue(time);
-    const caption = `From ${when(interval.start)} to ${when(interval.end)}`;
     if (chart.canvas.id === "plan-chart") {
-        renderTooltip({chart, tooltip: {opacity: 1, dataPoints: [], title: [caption], afterBody: [], caretX: x, caretY: y}}, tooltip, true, time);
+        renderTooltip({chart, tooltip: {opacity: 1, dataPoints: [], interval: linkedBalanceInterval(chart, time, interval), caretX: x, caretY: y}}, tooltip, true, time);
     } else {
         const title = document.createElement("p");
         title.className = "chart-tooltip-title";
-        title.textContent = caption;
+        title.textContent = `From ${when(interval.start)} to ${when(interval.end)}`;
         tooltip.replaceChildren(title, linkedCostTable(interval));
         for (const ranking of planRankNotes(time)) {
             const note = document.createElement("p");
