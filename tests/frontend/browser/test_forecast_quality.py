@@ -1154,6 +1154,7 @@ def test_solar_satellite_reference_units_coverage_and_shared_subject_selection(a
                         "required_days": 3,
                         "issue": None,
                         "comparison_days": ["2026-10-24"],
+                        "hourly_comparison_required_days": 3,
                         "comparison_exclusions": [
                             {"day": "2026-10-25", "reason": "missing_measurements"}
                         ],
@@ -1225,6 +1226,7 @@ def test_solar_satellite_reference_units_coverage_and_shared_subject_selection(a
     expect(page.locator(".quality-current-model")).not_to_have_attribute("open", "")
     page.get_by_text("Current model and learning", exact=True).click()
     comparison = page.get_by_role("region", name="Complete forecast comparison", exact=True)
+    expect(comparison).to_contain_text("Hourly accuracy: 1 of 3 comparable days.")
     expect(comparison).to_contain_text("Daily totals: 1 of 7 comparable days.")
     expect(comparison).to_contain_text("Machine learning: -3 kWh total forecast difference")
     comparison.get_by_text("Why days were excluded", exact=True).click()

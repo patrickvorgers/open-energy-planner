@@ -8,6 +8,14 @@ const HISTORY_IMPORT_MESSAGES = {
     history_cache_unreadable: "Saved production history cannot be read. Check the saved database and restore a working backup if needed.",
 };
 
+/** Separate an incomplete comparison from an active choice made by the daily-total check. */
+function solarReadiness(choice, training, calibration) {
+    if (!choice) return calibration;
+    const collectsAccuracy = choice.requested === "automatic" || choice.requested === "ml" && training?.status === "nonlinear_shadow";
+    if (collectsAccuracy && choice.complete_days < choice.required_days) return "collecting_accuracy_evidence";
+    return choice.issue && !choice.daily_total_comparison?.ml_held ? "comparison_unavailable" : "active";
+}
+
 /** Associate current readiness and selection with stable forecast IDs, never historical names. */
 export function currentModelRows(current = {}, selection = {}) {
     const rows = new Map();
@@ -15,8 +23,7 @@ export function currentModelRows(current = {}, selection = {}) {
     const solar = current.solar || {}, consumers = current.consumers || {};
     for (const [index, source] of (solar.configuration?.sources || []).entries()) {
         const choice = solar.source_selection?.[source.source_id], training = solar.learning?.[source.source_id];
-        const collecting = choice && choice.complete_days < choice.required_days && (choice.requested === "automatic" || choice.requested === "ml" && training?.status === "nonlinear_shadow");
-        const readiness = choice ? collecting ? "collecting_accuracy_evidence" : choice.issue && !choice.daily_total_comparison?.ml_held ? "comparison_unavailable" : "active" : solar.calibration_status?.[source.source_id];
+        const readiness = solarReadiness(choice, training, solar.calibration_status?.[source.source_id]);
         rows.set(source.source_id, {id: source.source_id, scope: "solar", label: solar.source_names?.[source.source_id] || `Solar ${index + 1}`, active: solar.source_model_labels?.[source.source_id] || solar.source_models?.[source.source_id], readiness, solarSelection: choice, solarLearning: solar.calibration_status?.[source.source_id], solarTraining: solar.learning?.[source.source_id], solarWeatherService: solar.weather_service, solarHistory: solar.history_import?.[source.entity_id], solarLearningStart: source.learning_start, issue: solar.history_issues?.[source.entity_id] || solar.feedback_issues?.[source.curtailment_entity_id] || solar.issue});
     }
     for (const device of consumers.result?.devices || []) rows.set(device.entity_id, {id: device.entity_id, scope: "devices", label: consumers.options?.find(row => row.entity_id === device.entity_id)?.name || device.entity_id, active: device.forecast.model, readiness: device.status ?? consumers.result.status, temperature: device.weather_features_used, weatherLearning: device.weather_learning, dailySelection: device.model_selection});
@@ -192,6 +199,7 @@ const SOLAR_COMPARISON_EXCLUSIONS = {
 
 /** Show which captured days passed and display the daily totals separately from hourly MAE. */
 function appendSolarComparisonEvidence(solar, paragraph, section) {
+    if (solar.hourly_comparison_required_days) paragraph(`Hourly accuracy: ${solar.complete_days} of ${solar.hourly_comparison_required_days} comparable days.`, section);
     if (solar.comparison_days?.length) paragraph(`Matched days for hourly accuracy: ${solar.comparison_days.map(dateLabel).join(", ")}.`, section);
     const totals = solar.daily_total_comparison;
     if (totals) {

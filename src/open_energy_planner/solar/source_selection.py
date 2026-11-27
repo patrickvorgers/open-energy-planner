@@ -186,6 +186,55 @@ def _production_control_issue(source, hours, control):
     return None
 
 
+def _captured_forecast_issue(record, models, provider_revisions):
+    """Explain why one immutable day cannot represent the current forecast family."""
+    if record is None:
+        return "missing_capture"
+    if not set(models) <= set(record["models"]):
+        return "missing_models"
+    if (
+        ForecastSource.HOME_ASSISTANT in models
+        and record.get("ha_configuration_versions", []) != provider_revisions
+    ):
+        return "ha_configuration_changed"
+    return None
+
+
+def _shared_inverter_issue(hours, source, inverter, siblings, meter_hours):
+    """Screen common AC hours for loss of production or incomplete sibling evidence."""
+    sibling_hours = [
+        meter_hours.get(other.entity_id, {}) if other.measurement_boundary == "ac" else {}
+        for other in siblings
+    ]
+    return any(
+        ac_comparison_issue(
+            source.measurement_boundary,
+            inverter.ac_limit_w,
+            tuple(readings.get(instant) for readings in sibling_hours),
+        )
+        for instant in hours
+    )
+
+
+def _hourly_comparison_scores(cohorts, models):
+    """Rank each model on the same latest three measured days."""
+    hourly_cohorts = cohorts[:MIN_ACCURACY_DAYS]
+    if len(hourly_cohorts) < MIN_ACCURACY_DAYS:
+        return {}
+    actual = [observed for _record, values in hourly_cohorts for observed in values]
+    return {
+        model: mean_absolute_error(
+            [
+                predicted
+                for record, _values in hourly_cohorts
+                for predicted in record["models"][model]
+            ],
+            actual,
+        )
+        for model in models
+    }
+
+
 def _score_comparisons(
     documents,
     source,
@@ -225,57 +274,23 @@ def _score_comparisons(
                 evidence_issue = "Stored solar accuracy evidence is unreadable. Automatic comparison is unavailable"
                 cohorts = []
             break
-        if record is None:
-            exclusions.append({"day": day.isoformat(), "reason": "missing_capture"})
-            continue
-        if not set(models) <= set(record["models"]):
-            exclusions.append({"day": day.isoformat(), "reason": "missing_models"})
-            continue
-        if (
-            ForecastSource.HOME_ASSISTANT in models
-            and record.get("ha_configuration_versions", []) != provider_revisions
-        ):
-            exclusions.append({"day": day.isoformat(), "reason": "ha_configuration_changed"})
-            continue
-        if reason := _production_control_issue(source, hours, control):
+        reason = _captured_forecast_issue(record, models, provider_revisions)
+        if reason is None:
+            reason = _production_control_issue(source, hours, control)
+        if reason is not None:
             exclusions.append({"day": day.isoformat(), "reason": reason})
             continue
         values = [actual.get(instant) for instant in hours]
         if any(value is None for value in values):
             exclusions.append({"day": day.isoformat(), "reason": "missing_measurements"})
             continue
-        if any(
-            ac_comparison_issue(
-                source.measurement_boundary,
-                inverter.ac_limit_w,
-                tuple(
-                    meter_hours.get(other.entity_id, {}).get(instant)
-                    if other.measurement_boundary == "ac"
-                    else None
-                    for other in siblings
-                ),
-            )
-            for instant in hours
-        ):
+        if _shared_inverter_issue(hours, source, inverter, siblings, meter_hours):
             exclusions.append({"day": day.isoformat(), "reason": "inverter_limit_evidence"})
             continue
         cohorts.append((record, values))
         if len(cohorts) == DAILY_TOTAL_COMPARISON_DAYS:
             break
-    hourly_cohorts = cohorts[:MIN_ACCURACY_DAYS]
-    scores = {}
-    if len(hourly_cohorts) == MIN_ACCURACY_DAYS and evidence_issue is None:
-        scores = {
-            model: mean_absolute_error(
-                [
-                    predicted
-                    for record, _values in hourly_cohorts
-                    for predicted in record["models"][model]
-                ],
-                [observed for _record, values in hourly_cohorts for observed in values],
-            )
-            for model in models
-        }
+    scores = _hourly_comparison_scores(cohorts, models) if evidence_issue is None else {}
     return cohorts, scores, exclusions, evidence_issue
 
 
@@ -309,6 +324,34 @@ def _persistent_ml_underestimate(cohorts, measured, errors):
         and ml["bias_kwh"] <= -measured * MIN_UNDERESTIMATION_SHARE
         and errors[ForecastSource.PVWATTS]["absolute_error_kwh"] < ml["absolute_error_kwh"]
     )
+
+
+def _daily_total_comparison(cohorts, models, *, automatic_ml):
+    """Provide diagnostic evidence and apply the daily safeguard only to Automatic ML."""
+    measured, errors = _daily_total_evidence(cohorts, models)
+    return {
+        "days": [record["day"] for record, _values in cohorts],
+        "required_days": DAILY_TOTAL_COMPARISON_DAYS,
+        "measured_kwh": measured,
+        "models": errors,
+        "ml_held": automatic_ml and _persistent_ml_underestimate(cohorts, measured, errors),
+    }
+
+
+def _source_models(source_id, baseline, candidate, ha):
+    """Collect same-boundary forecast alternatives for one independently metered source."""
+    models = {
+        ForecastSource.PVWATTS: tuple(
+            row for row in baseline.energies if row.source_id == source_id
+        )
+    }
+    if candidate is not None:
+        models[ForecastSource.ML] = tuple(
+            row for row in candidate.energies if row.source_id == source_id
+        )
+    if source_id in ha:
+        models[ForecastSource.HOME_ASSISTANT] = ha[source_id]
+    return models
 
 
 def _select_model(source, models, scores, control, now, *, enforce_ml_policy):
@@ -469,40 +512,35 @@ def choose_sources(
     fitted = {row.source_id for row in calibrations}
     tomorrow = now.astimezone(ZoneInfo(baseline.location.timezone)).date() + DAY
     future_hours, _end = comparison_hours(tomorrow, baseline.location.timezone)
+    capture_context = {
+        "captured_at": now.isoformat(),
+        "day": tomorrow.isoformat(),
+        "timezone": baseline.location.timezone,
+        "hours": [instant.isoformat() for instant in future_hours],
+        "configuration_version": configuration.version,
+        "baseline_version": baseline.version,
+        "ml_version": candidate.version if candidate else None,
+    }
     for source in configuration.sources:
         source_id = source.source_id
         siblings = tuple(
             other for other in configuration.sources if other.inverter_id == source.inverter_id
         )
         field = "ac_kwh" if source.measurement_boundary == "ac" else "dc_kwh"
-        models = {
-            ForecastSource.PVWATTS: tuple(
-                row for row in baseline.energies if row.source_id == source_id
-            )
-        }
-        if source_id in fitted and candidate:
-            models[ForecastSource.ML] = tuple(
-                row for row in candidate.energies if row.source_id == source_id
-            )
-        if source_id in ha:
-            models[ForecastSource.HOME_ASSISTANT] = ha[source_id]
+        models = _source_models(source_id, baseline, candidate if source_id in fitted else None, ha)
+        policy = (ml_policies or {}).get(source_id)
+        control = (feedback or {}).get(source.curtailment_entity_id)
         identity = family(
             configuration,
             source,
             baseline.location,
-            learned_policy=(ml_policies or {}).get(source_id),
+            learned_policy=policy,
         )
         prefix = "source-day-" + identity + "-"
         provider_revisions = sorted((ha_configuration_versions or {}).get(source.entity_id, []))
         capture = {
-            "captured_at": now.isoformat(),
-            "day": tomorrow.isoformat(),
-            "timezone": baseline.location.timezone,
-            "hours": [instant.isoformat() for instant in future_hours],
+            **capture_context,
             "models": {},
-            "configuration_version": configuration.version,
-            "baseline_version": baseline.version,
-            "ml_version": candidate.version if candidate else None,
             "source_id": source_id,
             "ha_versions": (ha_references or {}).get(source.entity_id, []),
             "ha_configuration_versions": provider_revisions,
@@ -523,7 +561,7 @@ def choose_sources(
             inverter=inverters[source.inverter_id],
             siblings=siblings,
             meter_hours=meter_hours,
-            control=(feedback or {}).get(source.curtailment_entity_id),
+            control=control,
             evidence_issue=evidence_issue,
         )
         admission_basis = "captured_forecasts"
@@ -534,7 +572,7 @@ def choose_sources(
                 configuration,
                 source,
                 baseline.location,
-                (ml_policies or {}).get(source_id),
+                policy,
                 now,
             )
             if historical_scores is not None:
@@ -545,39 +583,33 @@ def choose_sources(
             source,
             models,
             scores,
-            (feedback or {}).get(source.curtailment_entity_id),
+            control,
             now,
             enforce_ml_policy=source_id in (ml_policies or {}),
         )
-        measured, daily_errors = _daily_total_evidence(cohorts, models)
-        ml_held = (
-            preference == ForecastSource.AUTOMATIC
-            and chosen == ForecastSource.ML
-            and _persistent_ml_underestimate(cohorts, measured, daily_errors)
+        daily_totals = _daily_total_comparison(
+            cohorts,
+            models,
+            automatic_ml=preference == ForecastSource.AUTOMATIC and chosen == ForecastSource.ML,
         )
-        if ml_held:
+        if daily_totals["ml_held"]:
             chosen = ForecastSource.PVWATTS
             learning_issue = "PVWatts is active because machine learning repeatedly underestimated daily production."
         selected[source_id] = (chosen, models[chosen])
-        comparison_days = [record["day"] for record, _values in cohorts]
+        comparison_days = daily_totals["days"][:MIN_ACCURACY_DAYS]
         statuses[source_id] = {
             "requested": preference,
             "active": chosen,
             "mae_kwh": scores,
-            "complete_days": min(len(comparison_days), MIN_ACCURACY_DAYS),
+            "complete_days": len(comparison_days),
             "required_days": 0
             if admission_basis == "historical_forecast_backtest"
             else MIN_ACCURACY_DAYS,
             "admission_basis": admission_basis,
-            "comparison_days": comparison_days[:MIN_ACCURACY_DAYS],
+            "comparison_days": comparison_days,
+            "hourly_comparison_required_days": MIN_ACCURACY_DAYS,
             "comparison_exclusions": exclusions,
-            "daily_total_comparison": {
-                "days": comparison_days,
-                "required_days": DAILY_TOTAL_COMPARISON_DAYS,
-                "measured_kwh": measured,
-                "models": daily_errors,
-                "ml_held": ml_held,
-            },
+            "daily_total_comparison": daily_totals,
             "history_version": version(document(history)) if history else None,
             "issue": issue
             or learning_issue

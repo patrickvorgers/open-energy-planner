@@ -368,11 +368,16 @@ def test_automatic_uses_three_identical_complete_days_and_survives_restart(tmp_p
 
 
 @pytest.mark.parametrize(
-    "repeated,preference,expected",
-    [(True, "automatic", "pvwatts"), (False, "automatic", "ml"), (True, "ml", "ml")],
+    "repeated,preference,pvwatts_peak,pvwatts_daily_error,expected",
+    [
+        (True, "automatic", 1.4, 0.0, "pvwatts"),
+        (False, "automatic", 1.4, 0.0, "ml"),
+        (True, "ml", 1.4, 0.0, "ml"),
+        (True, "automatic", 0.95, 37.8, "ml"),
+    ],
 )
 def test_solar_selection_protects_daily_totals_only_after_repeated_errors(
-    tmp_path, repeated, preference, expected
+    tmp_path, repeated, preference, pvwatts_peak, pvwatts_daily_error, expected
 ):
     """Prefer accurate daily energy over ML's hourly win only for repeated material bias."""
     store = make_store(tmp_path, SolarStore)
@@ -384,11 +389,11 @@ def test_solar_selection_protects_daily_totals_only_after_repeated_errors(
     for day in range(7):
         now = START + timedelta(days=day)
         baseline = prediction(now, 0.8, configuration=configuration)
-        # Alternating 0.2 and 1.4 gives the correct 19.2 kWh daily total and 0.6 kWh hourly MAE.
+        # The 0.2/1.4 profile sums to 19.2 kWh. The 0.2/0.95 profile misses 5.4 kWh each day.
         baseline = replace(
             baseline,
             energies=tuple(
-                replace(energy, ac_kwh=0.2 if index % 2 else 1.4)
+                replace(energy, ac_kwh=0.2 if index % 2 else pvwatts_peak)
                 for index, energy in enumerate(baseline.energies)
             ),
         )
@@ -417,7 +422,7 @@ def test_solar_selection_protects_daily_totals_only_after_repeated_errors(
     totals = status["daily_total_comparison"]
     assert len(totals["days"]) == 7
     assert status["mae_kwh"]["ml"] < status["mae_kwh"]["pvwatts"]
-    assert totals["models"]["pvwatts"]["absolute_error_kwh"] == pytest.approx(0)
+    assert totals["models"]["pvwatts"]["absolute_error_kwh"] == pytest.approx(pvwatts_daily_error)
     assert totals["models"]["ml"]["bias_kwh"] < -0.15 * totals["measured_kwh"]
     assert totals["models"]["ml"]["materially_underestimated_days"] == (7 if repeated else 1)
     assert totals["ml_held"] is (expected == "pvwatts")
