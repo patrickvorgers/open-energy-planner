@@ -473,7 +473,7 @@ def test_forecast_refresh_and_watch_confirmation_do_not_require_metadata_capture
             coordinator.plan_watch_task.cancel()
             await coordinator.sync()
             assert coordinator.catalogue_discovery.healthy
-            captures, confirmations = [], []
+            captures, confirmations, uploads = [], [], []
             original_capture = coordinator.solar_forecast_bridge.capture
             original_request = coordinator.client.request
 
@@ -486,6 +486,8 @@ def test_forecast_refresh_and_watch_confirmation_do_not_require_metadata_capture
                 """Send confirmations through the real authenticated receiver."""
                 if path == "/v1/ha/catalogue":
                     confirmations.append(body)
+                if path == "/v1/solar/ha-forecasts":
+                    uploads.append(body)
                 return await original_request(method, path, body)
 
             def unexpected_projection(*_arguments):
@@ -498,13 +500,13 @@ def test_forecast_refresh_and_watch_confirmation_do_not_require_metadata_capture
             coordinator.solar_forecast_attempted_at = dt_util.utcnow() - timedelta(minutes=6)
             coordinator.catalogue_confirmed_at = dt_util.utcnow() - timedelta(minutes=2)
             await coordinator.sync()
-            assert len(captures) == 1
+            assert len(captures) == len(uploads) == 1
             assert confirmations == [{"confirmed_revision": coordinator.catalogue_context.revision}]
             await coordinator.sync()
-            assert len(captures) == 1
+            assert len(captures) == len(uploads) == 1
             coordinator.solar_forecast_bridge.generation += 1
             await coordinator.sync()
-            assert len(captures) == 2
+            assert len(captures) == len(uploads) == 2
             assert coordinator.catalogue_discovery.healthy
 
     asyncio.run(scenario())
