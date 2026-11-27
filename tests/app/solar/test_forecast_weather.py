@@ -907,6 +907,7 @@ def test_captured_weather_service_is_archived_with_old_forecast_rows_despite_a_l
         }
     context = store.documents.read("quality-candidates-" + result[1].version + ".json")
     assert context["weather_service"] == original_service
+    assert context["forecasts"] == [baseline.version, independent.version]
     manifest = store.documents.read("weather-" + baseline.weather_version + ".json")
     first = manifest["blocks"][0]
     values = store.documents.read("block-" + first["block"] + ".json")

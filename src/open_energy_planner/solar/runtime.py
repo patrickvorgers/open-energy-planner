@@ -943,11 +943,33 @@ class SolarRuntime:
                 },
             },
         )
-        for archived, applied in (
-            (baseline, ()),
-            (candidate, calibrations),
-            (forecast, selected),
-        ):
+        self._archive_source_models(
+            configuration,
+            ((baseline, ()), (candidate, calibrations), (forecast, selected)),
+            forecast,
+            models,
+            learned_names,
+            baseline.model,
+        )
+        self._archive_quality_candidates(
+            forecast, baseline, candidate, ha, ha_predictions, weather_provenance
+        )
+        return (
+            key,
+            forecast,
+            calibrations,
+            candidate,
+            baseline,
+            selection_status,
+            ha_issues,
+            learning,
+        )
+
+    def _archive_source_models(
+        self, configuration, projections, forecast, models, learned_names, baseline_model
+    ):
+        """Retain source model labels for every available comparison projection."""
+        for archived, applied in projections:
             if archived is not None:
                 calibrated = {row.source_id for row in applied}
                 available_sources = {row.source_id for row in archived.energies}
@@ -960,12 +982,17 @@ class SolarRuntime:
                             if archived is forecast
                             else learned_names[source.source_id]
                             if source.source_id in calibrated
-                            else baseline.model
+                            else baseline_model
                         )
                         for source in configuration.sources
                         if source.source_id in available_sources
                     },
                 )
+
+    def _archive_quality_candidates(
+        self, forecast, baseline, candidate, ha, ha_predictions, weather_provenance
+    ):
+        """Archive available alternatives and their immutable comparison provenance."""
         alternatives = [baseline]
         if candidate is not None:
             alternatives.append(candidate)
@@ -992,16 +1019,6 @@ class SolarRuntime:
             "quality-candidates",
             forecast.version,
             {"forecasts": [row.version for row in alternatives], **weather_provenance},
-        )
-        return (
-            key,
-            forecast,
-            calibrations,
-            candidate,
-            baseline,
-            selection_status,
-            ha_issues,
-            learning,
         )
 
     def _learned_candidates(
