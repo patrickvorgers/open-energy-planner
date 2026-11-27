@@ -55,6 +55,12 @@ def test_public_navigation_does_not_wait_for_pending_command_revocation(
                     )
                     for path in paths
                 ]
+                anonymous = await asyncio.wait_for(
+                    session.get(url + "/v1/snapshot", headers={"Authorization": ""}),
+                    timeout=0.5,
+                )
+                assert anonymous.status == 401
+                await anonymous.read()
                 protected_read = asyncio.create_task(session.get(url + "/v1/snapshot"))
                 completed, pending = await asyncio.wait(public_reads, timeout=0.5)
                 assert len(completed) == len(paths), "Public navigation waited for command storage"

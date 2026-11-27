@@ -1346,6 +1346,7 @@ def test_same_named_batteries_keep_independent_graph_series(app_page):
         )
     for step in plan["steps"]:
         step["devices"]["spare"] = {"mode": "follow_grid_target", "power_w": None}
+    plan["steps"][-1]["devices"]["spare"] = {"mode": "fixed_power", "power_w": 125}
     plan["expected_flows"][0].pop("grid_import")
     plan["expected_flows"][0].update(grid_to_load=0.25, grid_to_battery=0.1)
     projected = plan_evidence(plan)
@@ -1364,6 +1365,7 @@ def test_same_named_batteries_keep_independent_graph_series(app_page):
             }
         ),
     )
+    page.clock.set_fixed_time(datetime.fromisoformat(plan["steps"][0]["start"]))
     page.goto(url + "/overview")
     page.get_by_label("Installation API token", exact=True).fill(TOKEN)
     page.get_by_role("button", name="Connect", exact=True).click()
@@ -1383,6 +1385,11 @@ def test_same_named_batteries_keep_independent_graph_series(app_page):
         .evaluate("term => term.nextElementSibling.textContent")
         == "0.35 kWh"
     )
+    page.locator("#price-chart").press("End")
+    expect(page.locator("#inspect-time")).to_have_value("1")
+    expect(battery).to_contain_text("125 W fixed power")
+    page.locator("#price-chart").press("Home")
+    expect(page.locator("#inspect-time")).to_have_value("0")
     page.get_by_text("Understand this plan", exact=True).click()
     page.get_by_text("Selected interval details", exact=True).click()
     for ordinal, mode in (
