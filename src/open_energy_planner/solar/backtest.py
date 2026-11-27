@@ -288,30 +288,10 @@ class HistoricalForecastAssessment:
             raise ValueError("Invalid historical solar forecast evidence") from None
 
 
-def assess_forecasts(
-    configuration,
-    source,
-    location,
-    history,
-    runs,
-    now,
-    model_policy,
-    store,
-    *,
-    histories=None,
-    feedback=None,
+def _assessment_inputs(
+    configuration, source, family, initializations, history, runs, histories, feedback
 ):
-    """Compare four predetermined runs at both origins, retaining original fits and actual clocks."""
-    from open_energy_planner.solar.boosting import (
-        AC_METER_HEADROOM,
-        MAX_DC_CAPACITY_MULTIPLE,
-        fit_boosted_model,
-    )
-    from open_energy_planner.solar.calculation.projection import learned_forecast
-    from open_energy_planner.solar.wire import document
-
-    initializations = scheduled_runs(now)
-    family = evidence_family(configuration, source, location, model_policy)
+    """Bound original field evidence to the last replay window and derive its archive identity."""
     # Outcomes after the final test horizon and newer runs cannot change these fits.
     last_end = initializations[-1] + timedelta(
         hours=max(SIMULATION_DELAYS_HOURS) + PLANNING_HORIZON_HOURS
@@ -352,6 +332,36 @@ def assess_forecasts(
                 )
             },
         }
+    )
+    return bounded_history, relevant_runs, identity
+
+
+def assess_forecasts(
+    configuration,
+    source,
+    location,
+    history,
+    runs,
+    now,
+    model_policy,
+    store,
+    *,
+    histories=None,
+    feedback=None,
+):
+    """Compare four predetermined runs at both origins, retaining original fits and actual clocks."""
+    from open_energy_planner.solar.boosting import (
+        AC_METER_HEADROOM,
+        MAX_DC_CAPACITY_MULTIPLE,
+        fit_boosted_model,
+    )
+    from open_energy_planner.solar.calculation.projection import learned_forecast
+    from open_energy_planner.solar.wire import document
+
+    initializations = scheduled_runs(now)
+    family = evidence_family(configuration, source, location, model_policy)
+    bounded_history, relevant_runs, identity = _assessment_inputs(
+        configuration, source, family, initializations, history, runs, histories, feedback
     )
     pointer = "historical-assessment-current-" + identity + ".json"
     if store.documents.exists(pointer):
