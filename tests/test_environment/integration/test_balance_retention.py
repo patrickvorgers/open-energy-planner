@@ -364,6 +364,7 @@ def test_native_balance_preview_apply_keeps_preferences_and_both_statistics_reso
                 return_response=True,
             )
             assert recovered["journal_status"] == "completed" and not recovered["applied"]
+            assert await repair_store.async_load() == completed
             incomplete = deepcopy(completed)
             incomplete["status"] = "applying"
             for entities in incomplete["after"].values():
@@ -378,6 +379,7 @@ def test_native_balance_preview_apply_keeps_preferences_and_both_statistics_reso
                     blocking=True,
                     return_response=True,
                 )
+            assert await repair_store.async_load() == incomplete
             # An interrupted operation that queued nothing can close without any write.
             incomplete["before"] = completed["after"]
             await repair_store.async_save(incomplete)
