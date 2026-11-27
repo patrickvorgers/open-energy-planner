@@ -77,10 +77,6 @@ const INTERVAL_POINTER_EVENTS = new Set(["mousemove", "touchstart", "touchmove"]
 const LINKED_LEFT_AXIS_PX = 64;
 const LINKED_RIGHT_AXIS_PX = 58;
 const DAILY_HIGHLIGHT_QUARTERS = 12;
-const OPTIMIZER_GROUPS = {
-    import: "Grid import", export: "Grid export", solar: "Solar", solarAC: "Solar",
-    load: "Household & devices", charge: "Battery", discharge: "Battery"
-};
 let linkedInterval = null;
 const isLinkedChart = id => LINKED_CHART_IDS.includes(id);
 const DEVICE_PATTERN_SIZE_PX = 8;
@@ -350,7 +346,11 @@ function linkedChartInteraction(canvas, tooltip, hideTooltip, signal) {
 /** Keep pointer and keyboard interval cards within the viewport. */
 function positionChartTooltip(node, canvas, x, y) {
     const bounds = canvas.getBoundingClientRect(), margin = TOOLTIP_VIEWPORT_MARGIN_PX;
-    node.style.left = `${Math.max(margin, Math.min(bounds.left + x + margin, innerWidth - node.offsetWidth - margin))}px`;
+    const anchor = bounds.left + x;
+    const width = node.getBoundingClientRect().width;
+    const right = anchor + margin;
+    const left = right + width + margin <= innerWidth ? right : anchor - margin - width;
+    node.style.left = `${Math.max(margin, Math.min(left, innerWidth - width - margin))}px`;
     node.style.top = `${Math.max(margin, Math.min(bounds.top + y + margin, innerHeight - node.offsetHeight - margin))}px`;
 }
 /**
@@ -543,31 +543,6 @@ function planRankNotes(time) {
     return marks.filter(mark => mark.start <= time && time < mark.end)
         .map(mark => PLAN_RANK_NOTES[mark.extreme]);
 }
-/** Update each compact swatch from the individual series still visible in the plot. */
-function syncChartKey(instance, groupKeys) {
-    for (const {item, swatch, indexes} of groupKeys.values()) {
-        const colors = [...new Set(indexes.filter(index => instance.isDatasetVisible(index))
-            .map(index => instance.data.datasets[index].swatchColor))];
-        item.hidden = !colors.length;
-        if (colors.length) swatch.style.background = colors.length > 1
-            ? `linear-gradient(90deg, ${colors[0]} 50%, ${colors[1]} 50%)` : colors[0];
-    }
-}
-
-/** Add a compact key for a named flow group or standalone series. */
-function addChartKey(legend, groupKeys, group, indexes) {
-    if (!group) return;
-    if (!groupKeys.has(group)) {
-        const item = document.createElement("span"), keySwatch = document.createElement("span");
-        item.className = "planning-group"; keySwatch.className = "series-swatch";
-        keySwatch.setAttribute("aria-hidden", "true");
-        item.append(keySwatch, group);
-        legend.insertBefore(item, legend.querySelector("details"));
-        groupKeys.set(group, {item, swatch: keySwatch, indexes: []});
-    }
-    groupKeys.get(group).indexes.push(...indexes);
-}
-
 /** Explain the selected mark using the ranked contract rate or the spot preview's status. */
 function priceTooltipNotes(item, step, priceHoverTime) {
     const time = Number.isFinite(priceHoverTime) ? priceHoverTime : item.parsed.x;
@@ -591,7 +566,7 @@ function chartTooltipNotes(items, {id, balance, axisTime, priceHoverTime}) {
     return step?.commands || [];
 }
 
-/** Build a compact chart key and shared series menu with persistent checkbox choices. */
+/** Show the actual visible datasets and keep checkbox choices in the shared series menu. */
 function createOverviewLegend(id, series, {preserveVisibility, signal, gridSteps, legend}) {
     const planComparison = ["plan-chart", "reference-chart", "self-consumption-chart"].includes(id);
     // A retained immutable plan has the same legend group identities even after its labels change.
@@ -600,7 +575,7 @@ function createOverviewLegend(id, series, {preserveVisibility, signal, gridSteps
     legend.classList.add("compact-planning-legend");
     legend.replaceChildren();
     let seriesHost = legend;
-    const groupKeys = new Map();
+    const chartKeys = [];
     if (series.length) {
         const disclosure = document.createElement("details");
         const summary = document.createElement("summary");
@@ -653,7 +628,7 @@ function createOverviewLegend(id, series, {preserveVisibility, signal, gridSteps
             selectAll.disabled = !eligible.length;
             selectAll.textContent = eligible.every(({input}) => input.checked) ? "Deselect all" : "Select all";
         }
-        syncChartKey(instance, groupKeys);
+        chartKeys.forEach((item, index) => { item.hidden = !instance.isDatasetVisible(index); });
     }
     /** Attach controls after Chart.js has created the datasets. */
     function renderLegend(result) {
@@ -690,11 +665,18 @@ function createOverviewLegend(id, series, {preserveVisibility, signal, gridSteps
             const swatch = document.createElement("span"); swatch.className = "series-swatch"; swatch.style.backgroundColor = s.legendColor || datasets[indexes[0]].swatchColor; swatch.setAttribute("aria-hidden", "true");
             label.append(input, swatch, document.createTextNode(s.legendName || s.name)); seriesHost.append(label);
             legendEntries.push(entry);
-            const name = s.legendName || s.name;
-            const group = planComparison
-                ? OPTIMIZER_GROUPS[s.flowKey] || (entry.device ? OPTIMIZER_GROUPS.load : null)
-                : name;
-            addChartKey(legend, groupKeys, group, indexes);
+        }
+        const disclosure = legend.querySelector("details");
+        for (const dataset of datasets) {
+            const item = document.createElement("span"), swatch = document.createElement("span");
+            item.className = "planning-series";
+            swatch.className = "series-swatch";
+            swatch.style.backgroundColor = dataset.swatchColor;
+            swatch.classList.toggle("series-swatch-expected", dataset.deviceState === "expected");
+            swatch.setAttribute("aria-hidden", "true");
+            item.append(swatch, dataset.label);
+            legend.insertBefore(item, disclosure);
+            chartKeys.push(item);
         }
         if (gridSteps) {
             const item = document.createElement("span"), swatch = document.createElement("span");
@@ -702,7 +684,7 @@ function createOverviewLegend(id, series, {preserveVisibility, signal, gridSteps
             swatch.className = "grid-mode-swatch";
             swatch.setAttribute("aria-hidden", "true");
             item.append(swatch, ZERO_GRID_LABEL);
-            legend.insertBefore(item, legend.querySelector("details"));
+            legend.insertBefore(item, disclosure);
         }
         if (series.some(s => s.deviceState != null)) {
             const key = document.createElement("p"); key.id = `${id}-device-key`; deviceKey = key;
@@ -752,7 +734,7 @@ function chart(id, series, {utcDays = false, calendarDates = false, unit = "", m
     if (balance) series = quarterBalanceSeries(series);
     charts.get(id)?.destroy();
     $(`${id}-tooltip`)?.remove();
-    const tooltip = document.createElement("div"); tooltip.id = `${id}-tooltip`; tooltip.className = "chart-tooltip";
+    const tooltip = document.createElement("div"); tooltip.id = `${id}-tooltip`; tooltip.className = "chart-tooltip chart-tooltip-point";
     tooltip.hidden = true; tooltip.setAttribute("role", "tooltip"); document.body.append(tooltip);
     const daySummary = {owner: null, pinned: false};
     /** Shared dismissal also revokes date ownership when scrolling or interval inspection replaces it. */

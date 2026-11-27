@@ -8,13 +8,13 @@
 .price-daily-low { background:#16816b; }
 .price-daily-high { background:#bf5c32; }
 .workspace .compact-planning-legend { display:flex; flex-wrap:wrap; align-items:center; gap:4px 14px; padding:0 0 6px; }
-.compact-planning-legend .planning-group { display:inline-flex; align-items:center; gap:6px; font-size:11px; }
-.compact-planning-legend .planning-group[hidden] { display:none; }
+.compact-planning-legend .planning-series { display:inline-flex; align-items:center; gap:6px; max-width:100%; overflow-wrap:anywhere; font-size:11px; }
+.compact-planning-legend .planning-series[hidden] { display:none; }
 .workspace .compact-planning-legend details { border:0; padding:0; margin:0 0 0 auto; position:relative; }
 .compact-planning-legend summary { padding:6px 0; }
 .workspace .planning-series-options { position:absolute; inset-inline-end:0; z-index:4; width:min(28rem, calc(100vw - 4.5rem)); max-height:55vh; overflow:auto; padding:12px; background:white; border:1px solid var(--oep-line); border-radius:10px; box-shadow:0 4px 16px #1c334026; }
 .planning-series-options .chart-legend { display:grid; grid-template-columns:repeat(auto-fit,minmax(min(175px,100%),1fr)); gap:4px 12px; padding-top:6px; }
-.linked-price { min-width:0; border-top:1px solid var(--oep-line); padding-top:2px; }
+.linked-price { min-width:0; padding-top:3px; }
 .workspace .optimizer-scenario > .chart-wrap { height:270px; }
 @media(max-width:640px) { .workspace .optimizer-scenario > .chart-wrap { height:220px; } }
 .linked-price h4 { margin:0; font-size:16px; }
@@ -178,6 +178,7 @@
 .balance-warning { width:100%; color:#95500d; font-size:12px; }
 .chart-tooltip { position:fixed; z-index:30; pointer-events:none; max-width:min(500px,calc(100vw - 24px)); box-sizing:border-box; padding:12px 14px; border-radius:9px; background:#122d3af5; color:#fff; box-shadow:0 5px 20px #102b3333; font-size:12px; overflow-wrap:anywhere; }
 .chart-tooltip[hidden] { display:none; }
+.chart-tooltip-point:not(.chart-tooltip-day) { width:max-content; }
 .chart-tooltip-day { pointer-events:auto; max-height:calc(100dvh - 24px); overflow-y:auto; }
 .chart-tooltip table { width:100%; margin:0; border-collapse:collapse; }
 .chart-tooltip td { padding:3px 4px; border:0; color:inherit; font-size:12px; vertical-align:top; }

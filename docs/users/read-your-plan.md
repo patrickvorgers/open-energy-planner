@@ -121,11 +121,11 @@ The series together should balance around zero before hidden series and the
 
 Interval pop-ups show positive **Total production** and negative **Total consumption** values, independently summed from every original flow, including hidden or filtered legend items. Totals include grid, solar, battery, device and conversion flows rather than household demand alone. Missing flow evidence makes its total unavailable. Interval totals use kW and daily totals use kWh.
 
-Bars show mean kW for their covered quarter. Battery lines use the separate SoC percentage axis. Tap or hover for the exact interval. A partial quarter has its actual covered duration rather than a fabricated full-quarter energy amount.
+Bars show mean kW for their covered quarter. Battery lines use the separate SoC percentage axis. Tap or hover for the exact interval. When the tooltip cannot fit to the right of the pointer, it opens to the left if there is space there. A partial quarter has its actual covered duration rather than a fabricated full-quarter energy amount.
 
 Use **Next 6 hours**, **Next 24 hours** or **Full period**. The Optimizer and **Price inputs** charts share the time axis below **Price inputs**. Hover or tap either chart to highlight the same interval in both. The interval shows grid energy, the original import and export rates, import cost and export revenue before bonus. Moving the pointer to a different quarter dismisses a pinned readout for the previous quarter. With a chart focused, use the arrow keys to move by interval and Escape to dismiss the selection. Day labels follow the installation timezone.
 
-The balance legends group the main energy flows. Open **Chart series** on any Planning graph to toggle its individual series. On the balance charts this includes devices, conversion losses and state of charge. Hidden or missing data does not represent a measured zero.
+The legend names each visible series as it appears in the chart, including conversion losses, battery state of charge and separate expected and scheduled device bars. Open **Chart series** on any Planning graph to change which series are visible. Hidden or missing data does not represent a measured zero.
 
 Hover over a date above any of the three scenario charts to see **Expected energy totals**.
 **Total expected production** and **Total expected energy use** sum the scenario flows for the shown period.
@@ -150,10 +150,9 @@ intervals shown for today. Earlier measured energy is excluded.
 The Optimizer, Self-consumption and Without battery charts show each separated
 appliance in the consumption bars and legend. **Expected** is probable remaining
 use. **Scheduled** is a concrete acknowledged cycle or charging session. Both
-are estimates until measured. Each device has one legend entry. Its expected
+are estimates until measured. Each device has one control in **Chart series**. Its expected
 use has striped bars and its scheduled use has solid bars in the same color.
-Tap or hover over the balance to see both contributions separately. The legend
-switch hides or shows both contributions together. Devices with the same name
+Tap or hover over the balance to see both contributions separately. The device switch in **Chart series** hides or shows both contributions together. Devices with the same name
 remain separate devices.
 
 An appliance is omitted from both bars and legend when its combined expected

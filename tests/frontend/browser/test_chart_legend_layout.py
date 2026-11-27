@@ -58,6 +58,7 @@ def test_shared_legends_use_full_plot_width_and_keep_controls(app_page):
     bulk.focus()
     page.keyboard.press("Space")
     expect(legend.get_by_role("button", name="Select all", exact=True)).to_be_focused()
+    expect(legend.locator(".planning-series:visible")).to_have_count(0)
     page.keyboard.press("Space")
     expect(legend.get_by_role("checkbox", name="Grid import: AC", exact=True)).to_be_checked()
     assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
@@ -117,6 +118,12 @@ def _assert_linked_plot_layout_and_inspection(page, optimizer):
         return priceTop - stripBottom;
     }""")
     assert 0 < spacing <= 14
+    assert (
+        page.locator(".linked-price").evaluate(
+            "section => getComputedStyle(section).borderTopWidth"
+        )
+        == "0px"
+    )
     assert plan.evaluate("canvas => Chart.getChart(canvas).scales.x.options.display") is False
     assert price.evaluate("canvas => Chart.getChart(canvas).scales.x.options.display") is True
     scales = page.evaluate("""() => ["plan-chart", "price-chart"].map(id => {
@@ -124,9 +131,23 @@ def _assert_linked_plot_layout_and_inspection(page, optimizer):
         return [chart.scales.x.min, chart.scales.x.max, chart.chartArea.left, chart.chartArea.right];
     })""")
     assert scales[0] == pytest.approx(scales[1], abs=1)
+    labels = plan.evaluate("""canvas => {
+        const chart = Chart.getChart(canvas);
+        return chart.data.datasets.filter((_, index) => chart.isDatasetVisible(index))
+            .map(dataset => dataset.label);
+    }""")
+    key = page.locator("#plan-chart-legend .planning-series:visible")
+    expect(key).to_have_text(labels)
+    assert "Solar production: DC" in labels
+    assert "Battery charge: DC" in labels
+    assert "Battery discharge: DC" in labels
+    expect(
+        key.filter(has_text=f"{LONG_NAME}: Expected").locator(".series-swatch-expected")
+    ).to_have_count(1)
     directory = Path("results/ci/chart-legend-columns")
     directory.mkdir(parents=True, exist_ok=True)
     optimizer.screenshot(path=str(directory / f"planning-{page.viewport_size['width']}.png"))
+    _assert_interval_tooltip_placement(page, plan, directory)
     images = (
         "() => ['plan-chart', 'price-chart'].map(id => document.getElementById(id).toDataURL())"
     )
@@ -142,6 +163,43 @@ def _assert_linked_plot_layout_and_inspection(page, optimizer):
         price.tap()
         expect(page.locator("#price-chart-tooltip")).to_be_visible()
         expect(page.locator("#plan-evidence-panel")).to_have_js_property("open", False)
+
+
+def _assert_interval_tooltip_placement(page, plan, directory):
+    """Keep the rendered width at either edge and switch sides when there is room."""
+    plan.scroll_into_view_if_needed()
+    tooltip = page.locator("#plan-chart-tooltip")
+    for near_right in (False, True):
+        cursor = plan.evaluate(
+            """(canvas, nearRight) => {
+            const {left, right, top, bottom} = Chart.getChart(canvas).chartArea;
+            return {x: nearRight ? right - 4 : left + 4, y: (top + bottom) / 2};
+        }""",
+            near_right,
+        )
+        plan.hover(position=cursor)
+        expect(tooltip).to_be_visible()
+        bounds = tooltip.bounding_box()
+        natural_width = tooltip.evaluate("""tip => {
+            const original = tip.style.left;
+            tip.style.left = "12px";
+            const width = tip.getBoundingClientRect().width;
+            tip.style.left = original;
+            return width;
+        }""")
+        x = plan.bounding_box()["x"] + cursor["x"]
+        width = page.viewport_size["width"]
+        assert bounds["width"] == pytest.approx(natural_width, abs=1)
+        assert bounds["x"] >= 11
+        assert bounds["x"] + bounds["width"] <= width - 11
+        if width >= 1280 and near_right:
+            assert bounds["x"] + bounds["width"] < x
+        if width >= 1280 and not near_right:
+            assert bounds["x"] > x
+        if near_right:
+            page.screenshot(path=str(directory / f"tooltip-right-edge-{width}.png"))
+    page.mouse.move(0, 0)
+    expect(tooltip).to_be_hidden()
 
 
 @pytest.mark.parametrize("width", [1280, 390])
