@@ -637,6 +637,14 @@ def test_solar_without_known_work_withdraws_any_previous_deadline(tmp_path, monk
             assert runtime.retry_after is None
             assert "solar:training" not in events.schedules
             assert events.running == {}
+            assert (
+                events.health["solar"]["state"]
+                == {
+                    "unconfigured": "unknown",
+                    "no_sources": "available",
+                    "missing_weather": "unavailable",
+                }[state]
+            )
         finally:
             await lifecycle.aclose()
             await events.close()
