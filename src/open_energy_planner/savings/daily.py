@@ -109,6 +109,49 @@ def _include_matched_cash(paired, matched_components, accepted, frame, estimated
         paired["estimated_seconds"] += seconds if estimated else 0.0
 
 
+def _market_check(store, plans, start, end):
+    """Validate a frame's market, reading historical plan metadata only when needed."""
+    activations = None
+    markets = {}
+
+    def check(context, frame_start, contract):
+        """Reject unresolved or mismatched market identities before billing."""
+        nonlocal activations
+        market = context.get("market_identity")
+        if market is None:
+            if activations is None:
+                activations = [
+                    (start, store.context_plan(start)),
+                    *(
+                        (datetime.fromisoformat(item["activated_at"]), item["plan_id"])
+                        for item in store.activations(start, end)
+                        if item["plan_id"] and datetime.fromisoformat(item["activated_at"]) > start
+                    ),
+                ]
+            identity = next(
+                (plan_id for instant, plan_id in reversed(activations) if instant <= frame_start),
+                None,
+            )
+            if identity not in markets:
+                original = plans.get_context(identity) if identity else None
+                markets[identity] = (
+                    {key: original[key] for key in ("currency", "market_area") if key in original}
+                    if original
+                    else {}
+                )
+            market = markets[identity]
+
+        if not all(key in market for key in ("currency", "market_area")):
+            raise PendingSettlement("Historical market identity is unresolved")
+        if any(
+            market.get(key, getattr(contract, key)) != getattr(contract, key)
+            for key in ("currency", "market_area")
+        ):
+            raise PendingSettlement("Historical market identity changed")
+
+    return check
+
+
 class DailySavings:
     """Serialize one completed calendar day per worker round using the existing settlement lock."""
 
@@ -265,8 +308,7 @@ class DailySavings:
             for key in ("grid_import", "grid_export", "household", "solar_ac")
         }
         price_versions = set()
-        historical_markets = {}
-        historical_activations = None
+        check_market = _market_check(self.store, self.runtime.plans, start, end)
         while cursor < end:
             rows = self.store.frames(cursor, end=end)
             if not rows:
@@ -283,48 +325,7 @@ class DailySavings:
                 try:
                     bindings = context["bindings"]
                     add_energy(energy, frame, bindings)
-                    market_identity = context.get("market_identity")
-                    if market_identity is None:
-                        # Older frames retain their market in compact plan metadata, never in simulated physics.
-                        if historical_activations is None:
-                            historical_activations = [
-                                (start, self.store.context_plan(start)),
-                                *(
-                                    (datetime.fromisoformat(item["activated_at"]), item["plan_id"])
-                                    for item in self.store.activations(start, end)
-                                    if item["plan_id"]
-                                    and datetime.fromisoformat(item["activated_at"]) > start
-                                ),
-                            ]
-                        identity = next(
-                            (
-                                plan_id
-                                for instant, plan_id in reversed(historical_activations)
-                                if instant <= frame.start
-                            ),
-                            None,
-                        )
-                        if identity not in historical_markets:
-                            original = (
-                                self.runtime.plans.get_context(identity) if identity else None
-                            )
-                            historical_markets[identity] = (
-                                {
-                                    key: original[key]
-                                    for key in ("currency", "market_area")
-                                    if key in original
-                                }
-                                if original
-                                else {}
-                            )
-                        market_identity = historical_markets[identity]
-                    if not all(key in market_identity for key in ("currency", "market_area")):
-                        raise PendingSettlement("Historical market identity is unresolved")
-                    if any(
-                        market_identity.get(key, getattr(contract, key)) != getattr(contract, key)
-                        for key in ("currency", "market_area")
-                    ):
-                        raise PendingSettlement("Historical market identity changed")
+                    check_market(context, frame.start, contract)
                     self._bill_frame(
                         contract,
                         frame,

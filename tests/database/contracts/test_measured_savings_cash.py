@@ -185,9 +185,18 @@ def test_legacy_report_is_retained_without_fabricating_new_policy_totals(settlem
     assert result["cash"]["coverage_seconds"] == 0
 
 
-def test_frozen_market_identity_never_bills_an_old_frame_under_another_currency(settlement):
+def test_frozen_market_identity_never_bills_an_old_frame_under_another_currency(
+    settlement, monkeypatch
+):
     """Two retained EUR quarters cannot become USD costs after current contract identity changes."""
-    runtime, store, _documents, engine, _plans = settlement
+    runtime, store, _documents, engine, plans = settlement
+
+    def unexpected_lookup(*_args):
+        """Fail immediately if the frozen frame causes any legacy lookup."""
+        pytest.fail("A frame with a frozen market must not look up historical markets")
+
+    monkeypatch.setattr(store, "context_plan", unexpected_lookup)
+    monkeypatch.setattr(plans, "get_context", unexpected_lookup)
     with engine.begin() as connection:
         connection.execute(SETTLEMENT_FRAMES.delete())
     store.put_frames(
