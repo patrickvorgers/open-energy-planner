@@ -22,6 +22,7 @@ def test_async_counter_anchors_preserve_real_twenty_second_peak_and_energy():
     assert cycle["profile"].power_w == (1000, 3000, 1000)
     assert cycle["profile"].energy_kwh == pytest.approx(23 / 45)
     assert result["status"] == "complete"
+    assert result["runs"] == [cycle]
     assert body["power_states"][2]["state"] == "3000"
 
 
@@ -47,6 +48,8 @@ def test_unprovable_energy_keeps_original_power_curve_without_training(fault):
     result = analyze(body)
     assert not result["cycles"]
     assert result["status"] == "unverified"
+    [unverified] = result["runs"]
+    assert unverified["profile"] is None
     assert max(point["power_w"] or 0 for point in result["power_curve"]) == 3000
 
 
