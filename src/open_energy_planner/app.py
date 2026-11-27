@@ -250,6 +250,126 @@ def _register_plan_archive(app, repository):
     app.router.add_get("/v1/plans/{plan_id}", archived_plan)
 
 
+def _register_demand_worker(app, demand, lock, events, build_demand, refresh_model_preferences):
+    """Register background demand work with the app's model preferences and shared lock."""
+
+    async def demand_lifecycle(_app):
+        """Fit and archive in a background thread. Never block HTTP/HA on model work or provider fetching."""
+        forecast_logger = BackgroundLog(_LOGGER, "Household demand forecast update")
+        from .activities.events import Health, Outcome
+        from .demand.basis import forecast_usable
+        from .installation.forecast_policy import next_update
+
+        events.availability("demand", Health.UNKNOWN, "Waiting for a current consumption forecast.")
+
+        async def install_forecast(job):
+            """Install a still-current forecast and report its actual usability."""
+            async with events.attempt(
+                "demand",
+                "training",
+                "Update consumption forecast",
+                failure="The forecast update failed. Retained forecasts keep their original validity. Check Forecast quality before relying on learned models.",
+                context={"label": "Household consumption"},
+            ) as activity:
+                result = await build_demand(job)
+                async with lock:
+                    installed = demand.install(result, datetime.now(UTC))
+                    usable = installed and forecast_usable(
+                        demand.configuration, demand.forecast, datetime.now(UTC)
+                    )
+                await events.finish(
+                    activity,
+                    Outcome.COMPLETED
+                    if usable
+                    else Outcome.FAILED
+                    if installed
+                    else Outcome.SKIPPED,
+                    "A new consumption forecast is available."
+                    if usable
+                    else "No new usable forecast was installed. Inputs may have changed or training evidence may be insufficient.",
+                    usable=usable,
+                )
+                events.availability(
+                    "demand",
+                    Health.AVAILABLE if usable else Health.DEGRADED,
+                    "Current consumption forecast installed."
+                    if usable
+                    else "Check current consumption forecast validity.",
+                )
+                if usable:
+                    forecast_logger.success(
+                        f"A new consumption forecast is available. Model status: {demand.model_status.replace('_', ' ')}."
+                    )
+
+        async def update():
+            """Capture consistent input versions and install only still-current archived results."""
+            while True:
+                job = None
+                try:
+                    async with lock:
+                        if demand.store.current is not None and demand.store.issue:
+                            cancellation = await complete_write(
+                                demand.restore_committed_configuration
+                            )
+                            if cancellation is not None:
+                                raise cancellation
+                        refresh_model_preferences()
+                        job = demand.job(datetime.now(UTC))
+                    if job is not None:
+                        await install_forecast(job)
+                except Exception:
+                    async with lock:
+                        failure_recorded = job is not None and demand.failed(
+                            job[0], datetime.now(UTC)
+                        )
+                        retry_seconds = (
+                            (demand.retry_after - datetime.now(UTC)).total_seconds()
+                            if failure_recorded
+                            and demand.retry_after
+                            and demand.retry_after > datetime.now(UTC)
+                            else FORECAST_WORKER_POLL_SECONDS
+                        )
+                    forecast_logger.exception(
+                        "The previous forecast keeps its original validity. Check storage and forecast status if this persists.",
+                        retry_seconds=max(FORECAST_WORKER_POLL_SECONDS, round(retry_seconds)),
+                    )
+                current = datetime.now(UTC)
+                usable = not demand.store.issue and forecast_usable(
+                    demand.configuration, demand.forecast, current
+                )
+                events.availability(
+                    "demand",
+                    Health.AVAILABLE
+                    if usable
+                    else Health.UNAVAILABLE
+                    if demand.configuration
+                    else Health.UNKNOWN,
+                    "A current consumption forecast is available."
+                    if usable
+                    else "Waiting for a usable consumption forecast.",
+                )
+                events.scheduled(
+                    "demand",
+                    "training",
+                    "Update consumption forecast",
+                    next_update(current, demand.retry_after)
+                    if demand.configuration and not demand.store.issue
+                    else None,
+                    context={"label": "Household consumption"},
+                )
+                await asyncio.sleep(FORECAST_WORKER_POLL_SECONDS)
+
+        task = asyncio.create_task(update())
+        try:
+            yield
+        finally:
+            task.cancel()
+            with suppress(asyncio.CancelledError):
+                await task
+
+    app.cleanup_ctx.append(demand_lifecycle)
+
+
 def _register_weather_inputs(app, live, lock, factory, store, demand, solar, oldest_demand_history):
     """Project shared weather into its independent solar and demand consumers."""
 
@@ -806,117 +926,7 @@ def create_app(
         lambda request: snapshot(request),
     )
 
-    async def demand_lifecycle(_app):
-        """Fit and archive in a background thread. Never block HTTP/HA on model work or provider fetching."""
-        forecast_logger = BackgroundLog(_LOGGER, "Household demand forecast update")
-        from .activities.events import Health, Outcome
-        from .demand.basis import forecast_usable
-        from .installation.forecast_policy import next_update
-
-        events.availability("demand", Health.UNKNOWN, "Waiting for a current consumption forecast.")
-
-        async def update():
-            """Capture consistent input versions and install only still-current archived results."""
-            while True:
-                job = None
-                try:
-                    async with lock:
-                        if demand.store.current is not None and demand.store.issue:
-                            cancellation = await complete_write(
-                                demand.restore_committed_configuration
-                            )
-                            if cancellation is not None:
-                                raise cancellation
-                        refresh_model_preferences()
-                        job = demand.job(datetime.now(UTC))
-                    if job is not None:
-                        async with events.attempt(
-                            "demand",
-                            "training",
-                            "Update consumption forecast",
-                            failure="The forecast update failed. Retained forecasts keep their original validity. Check Forecast quality before relying on learned models.",
-                            context={"label": "Household consumption"},
-                        ) as activity:
-                            result = await build_demand(job)
-                            async with lock:
-                                installed = demand.install(result, datetime.now(UTC))
-                                usable = installed and forecast_usable(
-                                    demand.configuration, demand.forecast, datetime.now(UTC)
-                                )
-                            await events.finish(
-                                activity,
-                                Outcome.COMPLETED
-                                if usable
-                                else Outcome.FAILED
-                                if installed
-                                else Outcome.SKIPPED,
-                                "A new consumption forecast is available."
-                                if usable
-                                else "No new usable forecast was installed. Inputs may have changed or training evidence may be insufficient.",
-                                usable=usable,
-                            )
-                            events.availability(
-                                "demand",
-                                Health.AVAILABLE if usable else Health.DEGRADED,
-                                "Current consumption forecast installed."
-                                if usable
-                                else "Check current consumption forecast validity.",
-                            )
-                            if usable:
-                                forecast_logger.success(
-                                    f"A new consumption forecast is available. Model status: {demand.model_status.replace('_', ' ')}."
-                                )
-                except Exception:
-                    async with lock:
-                        failure_recorded = job is not None and demand.failed(
-                            job[0], datetime.now(UTC)
-                        )
-                        retry_seconds = (
-                            (demand.retry_after - datetime.now(UTC)).total_seconds()
-                            if failure_recorded
-                            and demand.retry_after
-                            and demand.retry_after > datetime.now(UTC)
-                            else FORECAST_WORKER_POLL_SECONDS
-                        )
-                    forecast_logger.exception(
-                        "The previous forecast keeps its original validity. Check storage and forecast status if this persists.",
-                        retry_seconds=max(FORECAST_WORKER_POLL_SECONDS, round(retry_seconds)),
-                    )
-                current = datetime.now(UTC)
-                usable = not demand.store.issue and forecast_usable(
-                    demand.configuration, demand.forecast, current
-                )
-                events.availability(
-                    "demand",
-                    Health.AVAILABLE
-                    if usable
-                    else Health.UNAVAILABLE
-                    if demand.configuration
-                    else Health.UNKNOWN,
-                    "A current consumption forecast is available."
-                    if usable
-                    else "Waiting for a usable consumption forecast.",
-                )
-                events.scheduled(
-                    "demand",
-                    "training",
-                    "Update consumption forecast",
-                    next_update(current, demand.retry_after)
-                    if demand.configuration and not demand.store.issue
-                    else None,
-                    context={"label": "Household consumption"},
-                )
-                await asyncio.sleep(FORECAST_WORKER_POLL_SECONDS)
-
-        task = asyncio.create_task(update())
-        try:
-            yield
-        finally:
-            task.cancel()
-            with suppress(asyncio.CancelledError):
-                await task
-
-    app.cleanup_ctx.append(demand_lifecycle)
+    _register_demand_worker(app, demand, lock, events, build_demand, lambda: refresh_preferences())
 
     def oldest_demand_history():
         """Extend temperature coverage to the oldest loaded household or consumer endpoint."""
@@ -1210,7 +1220,7 @@ def create_app(
     )
     from .forecast_selection.api import register as register_model_selection
 
-    refresh_model_preferences = register_model_selection(
+    refresh_preferences = register_model_selection(
         app,
         repository,
         savings_runtime.store,

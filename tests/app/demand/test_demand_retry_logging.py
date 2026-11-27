@@ -11,6 +11,7 @@ import pytest
 from open_energy_planner import app as app_module
 from open_energy_planner.demand.calculation.model import DemandConfiguration, EnergyTerm
 from open_energy_planner.demand.runtime import DemandRuntime
+from open_energy_planner.forecast_selection import api as selection_api
 from open_energy_planner.installation.location import SiteLocation
 from open_energy_planner.weather import service as weather_service
 from open_energy_planner.weather.model import TemperatureHour
@@ -167,8 +168,20 @@ def test_demand_worker_reports_only_current_generation_backoff(
     its immutable job runs, or capture itself fails, the runtime retains its old
     deadline but the worker checks again at the ordinary five-second poll.
     """
-    runtimes, jobs = [], []
+    runtimes, jobs, worker_steps = [], [], []
     original_job = DemandRuntime.job
+    register_selection = selection_api.register
+
+    def observe_registered_preferences(*arguments, **options):
+        """Return the real callback from composition, recording when the worker uses it."""
+        refresh_preferences = register_selection(*arguments, **options)
+
+        def refresh():
+            """Record each refresh before delegating to the normal preference service."""
+            worker_steps.append("preferences")
+            return refresh_preferences()
+
+        return refresh
 
     class Clock(datetime):
         """Keep generation identity and retry arithmetic independent of wall-clock test duration."""
@@ -193,6 +206,7 @@ def test_demand_worker_reports_only_current_generation_backoff(
 
     def capture_job(runtime, now):
         """Fail before a job exists in the capture case, otherwise capture the real immutable inputs."""
+        worker_steps.append("capture")
         if failure == "before_capture":
             raise OSError("Controlled demand capture failure")
         return original_job(runtime, now)
@@ -206,6 +220,7 @@ def test_demand_worker_reports_only_current_generation_backoff(
 
     monkeypatch.setattr(app_module, "datetime", Clock)
     monkeypatch.setattr(app_module, "DemandRuntime", runtime_factory)
+    monkeypatch.setattr(selection_api, "register", observe_registered_preferences)
     monkeypatch.setattr(DemandRuntime, "job", capture_job)
     monkeypatch.setattr(DemandRuntime, "build", fail_build)
 
@@ -248,6 +263,7 @@ def test_demand_worker_reports_only_current_generation_backoff(
         if message.startswith("Household demand forecast update failed")
     ]
     assert len(failures) == 1
+    assert worker_steps[:2] == ["preferences", "capture"]
     runtime = runtimes[0]
     if failure == "current":
         assert "Retrying in 5 minutes." in failures[0]
