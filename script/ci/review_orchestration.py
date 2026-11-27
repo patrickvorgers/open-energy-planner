@@ -857,6 +857,38 @@ def start_request(repository, number, command, client, now, publisher=None):
     return state
 
 
+def _recover_command_receipt(state, comments):
+    """Accept one authenticated publication receipt and revalidate special fallback evidence."""
+    matches = [
+        row
+        for row in comments
+        if (
+            (github_user(row.get("user")) and row["user"].get("id") == state["publisher_id"])
+            if "publisher_id" in state
+            else (
+                is_bot(row, GITHUB_ACTIONS_BOT_LOGIN)
+                and row["user"].get("id") == GITHUB_ACTIONS_BOT_ID
+            )
+        )
+        and command_marker(state) in row["body"].splitlines()
+    ]
+    if len(matches) != 1:
+        return None
+    published = matches[0]
+    if "greptile_credit" not in state:
+        return published
+    try:
+        require_credit_evidence(state["greptile_credit"], comments, published_id=published["id"])
+        if published["id"] <= state["greptile_credit"][0] or published["body"] != (
+            f"@codex review\n<!-- oep-codex-head:{state['head']} -->\n{command_marker(state)}"
+        ):
+            raise VerificationError("Codex outbox publication changed")
+        require_recovery_feedback(state, comments, published)
+    except VerificationError:
+        return None
+    return published
+
+
 def advance(repository, number, state, comments, client, now, publisher=None):
     """Resume one request using fresh provider metadata, without interpreting findings as failures."""
     if state["phase"] in TERMINAL:
@@ -904,36 +936,10 @@ def advance(repository, number, state, comments, client, now, publisher=None):
         save_state(state, subject, client)
         return
     if state["phase"] == "sending":
-        matches = [
-            row
-            for row in comments
-            if (
-                (github_user(row.get("user")) and row["user"].get("id") == state["publisher_id"])
-                if "publisher_id" in state
-                else (
-                    is_bot(row, GITHUB_ACTIONS_BOT_LOGIN)
-                    and row["user"].get("id") == GITHUB_ACTIONS_BOT_ID
-                )
-            )
-            and command_marker(state) in row["body"].splitlines()
-        ]
-        if len(matches) != 1:
+        published = _recover_command_receipt(state, comments)
+        if published is None:
             return block_request(state, subject, client, category="sending")
-        if "greptile_credit" in state:
-            published = matches[0]
-            try:
-                require_credit_evidence(
-                    state["greptile_credit"], comments, published_id=published["id"]
-                )
-                if published["id"] <= state["greptile_credit"][0] or published["body"] != (
-                    f"@codex review\n<!-- oep-codex-head:{state['head']} -->\n"
-                    f"{command_marker(state)}"
-                ):
-                    raise VerificationError("Codex outbox publication changed")
-                require_recovery_feedback(state, comments, published)
-            except VerificationError:
-                return block_request(state, subject, client, category="sending")
-        record_publication(state, matches[0]["id"], matches[0]["created_at"], subject, client)
+        record_publication(state, published["id"], published["created_at"], subject, client)
     if state["phase"] == "coderabbit" and now - instant(state["sent"]) > REVIEW_TIMEOUT:
         return block_request(state, subject, client, category="coderabbit")
     fresh = [

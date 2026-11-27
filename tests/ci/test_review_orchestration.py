@@ -1848,6 +1848,24 @@ def test_outbox_recovery_rejects_a_marker_from_another_user():
     assert client.state()["phase"] == "blocked"
 
 
+def test_outbox_recovery_blocks_two_receipts_from_the_same_publisher():
+    """Two authentic receipts for one outbox marker cannot establish a unique publication."""
+    client = GitHubEvidence()
+    client.lose_response = True
+    with pytest.raises(VerificationError):
+        client.run(explicit=True)
+    command = next(row for row in client.comments if row["body"].startswith("@coderabbitai"))
+    duplicate = client.comment(command["body"], login=command["user"]["login"], kind="User")
+    duplicate["user"] = deepcopy(command["user"])
+    before = client.provider_commands()
+
+    client.lose_response = False
+    assert review.process_pr(REPOSITORY, 12, client, NOW, publisher=client.publisher) is False
+    assert client.state()["phase"] == "blocked"
+    assert before == ["@coderabbitai rate limit", "@coderabbitai rate limit"]
+    assert client.provider_commands() == before
+
+
 def test_missing_secret_at_real_entrypoint_records_blocked_without_using_bot_token(
     tmp_path, monkeypatch
 ):
