@@ -336,6 +336,49 @@ def _assessment_inputs(
     return bounded_history, relevant_runs, identity
 
 
+def _measured_production(source, inverter, bounded_history, now):
+    """Keep complete, physically valid meter deltas from before the assessment clock."""
+    from open_energy_planner.solar.boosting import AC_METER_HEADROOM, MAX_DC_CAPACITY_MULTIPLE
+
+    max_power_kw = (
+        inverter.ac_limit_w / 1000
+        if source.measurement_boundary == "ac"
+        else source.capacity_w / 1000 * MAX_DC_CAPACITY_MULTIPLE
+    )
+    actual = {}
+    for previous, following in pairwise(bounded_history):
+        value = following.total_kwh - previous.total_kwh
+        if (
+            following.start - previous.start == HOUR
+            and 0 <= value <= max_power_kw * AC_METER_HEADROOM
+            and following.start + HOUR <= now
+        ):
+            actual[following.start] = value
+    return actual
+
+
+def _archive_historical_fit(store, result, origin, relevant_runs, feedback, siblings):
+    """Archive a fit and the original inputs needed to explain its evaluation."""
+    from open_energy_planner.solar.wire import document
+
+    metadata = store.archive_model(result.challenger)
+    training_record = {
+        "model": metadata,
+        "summary": document(result.summary),
+        "cutoff": origin.isoformat(),
+        "run_references": [row.version for row in relevant_runs],
+        "curtailment_feedback_references": {
+            entity: archive_feedback(store, value)
+            for entity, value in (feedback or {}).items()
+            if value is not None
+            and any(other.curtailment_entity_id == entity for other in siblings)
+        },
+    }
+    reference = version(training_record)
+    store.archive("historical-fit", reference, training_record)
+    return reference
+
+
 def assess_forecasts(
     configuration,
     source,
@@ -350,11 +393,7 @@ def assess_forecasts(
     feedback=None,
 ):
     """Compare four predetermined runs at both origins, retaining original fits and actual clocks."""
-    from open_energy_planner.solar.boosting import (
-        AC_METER_HEADROOM,
-        MAX_DC_CAPACITY_MULTIPLE,
-        fit_boosted_model,
-    )
+    from open_energy_planner.solar.boosting import fit_boosted_model
     from open_energy_planner.solar.calculation.projection import learned_forecast
     from open_energy_planner.solar.wire import document
 
@@ -381,20 +420,7 @@ def assess_forecasts(
     siblings = tuple(
         other for other in configuration.sources if other.inverter_id == source.inverter_id
     )
-    max_power_kw = (
-        inverter.ac_limit_w / 1000
-        if source.measurement_boundary == "ac"
-        else source.capacity_w / 1000 * MAX_DC_CAPACITY_MULTIPLE
-    )
-    actual = {}
-    for previous, following in pairwise(bounded_history):
-        value = following.total_kwh - previous.total_kwh
-        if (
-            following.start - previous.start == HOUR
-            and 0 <= value <= max_power_kw * AC_METER_HEADROOM
-            and following.start + HOUR <= now
-        ):
-            actual[following.start] = value
+    actual = _measured_production(source, inverter, bounded_history, now)
     meter_hours = {
         other.entity_id: production_hours(
             history
@@ -516,25 +542,9 @@ def assess_forecasts(
                 fsum(abs(values[instant] - actual[instant]) for instant in instants) / len(instants)
                 for values in (baseline, raw_values, service_values)
             ]
-            metadata = store.archive_model(result.challenger)
-            training_record = {
-                "model": metadata,
-                "summary": document(result.summary),
-                "cutoff": origin.isoformat(),
-                "run_references": [row.version for row in relevant_runs],
-                "curtailment_feedback_references": {
-                    entity: archive_feedback(store, value)
-                    for entity, value in (feedback or {}).items()
-                    if value is not None
-                    and any(
-                        other.curtailment_entity_id == entity
-                        and other.inverter_id == source.inverter_id
-                        for other in configuration.sources
-                    )
-                },
-            }
-            reference = version(training_record)
-            store.archive("historical-fit", reference, training_record)
+            reference = _archive_historical_fit(
+                store, result, origin, relevant_runs, feedback, siblings
+            )
             windows.append(
                 BacktestWindow(
                     initialized,
