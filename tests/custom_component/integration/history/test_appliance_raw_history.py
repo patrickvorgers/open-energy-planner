@@ -463,22 +463,31 @@ def test_native_receiver_applies_profile_specific_phase_limits(target, count, ir
                 consumer_forecasts={"options": [{"entity_id": ENTITY}]},
                 appliances={},
             )
+            profile_issue = (
+                "Invalid average cycle profile"
+                if target == "learned"
+                else "Invalid accepted cycle profile"
+            )
             if accepted:
                 receive(coordinator, {"devices": [row]})
                 assert coordinator.appliances["devices"] == [row]
                 assert profile_energy(value) == pytest.approx(0.5 if count == 145 else 128 / 225)
                 previous = deepcopy(coordinator.appliances)
-                for bad in (-1, float("nan"), True):
+                for bad, issue in (
+                    (-1, profile_issue),
+                    (float("nan"), None),
+                    (True, profile_issue),
+                ):
                     invalid = deepcopy(row)
                     shape = (
                         invalid["profile"] if target == "learned" else invalid["task"]["profile"]
                     )
                     shape["power_w"][0] = bad
-                    with pytest.raises(ValueError):
+                    with pytest.raises(ValueError, match=issue):
                         receive(coordinator, {"devices": [invalid]})
                     assert coordinator.appliances == previous
             else:
-                with pytest.raises(ValueError):
+                with pytest.raises(ValueError, match=profile_issue):
                     receive(coordinator, {"devices": [row]})
                 assert coordinator.appliances == {}
 
