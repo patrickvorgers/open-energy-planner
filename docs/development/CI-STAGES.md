@@ -19,7 +19,8 @@ Local checks, review, candidate CI, merge and main reuse establish different evi
 
 Each PR opening, new revision or reopening runs
 `Quick checks`. It runs the
-centrally pinned Ruff lint and formatting checks, followed by CI policy tests.
+centrally pinned Ruff lint and formatting checks, CI policy tests and the
+function budgets for the proposed change.
 It installs the central development dependencies, Ruff and pytest, without
 building Docker images or installing app and HA dependencies. Trusted signature
 verification remains a separate automatic check.
@@ -70,6 +71,51 @@ start another batch. A full PR review is a deliberate reassessment of the comple
 PR diff, not the default after each correction. Latest-head review and disposition
 of every finding remain mandatory. Once candidate CI starts, keep that candidate
 frozen unless a new finding or failure requires a correction.
+
+## Build criteria for maintainable functions
+
+Recent RepoWise refactors repeatedly found request admission, data gathering,
+calculation, publication and rendering combined in the same function. During
+implementation and review, use these criteria.
+
+1. Give each function one responsibility in its existing owner. Keep composition
+   in the coordinator and extract a calculation, validation or render section
+   when it has its own inputs and outcome. Preserve transaction boundaries,
+   validation order, error meanings and public contracts.
+2. Make the main path easy to follow. Validate inputs at the boundary and return
+   early for missing, stale or invalid evidence where that preserves behaviour.
+   Extract nested decision groups that own a distinct operation. Keep related
+   checks together and use names that describe their outcome.
+3. Keep new functions within cyclomatic complexity **20** and **80 lines of code**
+   as measured by the pinned Lizard analyzer. If an existing function already
+   exceeds a budget, reduce the metric or keep it from growing. Treat functions
+   approaching either limit as a cue to review responsibility and nesting.
+4. Add or extend a test through the normal entry point. Assert the changed result
+   and the relevant invalid, unavailable or stale-input outcomes. Use real
+   browser interaction for JavaScript behaviour. When RepoWise estimates that
+   tests miss a function, inspect the test path and use runtime coverage if reach
+   remains uncertain. Execution coverage establishes reach. Assertions establish
+   behaviour.
+
+After installing the central development dependencies, run the same check locally
+against the updated target branch before pushing.
+
+```sh
+python -m script.ci.check_code_health --base origin/main
+```
+
+Quick checks compares the proposed merge checkout with the actual PR base. The
+local command also includes unstaged and untracked source. It examines authored
+Python and JavaScript in `src/`, `custom_components/`, `script/`,
+`test_environment/`, `ha_app/` and `docs/site/`. The vendored Chart.js asset is
+excluded. Tests retain their behavioural and Ruff checks.
+
+The check compares function measurements with their Git-base values. It fails
+when a new function exceeds either budget, or when an existing function increases
+a measurement above its budget. It uses the old path for a Git-detected rename
+and treats a changed function as new when its previous counterpart is ambiguous.
+Lizard's counts are independent of RepoWise's. Responsibility, nesting,
+compatibility and test assertions remain review criteria.
 
 ## Repowise CI reports
 
