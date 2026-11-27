@@ -34,7 +34,9 @@ def capture(page, name, selector=None):
     page.evaluate("window.scrollTo(0, 0)")
     path = str(destination / f"{name}-{page.viewport_size['width']}.png")
     if selector:
-        page.screenshot(path=path, full_page=True, clip=page.locator(selector).bounding_box())
+        page.locator(selector).screenshot(
+            path=path, style=".settings-mobilebar { position: static; }"
+        )
     else:
         page.screenshot(path=path, full_page=True)
 

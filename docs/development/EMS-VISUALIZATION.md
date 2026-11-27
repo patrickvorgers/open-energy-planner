@@ -259,8 +259,11 @@ Chart.js 4.5.1 is bundled locally, with its MIT notice, without CDN requests or
 an additional frontend framework. Hover/tap gives timestamp and values. Native
 HTML tooltips use separate label, right-aligned tabular-number and unit columns.
 Long labels wrap without shifting individual values. All source text is rendered
-as text, and the popup remains inside the viewport.
-checkbox legends work with a keyboard. The 6-hour, 24-hour and full-horizon
+as text. The interval popup keeps its content width within the viewport limit.
+It opens to the right of the interval when there is room, flips to the left
+when necessary, and stays within the viewport when neither side has room.
+The visible legend uses the actual dataset names and swatches. The separate
+**Chart series** checkboxes work with a keyboard. The 6-hour, 24-hour and full-horizon
 controls apply to every planning graph. A keyboard/touch interval inspector
 explains commands, solar permission, prices and market-rate provenance at that
 instant. Battery series are keyed by immutable device ID, never by the display name.
