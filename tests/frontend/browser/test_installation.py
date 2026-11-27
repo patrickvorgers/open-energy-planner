@@ -1092,6 +1092,12 @@ def test_missing_energy_capacity_directs_user_to_home_assistant(app_page):
     expect(page.locator("#status")).to_contain_text("capacity kwh")
     expect(page.get_by_role("button", name="Continue", exact=True)).to_be_disabled()
     assert read_settings(page, url)["installation"] is None
+    discover(page, url, devices=True)
+    page.get_by_role("button", name="Refresh Home Assistant data").click()
+    expect(page.locator("#status")).to_contain_text("Refreshing Home Assistant configuration")
+    discover(page, url, devices=True)
+    expect(page.get_by_role("button", name="Continue", exact=True)).to_be_enabled(timeout=10000)
+    assert read_settings(page, url)["installation"] is None
 
 
 def test_installation_failed_save_retains_draft_and_retries(app_page):
