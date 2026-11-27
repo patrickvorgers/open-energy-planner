@@ -165,6 +165,23 @@ def test_duplicate_interval_rejects_history_before_reporting_activity():
     assert activity == {}
 
 
+@pytest.mark.parametrize("delay_minutes,expected_running", [(5, True), (10, False)])
+def test_live_cycle_activity_expires_after_one_fine_interval(delay_minutes, expected_running):
+    """Current activity is valid for one fine interval and never becomes a completed cycle."""
+    from tests.app.appliance.support import running_readings
+
+    activity = {}
+    assert (
+        detect_cycles(running_readings(), NOW + timedelta(minutes=delay_minutes), activity=activity)
+        == []
+    )
+    assert activity["quiet"] is False
+    assert ("running" in activity) is expected_running
+    if expected_running:
+        assert activity["running"]["observed_until"] == NOW.isoformat()
+        assert activity["running"]["energy_kwh"] == pytest.approx(1 / 3)
+
+
 def test_checkpoint_restart_overlap_and_empty_hours_never_duplicate_coverage(service):
     """A boundary-crossing run is admitted once after restart. Empty core hours count as examined, not usable."""
     start = NOW - timedelta(days=900)

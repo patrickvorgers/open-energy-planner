@@ -180,6 +180,42 @@ def _checked_history(rows, now, sample_seconds):
     return checked
 
 
+def _completed_cycle(checked, start_index, last_active, step):
+    """Keep the exact bounding counter and every measured point of a complete cycle."""
+    start = checked[start_index][0]
+    end = checked[last_active][0] + step
+    if (
+        not timedelta(seconds=PROFILE_STEP_SECONDS)
+        <= end - start
+        <= timedelta(hours=MAX_CYCLE_HOURS)
+    ):
+        return None
+    points = [
+        {"at": (stamp + step).isoformat(), "kwh": value}
+        for stamp, _, value in checked[start_index - 1 : last_active + 1]
+    ]
+    return start, end, points
+
+
+def _record_live_activity(activity, checked, now, step, start_index, active, quiet):
+    """Only describe a current running or quiet appliance from recent fine samples."""
+    observed_until = checked[-1][0] + step
+    recent = now - observed_until <= step
+    if (
+        start_index is not None
+        and active >= MIN_ACTIVE_SAMPLES
+        and recent
+        and observed_until - checked[start_index][0] <= timedelta(hours=MAX_CYCLE_HOURS)
+    ):
+        activity["running"] = {
+            "started_at": checked[start_index][0].isoformat(),
+            "observed_until": observed_until.isoformat(),
+            "energy_kwh": checked[-1][2] - checked[start_index - 1][2],
+            "status": "observed",
+        }
+    activity["quiet"] = quiet >= QUIET_SAMPLES and start_index is None and recent
+
+
 def detect_cycles(rows, now, *, sample_seconds=SAMPLE_SECONDS, activity=None):
     """Return complete ranges and cumulative kWh points, never fill missing samples.
 
@@ -238,41 +274,12 @@ def detect_cycles(rows, now, *, sample_seconds=SAMPLE_SECONDS, activity=None):
             quiet += 1
             if start_index is not None and quiet >= required_quiet:
                 if active >= required_active:
-                    start = checked[start_index][0]
-                    end = checked[last_active][0] + step
-                    if (
-                        timedelta(seconds=PROFILE_STEP_SECONDS)
-                        <= end - start
-                        <= timedelta(hours=MAX_CYCLE_HOURS)
-                    ):
-                        points = [
-                            {
-                                "at": (stamp + step).isoformat(),
-                                "kwh": value,
-                            }
-                            for stamp, _, value in checked[start_index - 1 : last_active + 1]
-                        ]
-                        cycles.append((start, end, points))
+                    completed = _completed_cycle(checked, start_index, last_active, step)
+                    if completed is not None:
+                        cycles.append(completed)
                 start_index, active, last_active = None, 0, None
-    if (
-        activity is not None
-        and sample_seconds == SAMPLE_SECONDS
-        and start_index is not None
-        and active >= MIN_ACTIVE_SAMPLES
-        and checked
-        and now - (checked[-1][0] + step) <= step
-        and checked[-1][0] + step - checked[start_index][0] <= timedelta(hours=MAX_CYCLE_HOURS)
-    ):
-        activity["running"] = {
-            "started_at": checked[start_index][0].isoformat(),
-            "observed_until": (checked[-1][0] + step).isoformat(),
-            "energy_kwh": checked[-1][2] - checked[start_index - 1][2],
-            "status": "observed",
-        }
     if activity is not None and checked and sample_seconds == SAMPLE_SECONDS:
-        activity["quiet"] = (
-            quiet >= QUIET_SAMPLES and start_index is None and now - (checked[-1][0] + step) <= step
-        )
+        _record_live_activity(activity, checked, now, step, start_index, active, quiet)
     return cycles
 
 
