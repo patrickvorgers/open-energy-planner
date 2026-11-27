@@ -944,7 +944,24 @@ class ApplianceService:
     def _admit_phase_windows(
         self, intervals, task_windows, origins_by_entity, entities, excluded_entities
     ):
-        """Apply the refinement budget in task order and retain separately modeled meters."""
+        """Apply the phase refinement budget in task order.
+
+        Args:
+            intervals: Original planning intervals that provide parent boundaries.
+            task_windows: Candidate (work, first, last) tuples in admission order.
+            origins_by_entity: Candidate start times for each task's entity.
+            entities: Caller-owned set of meters whose expected loads are replaced.
+            excluded_entities: Meters still replaced by a separately modeled service.
+
+        Returns:
+            Admitted (work, first, last) tuples in task order, and sorted uniform
+            phase boundaries. The budget counts extra boundary edges and limits
+            boundary checks to MAX_PHASE_BOUNDARY_CHECKS.
+
+        Side Effects:
+            Adds rejected entity IDs to self._phase_limited_entities.
+            Removes their meters from entities unless another service replaces them.
+        """
         horizon_seconds = sum(step.duration_h for step in intervals) * 3600
         remaining_edges = (
             MAX_REFINED_PLAN_INTERVALS - len(intervals) - int(horizon_seconds / SAMPLE_SECONDS)
