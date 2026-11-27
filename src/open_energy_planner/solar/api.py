@@ -244,6 +244,56 @@ def register(app, runtime, live, lock, persist, snapshot, membership):
         forecast_logger = BackgroundLog(_LOGGER, "Solar forecast update")
         events = app.get(EVENTS)
 
+        async def publish_status():
+            """Capture availability and schedule together, then publish after leaving the lock."""
+            async with lock:
+                current = datetime.now(UTC)
+                usable = bool(
+                    runtime.configuration
+                    and runtime.configuration.sources
+                    and not runtime.store.issue
+                    and forecast_usable(
+                        runtime.configuration, runtime.forecast, runtime.location, current
+                    )
+                )
+                no_sources = bool(
+                    runtime.configuration
+                    and not runtime.configuration.sources
+                    and not runtime.store.issue
+                )
+                availability = (
+                    Health.AVAILABLE
+                    if usable or no_sources
+                    else Health.UNAVAILABLE
+                    if runtime.configuration
+                    else Health.UNKNOWN
+                )
+                detail = (
+                    "No solar forecast is required for this installation."
+                    if no_sources
+                    else "A current solar forecast is available."
+                    if usable
+                    else "Waiting for a usable solar forecast."
+                )
+                retry = (
+                    runtime.retry_after
+                    if not no_sources
+                    and runtime.retry_after
+                    and runtime.retry_after > current
+                    and runtime.failed_key == runtime.key(current)
+                    else None
+                )
+                due = next_update(current, retry) if usable or retry else None
+                context = activity_context(runtime.configuration)
+            events.availability("solar", availability, detail)
+            events.scheduled(
+                "solar",
+                "training",
+                "Update solar forecast",
+                due,
+                context=context,
+            )
+
         async def update():
             """Install only results matching current immutable inputs, with bounded retry on failure."""
             while True:
@@ -331,53 +381,7 @@ def register(app, runtime, live, lock, persist, snapshot, membership):
                         retry_seconds=max(SOLAR_WORKER_POLL_SECONDS, round(retry_seconds)),
                     )
                 if events:
-                    async with lock:
-                        current = datetime.now(UTC)
-                        usable = bool(
-                            runtime.configuration
-                            and runtime.configuration.sources
-                            and not runtime.store.issue
-                            and forecast_usable(
-                                runtime.configuration, runtime.forecast, runtime.location, current
-                            )
-                        )
-                        no_sources = bool(
-                            runtime.configuration
-                            and not runtime.configuration.sources
-                            and not runtime.store.issue
-                        )
-                        availability = (
-                            Health.AVAILABLE
-                            if usable or no_sources
-                            else Health.UNAVAILABLE
-                            if runtime.configuration
-                            else Health.UNKNOWN
-                        )
-                        detail = (
-                            "No solar forecast is required for this installation."
-                            if no_sources
-                            else "A current solar forecast is available."
-                            if usable
-                            else "Waiting for a usable solar forecast."
-                        )
-                        retry = (
-                            runtime.retry_after
-                            if not no_sources
-                            and runtime.retry_after
-                            and runtime.retry_after > current
-                            and runtime.failed_key == runtime.key(current)
-                            else None
-                        )
-                        due = next_update(current, retry) if usable or retry else None
-                        context = activity_context(runtime.configuration)
-                    events.availability("solar", availability, detail)
-                    events.scheduled(
-                        "solar",
-                        "training",
-                        "Update solar forecast",
-                        due,
-                        context=context,
-                    )
+                    await publish_status()
                 await asyncio.sleep(SOLAR_WORKER_POLL_SECONDS)
 
         task = asyncio.create_task(update())

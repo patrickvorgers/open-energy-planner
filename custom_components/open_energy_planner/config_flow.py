@@ -266,31 +266,11 @@ class PlannerConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                         expected_instance_id=instance,
                     ).plan_status()
                 if replacing:
-                    from .connection_lifecycle import reset_projection
-
-                    async with entry.setup_lock:
-                        if not await manager.async_unload(entry.entry_id, _lock=False):
-                            return self.async_abort(reason="pairing_failed")
-                        await reset_projection(self.hass, entry)
-                        data = {**data, "projection_id": uuid4().hex}
-                        if data.get("fingerprint") and not data.get("supervisor"):
-                            data["replacement_pending"] = True
-                        manager.async_update_entry(entry, data=data, options={}, unique_id=instance)
-                        if not entry.disabled_by and not await manager.async_setup(
-                            entry.entry_id, _lock=False
-                        ):
-                            return self.async_abort(reason="pairing_failed")
+                    loaded = await self._replace_entry(manager, entry, instance, data)
                 else:
-                    changed = manager.async_update_entry(entry, data=data)
-                    needs_reload = (
-                        changed or entry.state is not config_entries.ConfigEntryState.LOADED
-                    )
-                    if (
-                        not entry.disabled_by
-                        and needs_reload
-                        and not await manager.async_reload(entry.entry_id)
-                    ):
-                        return self.async_abort(reason="pairing_failed")
+                    loaded = await self._update_entry(manager, entry, data)
+                if not loaded:
+                    return self.async_abort(reason="pairing_failed")
                 if len(entries) > 1 and entry.state is not config_entries.ConfigEntryState.LOADED:
                     return self.async_abort(reason="pairing_failed")
                 for obsolete in entries:
@@ -307,6 +287,32 @@ class PlannerConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 logging.getLogger(__name__).debug("App connection update failed", exc_info=True)
                 return self.async_abort(reason="pairing_failed")
             return self.async_abort(reason="already_configured")
+
+    async def _replace_entry(self, manager, entry, instance, data):
+        """Replace a verified peer under the entry setup lock and report whether binding can continue."""
+        from .connection_lifecycle import reset_projection
+
+        async with entry.setup_lock:
+            if not await manager.async_unload(entry.entry_id, _lock=False):
+                return False
+            await reset_projection(self.hass, entry)
+            data = {**data, "projection_id": uuid4().hex}
+            if data.get("fingerprint") and not data.get("supervisor"):
+                data["replacement_pending"] = True
+            manager.async_update_entry(entry, data=data, options={}, unique_id=instance)
+            if not entry.disabled_by and not await manager.async_setup(entry.entry_id, _lock=False):
+                return False
+        return True
+
+    @staticmethod
+    async def _update_entry(manager, entry, data):
+        """Persist connection settings, reloading enabled entries that changed or are not loaded."""
+        changed = manager.async_update_entry(entry, data=data)
+        if not entry.disabled_by and (
+            changed or entry.state is not config_entries.ConfigEntryState.LOADED
+        ):
+            return await manager.async_reload(entry.entry_id)
+        return True
 
     async def async_step_reauth(self, entry_data):
         """Recover a revoked credential through fresh app consent while retaining the pinned server identity."""

@@ -646,6 +646,7 @@ def test_authenticated_app_replacement_reconciles_one_entry(mode, monkeypatch):
                     assert (await discover(pairing.supervisor_secret))["reason"] == "pairing_failed"
                 assert entry.unique_id == pairing.instance_id
                 assert entry.state is ConfigEntryState.NOT_LOADED
+                assert bool(entry.data.get("replacement_pending")) is (mode == "standalone")
                 assert manager.async_get_entry(obsolete.entry_id) is obsolete
                 assert registry.async_get(stale_device.id)
                 assert registry.async_get(current_device.id) is None

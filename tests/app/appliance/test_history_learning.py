@@ -155,6 +155,16 @@ def test_malformed_quantity_types_remain_errors(field, value):
         detect_cycles(rows, NOW)
 
 
+def test_duplicate_interval_rejects_history_before_reporting_activity():
+    """Overlapping Recorder rows cannot create a completed cycle or live activity."""
+    rows = readings()
+    rows[13]["at"] = rows[12]["at"]
+    activity = {}
+    with pytest.raises(ValueError, match="ordered completed intervals"):
+        detect_cycles(rows, NOW, activity=activity)
+    assert activity == {}
+
+
 def test_checkpoint_restart_overlap_and_empty_hours_never_duplicate_coverage(service):
     """A boundary-crossing run is admitted once after restart. Empty core hours count as examined, not usable."""
     start = NOW - timedelta(days=900)

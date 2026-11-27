@@ -226,12 +226,17 @@ def test_real_soc_replaces_only_initial_energy_and_retains_independent_versions(
 
 
 @pytest.mark.parametrize(
-    "change", ["missing_soc", "missing_power", "optional", "entity", "unit", "invalid_soc"]
+    "change",
+    ["missing_soc", "missing_power", "optional", "entity", "unit", "power_unit", "invalid_soc"],
 )
 def test_installation_source_requires_valid_bound_per_device_battery_measurements(change):
     """Reject missing, optional, mismatched and physically invalid battery evidence at its real owner."""
     source, config, report = measured_installation()
-    key = "battery.battery.power" if change == "missing_power" else "battery.battery.soc"
+    key = (
+        "battery.battery.power"
+        if change in ("missing_power", "power_unit")
+        else "battery.battery.soc"
+    )
     if change.startswith("missing"):
         report = replace(report, readings=tuple(row for row in report.readings if row.key != key))
     elif change == "optional":
@@ -245,6 +250,7 @@ def test_installation_source_requires_valid_bound_per_device_battery_measurement
         values = {
             "entity": {"entity_id": "sensor.other"},
             "unit": {"unit": "W"},
+            "power_unit": {"unit": "%"},
             "invalid_soc": {"value": 101},
         }[change]
         report = replace(

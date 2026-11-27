@@ -159,6 +159,27 @@ def statistics_profile(rows, started, completed, points, *, synthetic=False):
     )
 
 
+def _checked_history(rows, now, sample_seconds):
+    """Validate sample shape and chronology before normalizing unavailable measurements."""
+    if sample_seconds not in (SAMPLE_SECONDS, HOURLY_SAMPLE_SECONDS):
+        raise ValueError("Unsupported cycle history resolution")
+    if not isinstance(rows, list) or len(rows) > MAX_HISTORY_SAMPLES:
+        raise ValueError("Too many appliance history samples")
+    checked = []
+    for row in rows:
+        if not isinstance(row, dict) or set(row) != {"at", "power_w", "kwh"}:
+            raise ValueError("Invalid appliance history sample")
+        at = instant(row["at"])
+        if (
+            at.timestamp() % sample_seconds
+            or at + timedelta(seconds=sample_seconds) > now
+            or (checked and at <= checked[-1][0])
+        ):
+            raise ValueError("History needs ordered completed intervals at the declared resolution")
+        checked.append((at, *history_quantities(row)))
+    return checked
+
+
 def detect_cycles(rows, now, *, sample_seconds=SAMPLE_SECONDS, activity=None):
     """Return complete ranges and cumulative kWh points, never fill missing samples.
 
@@ -180,22 +201,7 @@ def detect_cycles(rows, now, *, sample_seconds=SAMPLE_SECONDS, activity=None):
     Raises:
         ValueError: Resolution, chronology, sample shape or quantity type is invalid.
     """
-    if sample_seconds not in (SAMPLE_SECONDS, HOURLY_SAMPLE_SECONDS):
-        raise ValueError("Unsupported cycle history resolution")
-    if not isinstance(rows, list) or len(rows) > MAX_HISTORY_SAMPLES:
-        raise ValueError("Too many appliance history samples")
-    checked = []
-    for row in rows:
-        if not isinstance(row, dict) or set(row) != {"at", "power_w", "kwh"}:
-            raise ValueError("Invalid appliance history sample")
-        at = instant(row["at"])
-        if (
-            at.timestamp() % sample_seconds
-            or at + timedelta(seconds=sample_seconds) > now
-            or (checked and at <= checked[-1][0])
-        ):
-            raise ValueError("History needs ordered completed intervals at the declared resolution")
-        checked.append((at, *history_quantities(row)))
+    checked = _checked_history(rows, now, sample_seconds)
     powers = sorted(
         power for _, power, energy in checked if power is not None and energy is not None
     )
@@ -204,6 +210,9 @@ def detect_cycles(rows, now, *, sample_seconds=SAMPLE_SECONDS, activity=None):
     threshold = max(
         MIN_ACTIVITY_W, powers[int((len(powers) - 1) * STANDBY_QUANTILE)] + STANDBY_MARGIN_W
     )
+    step = timedelta(seconds=sample_seconds)
+    required_quiet = ceil(QUIET_SAMPLES * SAMPLE_SECONDS / sample_seconds)
+    required_active = ceil(MIN_ACTIVE_SAMPLES * SAMPLE_SECONDS / sample_seconds)
     quiet, active, start_index, last_active = 0, 0, None, None
     cycles = []
     for index, (at, power, energy) in enumerate(checked):
@@ -213,28 +222,24 @@ def detect_cycles(rows, now, *, sample_seconds=SAMPLE_SECONDS, activity=None):
             or energy is None
             or previous is None
             or previous[2] is None
-            or at - previous[0] != timedelta(seconds=sample_seconds)
+            or at - previous[0] != step
             or energy < previous[2]
         )
         if broken:
             quiet, active, start_index, last_active = 0, 0, None, None
             continue
         if power > threshold:
-            if start_index is None and quiet >= ceil(
-                QUIET_SAMPLES * SAMPLE_SECONDS / sample_seconds
-            ):
+            if start_index is None and quiet >= required_quiet:
                 start_index, active = index, 0
             if start_index is not None:
                 last_active, active = index, active + 1
             quiet = 0
         else:
             quiet += 1
-            if start_index is not None and quiet >= ceil(
-                QUIET_SAMPLES * SAMPLE_SECONDS / sample_seconds
-            ):
-                if active >= ceil(MIN_ACTIVE_SAMPLES * SAMPLE_SECONDS / sample_seconds):
+            if start_index is not None and quiet >= required_quiet:
+                if active >= required_active:
                     start = checked[start_index][0]
-                    end = checked[last_active][0] + timedelta(seconds=sample_seconds)
+                    end = checked[last_active][0] + step
                     if (
                         timedelta(seconds=PROFILE_STEP_SECONDS)
                         <= end - start
@@ -242,7 +247,7 @@ def detect_cycles(rows, now, *, sample_seconds=SAMPLE_SECONDS, activity=None):
                     ):
                         points = [
                             {
-                                "at": (stamp + timedelta(seconds=sample_seconds)).isoformat(),
+                                "at": (stamp + step).isoformat(),
                                 "kwh": value,
                             }
                             for stamp, _, value in checked[start_index - 1 : last_active + 1]
@@ -255,23 +260,18 @@ def detect_cycles(rows, now, *, sample_seconds=SAMPLE_SECONDS, activity=None):
         and start_index is not None
         and active >= MIN_ACTIVE_SAMPLES
         and checked
-        and now - (checked[-1][0] + timedelta(seconds=sample_seconds))
-        <= timedelta(seconds=sample_seconds)
-        and checked[-1][0] + timedelta(seconds=sample_seconds) - checked[start_index][0]
-        <= timedelta(hours=MAX_CYCLE_HOURS)
+        and now - (checked[-1][0] + step) <= step
+        and checked[-1][0] + step - checked[start_index][0] <= timedelta(hours=MAX_CYCLE_HOURS)
     ):
         activity["running"] = {
             "started_at": checked[start_index][0].isoformat(),
-            "observed_until": (checked[-1][0] + timedelta(seconds=sample_seconds)).isoformat(),
+            "observed_until": (checked[-1][0] + step).isoformat(),
             "energy_kwh": checked[-1][2] - checked[start_index - 1][2],
             "status": "observed",
         }
     if activity is not None and checked and sample_seconds == SAMPLE_SECONDS:
         activity["quiet"] = (
-            quiet >= QUIET_SAMPLES
-            and start_index is None
-            and now - (checked[-1][0] + timedelta(seconds=sample_seconds))
-            <= timedelta(seconds=sample_seconds)
+            quiet >= QUIET_SAMPLES and start_index is None and now - (checked[-1][0] + step) <= step
         )
     return cycles
 

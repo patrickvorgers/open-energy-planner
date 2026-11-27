@@ -221,6 +221,8 @@ def test_invalid_selection_documents_are_reported_without_rewriting_evidence(
         name = selection.settings_name
         document = {"preferences": ["third", None, None], "version": "invalid"}
     else:
+        selection.save_preferences(["third", None, None], None)
+        preferences = selection.documents.read(selection.settings_name)
         name = selection.state_name
         state = {
             "preferred_source": "first",
@@ -241,6 +243,8 @@ def test_invalid_selection_documents_are_reported_without_rewriting_evidence(
     assert restored.issue == "forecast_selection_storage_unavailable"
     assert restored.manual == (None, None, None)
     assert restored.documents.read(name) == document
+    if fault != "preference_hash":
+        assert restored.documents.read(restored.settings_name) == preferences
 
 
 def seed_quality(selection):

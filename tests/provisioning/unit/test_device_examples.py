@@ -530,6 +530,17 @@ def test_late_fixture_discovery_is_waited_for_before_configuration(tmp_path, mon
         examples.configure(request, examples.ExampleJournal(tmp_path / "examples.json"), NOW)
     )
     assert delays == [2, 2] and len(polls) == 3
+    assert [path for _, path, _ in boundary.calls[:9]] == [
+        "/v1/setup",
+        "/v1/consumers",
+        "/v1/setup",
+        "/v1/setup?refresh=1",
+        "/v1/consumers",
+        "/v1/setup",
+        "/v1/setup?refresh=1",
+        "/v1/consumers",
+        "/v1/setup",
+    ]
     assert len(boundary.devices) == 3 and len(boundary.ev["vehicles"]) == 2
 
 

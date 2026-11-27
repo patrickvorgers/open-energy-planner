@@ -383,6 +383,7 @@ def test_missing_or_unsuccessful_full_result_does_not_qualify(evidence, target, 
         "unsigned",
         "wrong_tree",
         "wrong_head",
+        "wrong_base",
         "wrong_merge",
         "fork",
         "other_workflow",
@@ -416,6 +417,8 @@ def test_untrusted_stale_or_incomplete_evidence_retains_full_checks(evidence, fa
         evidence.commit["tree"]["sha"] = "5" * 40
     elif fault == "wrong_head":
         evidence.pull["head"]["sha"] = "5" * 40
+    elif fault == "wrong_base":
+        evidence.pull["base"]["sha"] = "5" * 40
     elif fault == "wrong_merge":
         evidence.pull["merge_commit_sha"] = "5" * 40
     elif fault == "fork":

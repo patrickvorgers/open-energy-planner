@@ -289,9 +289,10 @@ def test_zero_grid_selection_uses_average_ac_exchange(minutes, grid_power_w, fol
 
 
 @pytest.mark.planner_scenario
-def test_zero_grid_selection_checks_every_segment_of_a_control_interval():
-    """Keep fixed power when a tariff split averages 10 W but the second segment exceeds it."""
-    inputs = problem(prices=(1, 2), loads=(1 / 12, 1.015 / 6), pv=(0, 0), initial=1)
+@pytest.mark.parametrize("second_load_w,following", [(1015, False), (1010, True)])
+def test_zero_grid_selection_checks_every_segment_of_a_control_interval(second_load_w, following):
+    """Apply one command across a tariff split only when every segment meets the margin."""
+    inputs = problem(prices=(1, 2), loads=(1 / 12, second_load_w / 6000), pv=(0, 0), initial=1)
     first, second = inputs.intervals
     inputs = replace(
         inputs,
@@ -307,15 +308,17 @@ def test_zero_grid_selection_checks_every_segment_of_a_control_interval():
         batteries=(replace(inputs.batteries[0], can_follow_grid=True),),
     )
     result = solve(inputs)
-    assert [flow.grid_import for flow in result.plan.flows] == pytest.approx([0, 0.0025])
+    assert [flow.grid_import for flow in result.plan.flows] == pytest.approx(
+        [0, (second_load_w - 1000) / 6000]
+    )
     snapshot = InputSnapshot("test", "config", START, "measured", "forecast", "price", inputs)
     envelope = plan_document(snapshot, result, result.plan.costs, START)
 
     (step,) = Plan.parse(envelope, "config").steps
     assert step.end == START + timedelta(minutes=15)
-    assert step.command.grid_control_mode == "inactive"
-    assert step.command.devices[0].mode == "fixed_power"
-    assert step.command.devices[0].power_w == 1000
+    assert step.command.grid_control_mode == ("zero_grid" if following else "inactive")
+    assert step.command.devices[0].mode == ("follow_grid_target" if following else "fixed_power")
+    assert step.command.devices[0].power_w == (None if following else 1000)
 
 
 @pytest.mark.parametrize(

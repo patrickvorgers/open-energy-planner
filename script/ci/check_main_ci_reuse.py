@@ -50,26 +50,8 @@ def timestamp(value):
     return result
 
 
-def check(event, repository, commit_sha, tree_sha, client, now=None):
-    """Return original run/bundle identities only after every reuse invariant passes.
-
-    Only ordinary two-parent, GitHub-verified merges onto main qualify. Inspect
-    the associated merged PR and its newest successful Checks candidate. Require
-    the exact current-attempt quality job, suite completion, tested-tree marker
-    and unexpired original artifact. Focused reuse additionally requires the
-    first parent's independent selection and exact profile. Recheck the latest run.
-    Any exception is handled by the caller as a request for the full pipeline.
-    """
-    require(
-        re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repository or "")
-        and event.get("repository", {}).get("full_name") == repository
-        and event.get("ref") == "refs/heads/main"
-        and event.get("after") == sha(commit_sha)
-        and event.get("forced") is False,
-        "Not an ordinary main push",
-    )
-    tree_sha = sha(tree_sha)
-    root = f"repos/{repository}"
+def _main_merge_parents(client, root, repository, commit_sha, tree_sha):
+    """Return the exact merge parents after verifying the signature, tree and associated PR."""
     commit = client.get(f"{root}/git/commits/{commit_sha}")
     require(
         commit.get("sha") == commit_sha
@@ -103,6 +85,30 @@ def check(event, repository, commit_sha, tree_sha, client, now=None):
         ),
         "Merged PR does not identify this main merge",
     )
+    return base_sha, head_sha
+
+
+def check(event, repository, commit_sha, tree_sha, client, now=None):
+    """Return original run/bundle identities only after every reuse invariant passes.
+
+    Only ordinary two-parent, GitHub-verified merges onto main qualify. Inspect
+    the associated merged PR and its newest successful Checks candidate. Require
+    the exact current-attempt quality job, suite completion, tested-tree marker
+    and unexpired original artifact. Focused reuse additionally requires the
+    first parent's independent selection and exact profile. Recheck the latest run.
+    Any exception is handled by the caller as a request for the full pipeline.
+    """
+    require(
+        re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repository or "")
+        and event.get("repository", {}).get("full_name") == repository
+        and event.get("ref") == "refs/heads/main"
+        and event.get("after") == sha(commit_sha)
+        and event.get("forced") is False,
+        "Not an ordinary main push",
+    )
+    tree_sha = sha(tree_sha)
+    root = f"repos/{repository}"
+    base_sha, head_sha = _main_merge_parents(client, root, repository, commit_sha, tree_sha)
     workflow = client.get(f"{root}/actions/workflows/checks.yaml")
     workflow_id = positive_id(workflow["id"])
     require(workflow.get("path") == WORKFLOW_PATH, "Unexpected candidate workflow")

@@ -17,53 +17,11 @@ CALIBRATION_ENERGY_ROUNDOFF_KWH = 1e-07
 ZERO_GRID_MAX_EXCHANGE_W = 10
 
 
-def plan_document(snapshot, result, costs, now):
-    """Build a complete compatible envelope with typed commands and immutable physical evidence.
-
-    Require matched EV/thermal source identities and complete component coverage
-    for emitted controls. The independently validated result determines which
-    optional cycles actually emit a schedule. Omitted cycles do not block ordinary
-    household publication. Preserve all original work in the archived snapshot.
-
-    Raises:
-        ValueError: Controlled source ownership, coverage or command mapping is invalid.
-    """
-    from open_energy_planner.demand.calculation.composition import validate_components
-
-    problem = snapshot.problem
-    starts = dict(result.plan.appliance_starts)
-    ev_sources = {
-        tuple(row["work"][key] for key in ("point_id", "vehicle_id", "session_id")): row[
-            "energy_entity"
-        ]
-        for row in snapshot.ev_evidence
-    }
-    thermal_sources = {
-        row["configuration"]["id"]: row["configuration"]["energy_entity"]
-        for row in snapshot.thermal_evidence
-    }
-    if (
-        len(ev_sources) != len(snapshot.ev_evidence)
-        or set(ev_sources)
-        != {(work.point_id, work.vehicle_id, work.session_id) for work in problem.ev_work}
-        or len(thermal_sources) != len(snapshot.thermal_evidence)
-        or set(thermal_sources) != {work.device_id for work in problem.thermal_work}
-    ):
-        raise ValueError("Household component ownership unavailable")
-    validate_components(
-        replace(
-            problem, appliances=tuple(work for work in problem.appliances if work.task_id in starts)
-        ),
-        snapshot.load_components,
-        controlled_entities=tuple(ev_sources.values()) + tuple(thermal_sources.values()),
-    )
-    steps = []
-    units = {unit.device_id: unit for unit in problem.batteries}
+def _group_followers(problem, flows, units):
+    """Choose zero-grid followers only when every segment of their control group qualifies."""
     stored = {identity: unit.battery.initial_kwh for identity, unit in units.items()}
     group_followers = {}
-    for interval_index, (interval, flow) in enumerate(
-        zip(problem.intervals, result.plan.flows, strict=True)
-    ):
+    for interval_index, (interval, flow) in enumerate(zip(problem.intervals, flows, strict=True)):
         group = interval.control_group or interval_index
         # Use the same power margin even when replanning shortens the first interval.
         grid_exchange_w = (
@@ -81,11 +39,17 @@ def plan_document(snapshot, result, costs, now):
         # Billing splits must not create a new following/fixed decision inside one original control.
         group_followers.setdefault(group, eligible).intersection_update(eligible)
         stored.update({battery.device_id: battery.end_kwh for battery in flow.batteries})
+    return group_followers
+
+
+def _plan_steps(problem, flows):
+    """Build whole-watt device commands and coalesce equal control steps."""
+    steps = []
+    units = {unit.device_id: unit for unit in problem.batteries}
+    group_followers = _group_followers(problem, flows, units)
     previous_group = None
     calibration_commands = {}
-    for interval_index, (interval, flow) in enumerate(
-        zip(problem.intervals, result.plan.flows, strict=True)
-    ):
+    for interval_index, (interval, flow) in enumerate(zip(problem.intervals, flows, strict=True)):
         commands = {}
         followers = group_followers[interval.control_group or interval_index]
         for battery in flow.batteries:
@@ -163,6 +127,50 @@ def plan_document(snapshot, result, costs, now):
             else:
                 compact.append(step)
         steps = compact
+    return steps
+
+
+def plan_document(snapshot, result, costs, now):
+    """Build a complete compatible envelope with typed commands and immutable physical evidence.
+
+    Require matched EV/thermal source identities and complete component coverage
+    for emitted controls. The independently validated result determines which
+    optional cycles actually emit a schedule. Omitted cycles do not block ordinary
+    household publication. Preserve all original work in the archived snapshot.
+
+    Raises:
+        ValueError: Controlled source ownership, coverage or command mapping is invalid.
+    """
+    from open_energy_planner.demand.calculation.composition import validate_components
+
+    problem = snapshot.problem
+    starts = dict(result.plan.appliance_starts)
+    ev_sources = {
+        tuple(row["work"][key] for key in ("point_id", "vehicle_id", "session_id")): row[
+            "energy_entity"
+        ]
+        for row in snapshot.ev_evidence
+    }
+    thermal_sources = {
+        row["configuration"]["id"]: row["configuration"]["energy_entity"]
+        for row in snapshot.thermal_evidence
+    }
+    if (
+        len(ev_sources) != len(snapshot.ev_evidence)
+        or set(ev_sources)
+        != {(work.point_id, work.vehicle_id, work.session_id) for work in problem.ev_work}
+        or len(thermal_sources) != len(snapshot.thermal_evidence)
+        or set(thermal_sources) != {work.device_id for work in problem.thermal_work}
+    ):
+        raise ValueError("Household component ownership unavailable")
+    validate_components(
+        replace(
+            problem, appliances=tuple(work for work in problem.appliances if work.task_id in starts)
+        ),
+        snapshot.load_components,
+        controlled_entities=tuple(ev_sources.values()) + tuple(thermal_sources.values()),
+    )
+    steps = _plan_steps(problem, result.plan.flows)
     return {
         "schema": PLAN_SCHEMA_VERSION,
         "release": RELEASE,
