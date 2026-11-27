@@ -309,99 +309,27 @@ async def ensure_source_choices(request, scope, required):
     raise ValueError("Development example source choices did not complete. Check the HA connection")
 
 
-async def configure(request, journal, now=None):
-    """Use normal product APIs to fill only unowned simulator examples and retain all existing work."""
-    now = now or datetime.now(UTC)
-    completed = journal.state["completed"]
-
-    async def initialize(section, method, path, body):
-        """Separate attempted writes from confirmed ownership, preserving version-conflict winners."""
-        journal.complete("attempted:" + section)
-        try:
-            result = await request(method, path, body)
-        except ClientResponseError as error:
-            if 400 <= error.status < 500:
-                journal.discard("attempted:" + section)
-            raise
-        journal.complete("owns:" + section, section)
-        return result
-
-    profiles = json.loads(PROFILE_FILE.read_text())
-    if {
-        "consumers",
-        "ev",
-        "thermal",
-        "bonus",
-        *("appliance:" + name for name in profiles),
-        *("automatic-learning-v1:" + name for name in profiles),
-    } <= set(completed):
-        return
-    setup = await request("GET", "/v1/setup")
-    if any(setup.get(key) is None for key in ("installation", "solar", "demand")):
-        print("Device examples deferred. Complete the preserved partial installation first.")
-        return
-    selected = [
-        {"entity_id": "sensor.oep_test_heat_pump_energy", "weather_sensitive": True},
-        *(
-            {"entity_id": f"sensor.oep_test_{name}_energy", "weather_sensitive": False}
-            for name in profiles
-        ),
-    ]
-    required = {row["entity_id"] for row in selected} | {
-        "sensor.oep_test_wallbox_a_energy",
-        "sensor.oep_test_wallbox_b_energy",
-        "sensor.oep_test_boiler_energy",
-    }
+async def _wait_for_fixture(request, required):
+    """Read both fixture projections per attempt and return the complete consumer catalogue."""
     for attempt in range(FIXTURE_READY_ATTEMPTS):
         consumers = await request("GET", "/v1/consumers")
-        setup = await request("GET", "/v1/setup")
+        await request("GET", "/v1/setup")
         missing = required - {option["entity_id"] for option in consumers["options"]}
         if not missing:
-            break
+            return consumers
         if attempt < FIXTURE_READY_ATTEMPTS - 1:
             # A fresh foundation catalogue can predate asynchronously registered device fixtures.
             await request("GET", "/v1/setup?refresh=1")
             await asyncio.sleep(FIXTURE_POLL_SECONDS)
-    else:
-        raise ValueError(
-            "Development examples require the complete simulated Energy fixture. Missing: "
-            + ", ".join(sorted(missing))
-        )
-    intended_ev = ev_configuration(consumers["options"])
-    choice_sources = {
-        scope: {
-            entity_id
-            for configurations in configuration.values()
-            for device in configurations
-            for field, entity_id in device.items()
-            if field.endswith("_entity")
-        }
-        for scope, configuration in (
-            ("ev", intended_ev),
-            ("thermal", boiler_configuration()),
-        )
-    }
-    for scope, sections in (("ev", ("vehicles", "points")), ("thermal", ("stores",))):
-        if scope in completed or "attempted:" + scope in completed:
-            continue
-        document = await request("GET", "/v1/" + scope)
-        configuration = document if scope == "ev" else document["configuration"]
-        if not any(configuration[section] for section in sections):
-            await ensure_source_choices(request, scope, choice_sources[scope])
-    if "consumers" not in completed:
-        # Empty state after an ambiguous write may be an intentional user removal.
-        if not consumers["selected"] and "attempted:consumers" not in completed:
-            consumers = await initialize(
-                "consumers",
-                "PUT",
-                "/v1/consumers",
-                {"selected": selected, "expected_version": consumers["version"]},
-            )
-        elif "attempted:consumers" in completed and sorted(
-            consumers["selected"], key=lambda row: row["entity_id"]
-        ) == sorted(selected, key=lambda row: row["entity_id"]):
-            journal.complete("owns:consumers", "consumers")
-        journal.complete("consumers")
+    raise ValueError(
+        "Development examples require the complete simulated Energy fixture. Missing: "
+        + ", ".join(sorted(missing))
+    )
+
+
+async def _configure_appliances(request, journal, profiles, consumers, now):
+    """Seed permitted profiles and upgrade only unchanged, provisioner-owned examples."""
+    completed = journal.state["completed"]
     available = {row["entity_id"] for row in consumers["selected"]}
     power_bindings = {row["entity_id"]: row.get("power_entity") for row in consumers["options"]}
     for name, example in profiles.items():
@@ -484,6 +412,88 @@ async def configure(request, journal, now=None):
                 ),
             )
         journal.complete(key)
+
+
+async def configure(request, journal, now=None):
+    """Use normal product APIs to fill only unowned simulator examples and retain all existing work."""
+    now = now or datetime.now(UTC)
+    completed = journal.state["completed"]
+
+    async def initialize(section, method, path, body):
+        """Separate attempted writes from confirmed ownership, preserving version-conflict winners."""
+        journal.complete("attempted:" + section)
+        try:
+            result = await request(method, path, body)
+        except ClientResponseError as error:
+            if 400 <= error.status < 500:
+                journal.discard("attempted:" + section)
+            raise
+        journal.complete("owns:" + section, section)
+        return result
+
+    profiles = json.loads(PROFILE_FILE.read_text())
+    if {
+        "consumers",
+        "ev",
+        "thermal",
+        "bonus",
+        *("appliance:" + name for name in profiles),
+        *("automatic-learning-v1:" + name for name in profiles),
+    } <= set(completed):
+        return
+    setup = await request("GET", "/v1/setup")
+    if any(setup.get(key) is None for key in ("installation", "solar", "demand")):
+        print("Device examples deferred. Complete the preserved partial installation first.")
+        return
+    selected = [
+        {"entity_id": "sensor.oep_test_heat_pump_energy", "weather_sensitive": True},
+        *(
+            {"entity_id": f"sensor.oep_test_{name}_energy", "weather_sensitive": False}
+            for name in profiles
+        ),
+    ]
+    required = {row["entity_id"] for row in selected} | {
+        "sensor.oep_test_wallbox_a_energy",
+        "sensor.oep_test_wallbox_b_energy",
+        "sensor.oep_test_boiler_energy",
+    }
+    consumers = await _wait_for_fixture(request, required)
+    intended_ev = ev_configuration(consumers["options"])
+    choice_sources = {
+        scope: {
+            entity_id
+            for configurations in configuration.values()
+            for device in configurations
+            for field, entity_id in device.items()
+            if field.endswith("_entity")
+        }
+        for scope, configuration in (
+            ("ev", intended_ev),
+            ("thermal", boiler_configuration()),
+        )
+    }
+    for scope, sections in (("ev", ("vehicles", "points")), ("thermal", ("stores",))):
+        if scope in completed or "attempted:" + scope in completed:
+            continue
+        document = await request("GET", "/v1/" + scope)
+        configuration = document if scope == "ev" else document["configuration"]
+        if not any(configuration[section] for section in sections):
+            await ensure_source_choices(request, scope, choice_sources[scope])
+    if "consumers" not in completed:
+        # Empty state after an ambiguous write may be an intentional user removal.
+        if not consumers["selected"] and "attempted:consumers" not in completed:
+            consumers = await initialize(
+                "consumers",
+                "PUT",
+                "/v1/consumers",
+                {"selected": selected, "expected_version": consumers["version"]},
+            )
+        elif "attempted:consumers" in completed and sorted(
+            consumers["selected"], key=lambda row: row["entity_id"]
+        ) == sorted(selected, key=lambda row: row["entity_id"]):
+            journal.complete("owns:consumers", "consumers")
+        journal.complete("consumers")
+    await _configure_appliances(request, journal, profiles, consumers, now)
     if "ev" not in completed:
         document = await request("GET", "/v1/ev")
         if not document["vehicles"] and not document["points"] and "attempted:ev" not in completed:
