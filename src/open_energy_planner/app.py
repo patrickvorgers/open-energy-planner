@@ -591,6 +591,93 @@ def _register_planning_activity(app, engine, planner, notification_center, timez
     return events
 
 
+def _create_http_application(token, repository, lock, save_state):
+    """Compose request authentication, revocation durability and timing in order."""
+    from .home_assistant.plan_status_watch import WATCH_PATH
+    from .runtime.diagnostics.http import phase, timed_lock
+    from .runtime.diagnostics.http import register as register_request_timing
+
+    @web.middleware
+    async def authentication(request, handler):
+        """Require the installation Bearer token before executing any API handler."""
+        from .ingress import prefix
+
+        if request.method in ("GET", "HEAD") and (
+            is_public(request) or request.path == "/setup/session"
+        ):
+            return await handler(request)
+        if not prefix(request) and not hmac.compare_digest(
+            request.headers.get("Authorization", "").encode("utf-8", "replace"),
+            f"Bearer {token}".encode(),
+        ):
+            raise web.HTTPUnauthorized()
+        return await handler(request)
+
+    @web.middleware
+    async def persist_invalidations(request, handler):
+        """Drain hard revocations for protected responses without blocking public navigation.
+
+        Public pages, assets and bounded session metadata contain no commands or
+        authenticated state. Their reads must not wait behind archive writes.
+        Readiness, HA status and binding reads expose no command content. The status uses
+        fail-closed committed authority even while the background flush is blocked.
+        Other protected responses retain the durability barrier on handler failure.
+        """
+        if is_public(request) or (
+            request.method in {"GET", "HEAD"}
+            and request.path
+            in {
+                "/setup/session",
+                "/v1/readiness",
+                "/v1/ha/plan-status",
+                "/v1/ha/measurement-config",
+                WATCH_PATH,
+            }
+        ):
+            return await handler(request)
+        try:
+            return await handler(request)
+        finally:
+            if not request.get(NO_COMMANDS) and repository.pending_invalidation:
+                async with timed_lock(request, "revocation_wait", lock):
+                    if repository.pending_invalidation:
+                        try:
+                            with phase(request, "revocation_save"):
+                                await save_state()
+                        except OSError:
+                            raise web.HTTPServiceUnavailable(
+                                text="Plan archive unavailable. Commands revoked"
+                            ) from None
+
+    app = web.Application(
+        middlewares=[authentication, persist_invalidations],
+        client_max_size=DEFAULT_REQUEST_LIMIT_KIB * BYTES_PER_KIB,
+    )
+    register_request_timing(app)
+    return app
+
+
+def _register_runtime_status(app, notification_center, ha_lifecycle, source):
+    """Register runtime diagnostics and loaded-build compatibility notices."""
+    from .build_info import register as register_build_info
+
+    register_notifications(app, notification_center)
+    register_build_info(app)
+    ha_lifecycle.register(app, mark_command_free)
+    if source == "home_assistant":
+        from .build_info import BUILD_STATUS
+        from .runtime.diagnostics.version_notifications import version_notifications
+
+        def version_notices():
+            """Borrow only the loaded-build owner's private current compatibility evidence."""
+            status = app[BUILD_STATUS]()
+            return version_notifications(
+                status["blocking_mismatch"], available=status["status"] != "unavailable"
+            )
+
+        notification_center.register("versions", version_notices)
+
+
 def create_app(
     directory,
     token,
@@ -821,22 +908,6 @@ def create_app(
         )
         _restore_live_configuration(live, installation, repository)
 
-    @web.middleware
-    async def authentication(request, handler):
-        """Require the installation Bearer token before executing any API handler."""
-        from .ingress import prefix
-
-        if request.method in ("GET", "HEAD") and (
-            is_public(request) or request.path == "/setup/session"
-        ):
-            return await handler(request)
-        if not prefix(request) and not hmac.compare_digest(
-            request.headers.get("Authorization", "").encode("utf-8", "replace"),
-            f"Bearer {token}".encode(),
-        ):
-            raise web.HTTPUnauthorized()
-        return await handler(request)
-
     async def save_state():
         """Finish state persistence under the caller-held lock before propagating cancellation."""
         try:
@@ -846,67 +917,8 @@ def create_app(
         if cancellation is not None:
             raise cancellation
 
-    @web.middleware
-    async def persist_invalidations(request, handler):
-        """Drain hard revocations for protected responses without blocking public navigation.
-
-        Public pages, assets and bounded session metadata contain no commands or
-        authenticated state. Their reads must not wait behind archive writes.
-        Readiness, HA status and binding reads expose no command content. The status uses
-        fail-closed committed authority even while the background flush is blocked.
-        Other protected responses retain the durability barrier on handler failure.
-        """
-        if is_public(request) or (
-            request.method in {"GET", "HEAD"}
-            and request.path
-            in {
-                "/setup/session",
-                "/v1/readiness",
-                "/v1/ha/plan-status",
-                "/v1/ha/measurement-config",
-                WATCH_PATH,
-            }
-        ):
-            return await handler(request)
-        try:
-            return await handler(request)
-        finally:
-            if not request.get(NO_COMMANDS) and repository.pending_invalidation:
-                async with timed_lock(request, "revocation_wait", lock):
-                    if repository.pending_invalidation:
-                        try:
-                            with phase(request, "revocation_save"):
-                                await save_state()
-                        except OSError:
-                            raise web.HTTPServiceUnavailable(
-                                text="Plan archive unavailable. Commands revoked"
-                            ) from None
-
-    app = web.Application(
-        middlewares=[authentication, persist_invalidations],
-        client_max_size=DEFAULT_REQUEST_LIMIT_KIB * BYTES_PER_KIB,
-    )
-    from .runtime.diagnostics.http import phase, timed_lock
-    from .runtime.diagnostics.http import register as register_request_timing
-
-    register_request_timing(app)
-    from .build_info import register as register_build_info
-
-    register_notifications(app, notification_center)
-    register_build_info(app)
-    ha_lifecycle.register(app, mark_command_free)
-    if source == "home_assistant":
-        from .build_info import BUILD_STATUS
-        from .runtime.diagnostics.version_notifications import version_notifications
-
-        def version_notices():
-            """Borrow only the loaded-build owner's private current compatibility evidence."""
-            status = app[BUILD_STATUS]()
-            return version_notifications(
-                status["blocking_mismatch"], available=status["status"] != "unavailable"
-            )
-
-        notification_center.register("versions", version_notices)
+    app = _create_http_application(token, repository, lock, save_state)
+    _register_runtime_status(app, notification_center, ha_lifecycle, source)
     from .ingress import INGRESS_PEER
 
     if ingress_peer:
