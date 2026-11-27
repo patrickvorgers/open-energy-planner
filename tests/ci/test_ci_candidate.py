@@ -65,10 +65,19 @@ def candidate():
     return event, current, checks
 
 
-def repowise_output(run_id, *, head=HEAD, base=BASE):
+def repowise_output(run_id, *, head=HEAD, base=BASE, with_heading=True):
     """Represent the report and final revision metadata published by the RepoWise check."""
     state = json.dumps({"head": head, "base": base, "run": run_id})
-    return {"text": f"### Review points and new health findings (0)\n\n```json\n{state}\n```"}
+    heading = "### Review points and new health findings (0)\n\n" if with_heading else ""
+    return {"text": f"{heading}```json\n{state}\n```"}
+
+
+@pytest.mark.parametrize("with_heading", [False, True])
+def test_candidate_accepts_both_authentic_repowise_output_forms(candidate, with_heading):
+    """Accept the exact metadata fence with a findings heading or at the start of the check."""
+    event, current, checks = candidate
+    checks[-1]["output"] = repowise_output(9001, with_heading=with_heading)
+    assert check(event, REPOSITORY, Evidence(current, checks)) == HEAD
 
 
 @pytest.mark.parametrize("action", ["ready_for_review", "labeled"])
@@ -196,6 +205,7 @@ def test_candidate_file_limit_cannot_be_bypassed_by_a_manual_review(candidate, c
         assert check(event, REPOSITORY, client) == HEAD
 
 
+@pytest.mark.parametrize("with_heading", [False, True])
 @pytest.mark.parametrize(
     "fault",
     [
@@ -208,17 +218,19 @@ def test_candidate_file_limit_cannot_be_bypassed_by_a_manual_review(candidate, c
         "stale-base",
         "missing-output",
         "malformed-output",
+        "trailing-content",
         "missing-disposition",
         "empty-disposition",
         "wrong-actor",
         "old-disposition",
     ],
 )
-def test_candidate_requires_fresh_repowise_disposition(candidate, fault):
+def test_candidate_requires_fresh_repowise_disposition(candidate, fault, with_heading):
     """No stale report or attestation can accompany a substantively reviewed candidate."""
     event, current, checks = candidate
     client = Evidence(current, checks)
     scan = checks[-1]
+    scan["output"] = repowise_output(9001, with_heading=with_heading)
     (disposition,) = client.repowise
     if fault == "missing-scan":
         checks.pop()
@@ -231,13 +243,15 @@ def test_candidate_requires_fresh_repowise_disposition(candidate, fault):
     elif fault == "stale-scan":
         scan["id"] = 9002
     elif fault == "stale-head":
-        scan["output"] = repowise_output(9001, head="3" * 40)
+        scan["output"] = repowise_output(9001, head="3" * 40, with_heading=with_heading)
     elif fault == "stale-base":
-        scan["output"] = repowise_output(9001, base="3" * 40)
+        scan["output"] = repowise_output(9001, base="3" * 40, with_heading=with_heading)
     elif fault == "missing-output":
         scan.pop("output")
     elif fault == "malformed-output":
         scan["output"]["text"] = scan["output"]["text"].replace("{", "[", 1)
+    elif fault == "trailing-content":
+        scan["output"]["text"] += "\nUnexpected content"
     elif fault == "missing-disposition":
         client.repowise.pop()
     elif fault == "empty-disposition":
