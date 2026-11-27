@@ -26,3 +26,7 @@ jobs:
           persist-credentials: false
           fetch-depth: 0
       - uses: ./.github/actions/quick-checks
+      - name: Check the changed Python and JavaScript function budgets
+        env:
+          OEP_CODE_HEALTH_BASE: ${{ github.event.pull_request.base.sha }}
+        run: python3 -m script.ci.check_code_health --base "$OEP_CODE_HEALTH_BASE"
