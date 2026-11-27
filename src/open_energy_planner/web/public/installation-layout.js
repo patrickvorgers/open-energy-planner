@@ -155,17 +155,7 @@ export class InstallationLayout {
         if (this.wizard && this.area < 4) this.editing = this.ready;
         if (!locked) for (const [control, managed] of this.controls) if (control.isConnected) control.disabled = managed || !this.editing;
         if (!locked) find("export").disabled = this.controls.get(find("export")) !== false || !this.editing || !find("allow-feed-in").checked;
-        const strategyPanel = find("strategy-settings");
-        const strategyParent = document.querySelector(`[data-step="${this.wizard && this.area < 4 ? 3 : 4}"]`);
-        if (strategyPanel.parentElement !== strategyParent) strategyParent.append(strategyPanel);
-        const strategyValue = find("installation-strategy-value");
-        strategyValue.hidden = this.editing;
-        strategyValue.replaceChildren();
-        summaryFact(strategyValue, "Optimization goal", find("strategy").selectedOptions[0]?.textContent || "Unavailable");
-        find("strategy-explanation").textContent = find("strategy").value === "minimize consumption"
-            ? "Reduce grid import plus the grid energy needed to replace depleted starting battery stock."
-            : find("strategy").value === "minimize cost" ? "Choose the plan with the lowest expected economic cost."
-            : "Choose a supported optimization goal.";
+        this.#syncStrategy();
         const priceControls = [...document.querySelectorAll("[data-price-preference]")];
         for (const control of priceControls) control.disabled = !this.editing || locked;
         const canEdit = this.area === 5 ? priceControls.length > 0 : this.area === 4 ? this.controls.get(find("strategy")) === false : this.ready && [0, 1, 2].includes(this.area);
@@ -198,6 +188,32 @@ export class InstallationLayout {
         }
         find("grid-field").hidden = false;
         find("annual-field").hidden = false;
+        this.#syncWizardSteps(locked);
+        for (const [area, selector, container] of [[1, "installation-solar", "solar-rows"], [2, "installation-battery", "battery-rows"]]) {
+            const label = find(selector).closest("label");
+            const parent = !this.editing && this.area === area ? find("installation-device-toolbar") : find(container).parentElement;
+            if (label.parentElement !== parent) parent.insertBefore(label, parent === find("installation-device-toolbar") ? null : find(container));
+        }
+        this.summary(); this.capacities();
+    }
+
+    /** Keep the strategy panel in its active area and summarize the current saved goal. */
+    #syncStrategy() {
+        const strategyPanel = find("strategy-settings");
+        const strategyParent = document.querySelector(`[data-step="${this.wizard && this.area < 4 ? 3 : 4}"]`);
+        if (strategyPanel.parentElement !== strategyParent) strategyParent.append(strategyPanel);
+        const strategyValue = find("installation-strategy-value");
+        strategyValue.hidden = this.editing;
+        strategyValue.replaceChildren();
+        summaryFact(strategyValue, "Optimization goal", find("strategy").selectedOptions[0]?.textContent || "Unavailable");
+        find("strategy-explanation").textContent = find("strategy").value === "minimize consumption"
+            ? "Reduce grid import plus the grid energy needed to replace depleted starting battery stock."
+            : find("strategy").value === "minimize cost" ? "Choose the plan with the lowest expected economic cost."
+            : "Choose a supported optimization goal.";
+    }
+
+    /** Render wizard navigation and expose one current keyboard-accessible stage. */
+    #syncWizardSteps(locked) {
         find("next").disabled = locked || !this.ready;
         find("next").hidden = this.area === 3 || this.area > 3;
         find("back").disabled = locked || this.area === -1;
@@ -215,12 +231,6 @@ export class InstallationLayout {
             if (area === this.area) button.setAttribute("aria-current", "step");
             else button.removeAttribute("aria-current");
         });
-        for (const [area, selector, container] of [[1, "installation-solar", "solar-rows"], [2, "installation-battery", "battery-rows"]]) {
-            const label = find(selector).closest("label");
-            const parent = !this.editing && this.area === area ? find("installation-device-toolbar") : find(container).parentElement;
-            if (label.parentElement !== parent) parent.insertBefore(label, parent === find("installation-device-toolbar") ? null : find(container));
-        }
-        this.summary(); this.capacities();
     }
 
     /** Render a text-only summary of the selected saved editor. Unknown numeric values stay unknown. */
