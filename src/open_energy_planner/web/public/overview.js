@@ -1447,7 +1447,10 @@ function renderOriginalPlanHeader(plan, id) {
     return {samePlan, currency};
 }
 
-/** Prepare each frozen interval's inspector evidence, series, and physical balance. */
+/**
+ * Prepare each frozen interval's inspector evidence, series, and physical balance.
+ * Reset the interval inspector and clear linked chart selection before building the new evidence.
+ */
 function prepareOriginalPlanEvidence(plan, currency) {
     const buy = [], sell = [], spot = [], bonusSell = [], demandForecast = [], solarForecast = [];
     const bonusRules = plan.input_snapshot?.problem?.export_bonuses || [];
