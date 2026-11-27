@@ -376,6 +376,81 @@ def test_helper_consumers(sources, changed):
     return set().union(*(scenarios_for(helper) for helper in changed))
 
 
+def _app_source_profile(path, module):
+    """Apply first-party app ownership after shared and explicit path overrides."""
+    if "/" in module and module.split("/", 1)[0] not in DOMAIN_DIRECTORIES | {"storage"}:
+        return "full"
+    if "/" not in module:
+        return "full"
+    if path.stem in {"wire", "model"} or path.stem.endswith("_wire"):
+        return focused_profile(
+            "unit-app",
+            "unit-ha-contract",
+            "browser",
+            "databases",
+            *DOMAIN_HA_SUITES.get(module.split("/", 1)[0], ()),
+        )
+    if {"storage", "adapters", "queries"} <= set(module.split("/")[:-1]):
+        return focused_profile(
+            "unit-app",
+            "browser",
+            "database-contracts",
+            *(("unit-ha-contract",) if not module.startswith("storage/") else ()),
+            *DOMAIN_HA_SUITES.get(module.split("/", 1)[0], ()),
+        )
+    if module.startswith("storage/"):
+        return focused_profile("unit-app", "browser", "databases")
+    domain_storage = "storage" in module.split("/")[:-1] or path.stem == "storage"
+    return (
+        focused_profile(
+            "unit-app",
+            "unit-ha-contract",
+            "browser",
+            *DOMAIN_HA_SUITES.get(module.split("/", 1)[0], ()),
+            *(("databases",) if domain_storage else ()),
+        )
+        if path.suffix == ".py"
+        else "full"
+    )
+
+
+def _integration_profile(path, name):
+    """Select supported integration tests and leave other HA integrations on full CI."""
+    if name == "custom_components/open_energy_planner/config_flow.py":
+        return focused_profile(
+            "unit-component",
+            "unit-supervisor",
+            "ha-contracts",
+            "ha-connection",
+            "provisioning",
+            "supervisor",
+        )
+    if name.startswith("custom_components/"):
+        if not name.startswith("custom_components/open_energy_planner/"):
+            return "full"
+        return (
+            "full"
+            if path.name
+            in {
+                "__init__.py",
+                "manifest.json",
+                "build-info.json",
+                "config_flow.py",
+                "supervisor.py",
+            }
+            else focused_profile(
+                "unit-component",
+                "unit-ha-contract",
+                "ha-contracts",
+                "ha-connection",
+                "ha-controls",
+                "ha-history",
+                "ha-thermal",
+            )
+        )
+    return "full"
+
+
 def path_profile(path):
     """Classify explicit ownership boundaries. Unknown or shared infrastructure remains full."""
     name = str(path)
@@ -426,73 +501,9 @@ def path_profile(path):
     if name == "Dockerfile.chain-test":
         return "full"
     if name.startswith("src/open_energy_planner/"):
-        module = name.removeprefix("src/open_energy_planner/")
-        if "/" in module and module.split("/", 1)[0] not in DOMAIN_DIRECTORIES | {"storage"}:
-            return "full"
-        if "/" not in module:
-            return "full"
-        if path.stem in {"wire", "model"} or path.stem.endswith("_wire"):
-            return focused_profile(
-                "unit-app",
-                "unit-ha-contract",
-                "browser",
-                "databases",
-                *DOMAIN_HA_SUITES.get(module.split("/", 1)[0], ()),
-            )
-        if {"storage", "adapters", "queries"} <= set(module.split("/")[:-1]):
-            return focused_profile(
-                "unit-app",
-                "browser",
-                "database-contracts",
-                *(("unit-ha-contract",) if not module.startswith("storage/") else ()),
-                *DOMAIN_HA_SUITES.get(module.split("/", 1)[0], ()),
-            )
-        if module.startswith("storage/"):
-            return focused_profile("unit-app", "browser", "databases")
-        domain_storage = "storage" in module.split("/")[:-1] or path.stem == "storage"
-        return (
-            focused_profile(
-                "unit-app",
-                "unit-ha-contract",
-                "browser",
-                *DOMAIN_HA_SUITES.get(module.split("/", 1)[0], ()),
-                *(("databases",) if domain_storage else ()),
-            )
-            if path.suffix == ".py"
-            else "full"
-        )
-    if name == "custom_components/open_energy_planner/config_flow.py":
-        return focused_profile(
-            "unit-component",
-            "unit-supervisor",
-            "ha-contracts",
-            "ha-connection",
-            "provisioning",
-            "supervisor",
-        )
+        return _app_source_profile(path, name.removeprefix("src/open_energy_planner/"))
     if name.startswith("custom_components/"):
-        if not name.startswith("custom_components/open_energy_planner/"):
-            return "full"
-        return (
-            "full"
-            if path.name
-            in {
-                "__init__.py",
-                "manifest.json",
-                "build-info.json",
-                "config_flow.py",
-                "supervisor.py",
-            }
-            else focused_profile(
-                "unit-component",
-                "unit-ha-contract",
-                "ha-contracts",
-                "ha-connection",
-                "ha-controls",
-                "ha-history",
-                "ha-thermal",
-            )
-        )
+        return _integration_profile(path, name)
     return "full"
 
 

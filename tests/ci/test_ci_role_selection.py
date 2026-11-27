@@ -51,6 +51,18 @@ def test_shared_execution_and_snapshot_process_owners_retain_broad_coverage(path
     assert not performance_queries_path(PurePosixPath(path))
 
 
+@pytest.mark.parametrize(
+    "path",
+    [
+        "src/open_energy_planner/undeclared/storage/adapters/queries/model.py",
+        "custom_components/other_integration/config_flow.py",
+    ],
+)
+def test_unowned_sources_keep_full_ci_even_with_specialized_filenames(path):
+    """Specific file rules never grant focused coverage outside a declared owner."""
+    assert path_profile(PurePosixPath(path)) == "full"
+
+
 def test_ha_argument_owner_preserves_worker_plugin_directories_and_independent_report():
     """An HA worker still receives both integration roots and its own original report identity."""
     arguments, report = ha_selection("ha", 1)

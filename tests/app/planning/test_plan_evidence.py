@@ -426,6 +426,12 @@ def test_interval_devices_group_by_original_inverter_without_changing_evidence()
     assert groups["House battery: Planned battery"] == {"id": "inv", "title": "Inverter 1"}
     assert groups["South roof: Solar"] == {"id": "inv", "title": "Inverter 1"}
     assert groups["Solar 2: Solar"] == {"id": "garage-inverter", "title": "Inverter 2"}
+    titles = [item["title"] for item in cards]
+    assert titles.index("Planned grid exchange: AC") < titles.index(
+        "House battery: Planned battery"
+    )
+    assert titles.index("House battery: Planned battery") < titles.index("South roof: Solar")
+    assert titles.index("Solar 2: Solar") < titles.index("Connection and limits")
     connections = [item for item in cards if item["title"] == "Connection and limits"]
     by_inverter = {item["group"]["id"]: facts([item]) for item in connections}
     assert by_inverter["inv"]["AC export"] == 0.5

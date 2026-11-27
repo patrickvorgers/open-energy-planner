@@ -337,6 +337,197 @@ def summary_cards(plan, problem):
     return cards
 
 
+def _battery_cards(problem, interval, flow, command, names, inverter_groups):
+    """Show only recorded battery dispatch and original virtual commands."""
+    cards = []
+    for unit_index, unit in enumerate(problem.batteries):
+        dispatch = next(
+            (item for item in flow.get("batteries", []) if item["device_id"] == unit.device_id),
+            None,
+        )
+        if dispatch is None:
+            continue
+        battery = unit.battery
+        target = command.get("devices", {}).get(unit.device_id, {})
+        mode = {
+            "fixed_power": "Fixed power",
+            "follow_grid_target": "Zero on the meter: Local regulation is active.",
+        }.get(target.get("mode"))
+        observations = power_limit(
+            "Charge power limit",
+            dispatch.get("charge_kwh"),
+            interval.duration_h,
+            battery.charge_limit_w,
+        ) + power_limit(
+            "Discharge power limit",
+            dispatch.get("discharge_kwh"),
+            interval.duration_h,
+            battery.discharge_limit_w,
+        )
+        stored = dispatch.get("end_kwh")
+        if recorded_number(stored) and abs(stored - battery.minimum_kwh) <= STOCK_TOLERANCE_KWH:
+            observations.append("Stored energy ends at the configured reserve.")
+        if recorded_number(stored) and abs(stored - battery.capacity_kwh) <= STOCK_TOLERANCE_KWH:
+            observations.append("Stored energy ends at usable capacity.")
+        cards.append(
+            card(
+                names.get(unit.device_id, f"Battery {unit_index + 1}") + ": Planned battery",
+                [
+                    fact("Control mode", mode),
+                    fact(
+                        "Fixed power target (+ discharge)",
+                        "Not applicable"
+                        if target.get("mode") == "follow_grid_target"
+                        else target.get("power_w"),
+                        "W",
+                    ),
+                    fact("Charge: DC terminal", dispatch.get("charge_kwh"), "kWh"),
+                    fact("Discharge: DC terminal", dispatch.get("discharge_kwh"), "kWh"),
+                    fact("Stored energy", stored, "kWh"),
+                    fact(
+                        "End SoC",
+                        stored / battery.capacity_kwh * PERCENT
+                        if recorded_number(stored)
+                        else None,
+                        "%",
+                    ),
+                    fact("Charge limit", battery.charge_limit_w, "W"),
+                    fact("Discharge limit", battery.discharge_limit_w, "W"),
+                ],
+                observations,
+                group=inverter_groups[unit.inverter_id],
+            )
+        )
+    return cards
+
+
+def _solar_cards(plan, problem, interval, flow, command, names, inverter_groups):
+    """Describe solar availability and retained curtailment even when dispatch is absent."""
+    cards = []
+    for source_index, source in enumerate(problem.pv_sources):
+        solar = next(
+            (
+                item
+                for item in (flow or {}).get("solar", [])
+                if item["source_id"] == source.source_id
+            ),
+            None,
+        )
+        cards.append(
+            card(
+                names.get(source.source_id, f"Solar {source_index + 1}") + ": Solar",
+                [
+                    fact(
+                        "Available forecast: DC",
+                        dict(interval.pv_sources)[source.source_id],
+                        "kWh",
+                    ),
+                    fact("Planned use: DC", solar.get("used_kwh") if solar else None, "kWh"),
+                    fact(
+                        "Solar production",
+                        "Curtailment requested"
+                        if command.get("devices", {}).get(source.source_id, {}).get("enabled")
+                        is False
+                        else "Production allowed"
+                        if command.get("devices", {}).get(source.source_id, {}).get("enabled")
+                        is True
+                        else "Fixed production",
+                    ),
+                    fact("Curtailment permitted", "Yes" if source.can_curtail else "No"),
+                    *forecast_facts(plan, "solar", source.source_id),
+                ],
+                ["Production disabled in this plan."]
+                if solar and solar.get("enabled") is False
+                else [],
+                group=inverter_groups[source.inverter_id],
+            )
+        )
+    return cards
+
+
+def _converter_cards(problem, interval, flow, inverter_groups):
+    """Report each converter result using its recorded AC limits and clipping flag."""
+    cards = []
+    for converter in problem.inverters:
+        dispatch = next(
+            (
+                item
+                for item in flow.get("inverters", [])
+                if item["inverter_id"] == converter.inverter_id
+            ),
+            None,
+        )
+        if dispatch is not None:
+            cards.append(
+                card(
+                    "Connection and limits",
+                    [
+                        fact("AC import", dispatch.get("import_kwh"), "kWh"),
+                        fact("AC export", dispatch.get("export_kwh"), "kWh"),
+                        fact("Shared AC limit", converter.ac_limit_w, "W"),
+                        fact(
+                            "Physical clipping recorded",
+                            "Yes"
+                            if dispatch.get("clipping") is True
+                            else "No"
+                            if dispatch.get("clipping") is False
+                            else None,
+                        ),
+                        fact("Conversion efficiency", converter.efficiency * PERCENT, "%"),
+                    ],
+                    power_limit(
+                        "Shared AC import limit",
+                        dispatch.get("import_kwh"),
+                        interval.duration_h,
+                        converter.ac_limit_w,
+                    )
+                    + power_limit(
+                        "Shared AC export limit",
+                        dispatch.get("export_kwh"),
+                        interval.duration_h,
+                        converter.ac_limit_w,
+                    ),
+                    group=inverter_groups[converter.inverter_id],
+                )
+            )
+    return cards
+
+
+def _complete_interval_outcomes(problem, flow):
+    """Require all expected devices and their known physical quantities."""
+    complete = flow is not None and all(recorded_number(value) for value in grid_quantities(flow))
+    if complete:
+        complete = all(
+            {item.get(key) for item in flow.get(collection, [])} == expected
+            and all(
+                recorded_number(item.get(field))
+                for item in flow.get(collection, [])
+                for field in fields
+            )
+            for collection, key, expected, fields in (
+                (
+                    "batteries",
+                    "device_id",
+                    {unit.device_id for unit in problem.batteries},
+                    ("charge_kwh", "discharge_kwh", "end_kwh"),
+                ),
+                (
+                    "solar",
+                    "source_id",
+                    {source.source_id for source in problem.pv_sources},
+                    ("used_kwh",),
+                ),
+                (
+                    "inverters",
+                    "inverter_id",
+                    {converter.inverter_id for converter in problem.inverters},
+                    ("import_kwh", "export_kwh"),
+                ),
+            )
+        )
+    return complete
+
+
 def interval_evidence(plan, problem, interval_index):
     """Project one archived interval without allocating shared-bus energy to an invented source route."""
     currency = plan.get("currency") or ""
@@ -426,179 +617,12 @@ def interval_evidence(plan, problem, interval_index):
                 ),
             )
         )
-        for unit_index, unit in enumerate(problem.batteries):
-            dispatch = next(
-                (item for item in flow.get("batteries", []) if item["device_id"] == unit.device_id),
-                None,
-            )
-            if dispatch is None:
-                continue
-            battery = unit.battery
-            target = command.get("devices", {}).get(unit.device_id, {})
-            mode = {
-                "fixed_power": "Fixed power",
-                "follow_grid_target": "Zero on the meter: Local regulation is active.",
-            }.get(target.get("mode"))
-            observations = power_limit(
-                "Charge power limit",
-                dispatch.get("charge_kwh"),
-                interval.duration_h,
-                battery.charge_limit_w,
-            ) + power_limit(
-                "Discharge power limit",
-                dispatch.get("discharge_kwh"),
-                interval.duration_h,
-                battery.discharge_limit_w,
-            )
-            stored = dispatch.get("end_kwh")
-            if recorded_number(stored) and abs(stored - battery.minimum_kwh) <= STOCK_TOLERANCE_KWH:
-                observations.append("Stored energy ends at the configured reserve.")
-            if (
-                recorded_number(stored)
-                and abs(stored - battery.capacity_kwh) <= STOCK_TOLERANCE_KWH
-            ):
-                observations.append("Stored energy ends at usable capacity.")
-            cards.append(
-                card(
-                    names.get(unit.device_id, f"Battery {unit_index + 1}") + ": Planned battery",
-                    [
-                        fact("Control mode", mode),
-                        fact(
-                            "Fixed power target (+ discharge)",
-                            "Not applicable"
-                            if target.get("mode") == "follow_grid_target"
-                            else target.get("power_w"),
-                            "W",
-                        ),
-                        fact("Charge: DC terminal", dispatch.get("charge_kwh"), "kWh"),
-                        fact("Discharge: DC terminal", dispatch.get("discharge_kwh"), "kWh"),
-                        fact("Stored energy", stored, "kWh"),
-                        fact(
-                            "End SoC",
-                            stored / battery.capacity_kwh * PERCENT
-                            if recorded_number(stored)
-                            else None,
-                            "%",
-                        ),
-                        fact("Charge limit", battery.charge_limit_w, "W"),
-                        fact("Discharge limit", battery.discharge_limit_w, "W"),
-                    ],
-                    observations,
-                    group=inverter_groups[unit.inverter_id],
-                )
-            )
-    for source_index, source in enumerate(problem.pv_sources):
-        solar = next(
-            (
-                item
-                for item in (flow or {}).get("solar", [])
-                if item["source_id"] == source.source_id
-            ),
-            None,
-        )
-        cards.append(
-            card(
-                names.get(source.source_id, f"Solar {source_index + 1}") + ": Solar",
-                [
-                    fact(
-                        "Available forecast: DC",
-                        dict(interval.pv_sources)[source.source_id],
-                        "kWh",
-                    ),
-                    fact("Planned use: DC", solar.get("used_kwh") if solar else None, "kWh"),
-                    fact(
-                        "Solar production",
-                        "Curtailment requested"
-                        if command.get("devices", {}).get(source.source_id, {}).get("enabled")
-                        is False
-                        else "Production allowed"
-                        if command.get("devices", {}).get(source.source_id, {}).get("enabled")
-                        is True
-                        else "Fixed production",
-                    ),
-                    fact("Curtailment permitted", "Yes" if source.can_curtail else "No"),
-                    *forecast_facts(plan, "solar", source.source_id),
-                ],
-                ["Production disabled in this plan."]
-                if solar and solar.get("enabled") is False
-                else [],
-                group=inverter_groups[source.inverter_id],
-            )
-        )
+        cards.extend(_battery_cards(problem, interval, flow, command, names, inverter_groups))
+    cards.extend(_solar_cards(plan, problem, interval, flow, command, names, inverter_groups))
     if flow is not None:
-        for converter in problem.inverters:
-            dispatch = next(
-                (
-                    item
-                    for item in flow.get("inverters", [])
-                    if item["inverter_id"] == converter.inverter_id
-                ),
-                None,
-            )
-            if dispatch is not None:
-                cards.append(
-                    card(
-                        "Connection and limits",
-                        [
-                            fact("AC import", dispatch.get("import_kwh"), "kWh"),
-                            fact("AC export", dispatch.get("export_kwh"), "kWh"),
-                            fact("Shared AC limit", converter.ac_limit_w, "W"),
-                            fact(
-                                "Physical clipping recorded",
-                                "Yes"
-                                if dispatch.get("clipping") is True
-                                else "No"
-                                if dispatch.get("clipping") is False
-                                else None,
-                            ),
-                            fact("Conversion efficiency", converter.efficiency * PERCENT, "%"),
-                        ],
-                        power_limit(
-                            "Shared AC import limit",
-                            dispatch.get("import_kwh"),
-                            interval.duration_h,
-                            converter.ac_limit_w,
-                        )
-                        + power_limit(
-                            "Shared AC export limit",
-                            dispatch.get("export_kwh"),
-                            interval.duration_h,
-                            converter.ac_limit_w,
-                        ),
-                        group=inverter_groups[converter.inverter_id],
-                    )
-                )
+        cards.extend(_converter_cards(problem, interval, flow, inverter_groups))
     cards.extend(bonus_cards(plan, interval_index))
-    complete = flow is not None and all(recorded_number(value) for value in grid_quantities(flow))
-    if complete:
-        complete = all(
-            {item.get(key) for item in flow.get(collection, [])} == expected
-            and all(
-                recorded_number(item.get(field))
-                for item in flow.get(collection, [])
-                for field in fields
-            )
-            for collection, key, expected, fields in (
-                (
-                    "batteries",
-                    "device_id",
-                    {unit.device_id for unit in problem.batteries},
-                    ("charge_kwh", "discharge_kwh", "end_kwh"),
-                ),
-                (
-                    "solar",
-                    "source_id",
-                    {source.source_id for source in problem.pv_sources},
-                    ("used_kwh",),
-                ),
-                (
-                    "inverters",
-                    "inverter_id",
-                    {converter.inverter_id for converter in problem.inverters},
-                    ("import_kwh", "export_kwh"),
-                ),
-            )
-        )
+    complete = _complete_interval_outcomes(problem, flow)
     return {
         "start": interval.start.isoformat(),
         "end": (interval.start + timedelta(hours=interval.duration_h)).isoformat(),

@@ -824,6 +824,82 @@ async function refreshSourceNames(signal) {
     layout.refreshNames(config);
     return state.catalogue.data;
 }
+/** Report the Energy fields which must be completed in Home Assistant. */
+function missingEnergyFields(hints) {
+    const missing = [];
+    if (hints.grid_power_entities && !hints.grid_power_entities.length) missing.push("net grid power");
+    for (const battery of hints.batteries) {
+        for (const key of ["soc_entity", "power_entity", "capacity_kwh", "charge_energy_entity"]) {
+            if (Object.hasOwn(battery, "capacity_kwh") && battery[key] == null) missing.push(`${battery.energy_entity}: ${key.replaceAll("_", " ")}`);
+        }
+    }
+    return missing;
+}
+
+/** Apply confirmed connection and household values to the editor. */
+function loadConnectionFields(catalogue, hints) {
+    for (const [id, kind, selected] of [
+        [
+            "grid",
+            "power",
+            hints.grid_power_entities?.[0] || hints.grid_power || config.installation?.grid_power_entity,
+        ],
+        [
+            "export-energy",
+            "energy",
+            hints.grid_export,
+        ],
+    ]) {
+        $(id).replaceChildren();
+        for (const [value, text] of sensorChoices(kind, selected)) {
+            const option = document.createElement("option");
+            option.value = value;
+            option.textContent = text;
+            $(id).append(option);
+        }
+        $(id).value = selected || "";
+        $(id).disabled = true;
+    }
+    $("grid-invert").checked =
+        false;
+    $("grid-invert").disabled = true;
+    $("import").value = config.installation
+        ? config.installation.import_limit_w / 1000
+        : "";
+    $("export").value = config.installation
+        ? config.installation.export_limit_w / 1000
+        : "";
+    $("allow-feed-in").checked = config.installation?.export_limit_w !== 0;
+    delete $("export").dataset.previousLimit;
+    const estimate = config.annual_estimate;
+    $("annual").value = config.demand?.annual_kwh ?? estimate?.annual_kwh ?? "";
+    $("annual-field").hidden = Boolean(estimate || config.demand);
+    $("grid-field").hidden = Boolean($("grid").value);
+    $("timezone").value = catalogue.data.timezone;
+    useHomeAssistantTimezone(catalogue.data.timezone);
+}
+
+/** Match current Energy devices to saved editors without letting a saved battery match twice. */
+function loadDetectedDevices(hints) {
+    const savedSolar = config.solar?.sources || [];
+    pendingSolarSources = hints.solar_sources.filter(entity => !savedSolar.some(source => source.entity_id === entity));
+    for (const source of [
+        ...hints.solar_sources.map((entity_id) => savedSolar.find((source) => source.entity_id === entity_id) || suggestedSolarSource(entity_id)),
+    ])
+        addSolar(source);
+    const savedBatteries = config.installation?.batteries || [], usedBatteries = new Set();
+    const detectedBatteries = hints.batteries.map((hint) => {
+        const { energy_entity, soc_entity, power_entity } = hint;
+        const saved = savedBatteries.find((battery) => !usedBatteries.has(battery) &&
+            (battery.energy_entity === energy_entity || (!battery.energy_entity && ((soc_entity && battery.soc_entity === soc_entity) || (power_entity && battery.power_entity === power_entity)))));
+        if (saved) usedBatteries.add(saved);
+        return { ...saved, ...hint, power_inverted: false };
+    });
+    for (const battery of detectedBatteries)
+        addBattery(battery);
+    return savedSolar.some((source) => !hints.solar_sources.includes(source.entity_id)) || usedBatteries.size < savedBatteries.length;
+}
+
 /** Reload HA discovery and confirmed settings. Keep source identities and independent revision guards. */
 async function load(refresh = false, discard = false, signal) {
     const generation = ++configurationGeneration;
@@ -875,13 +951,7 @@ async function load(refresh = false, discard = false, signal) {
     $("solar-rows").replaceChildren();
     $("battery-rows").replaceChildren();
     const hints = catalogue.data.suggestions;
-    const missing = [];
-    if (hints.grid_power_entities && !hints.grid_power_entities.length) missing.push("net grid power");
-    for (const battery of hints.batteries) {
-        for (const key of ["soc_entity", "power_entity", "capacity_kwh", "charge_energy_entity"]) {
-            if (Object.hasOwn(battery, "capacity_kwh") && battery[key] == null) missing.push(`${battery.energy_entity}: ${key.replaceAll("_", " ")}`);
-        }
-    }
+    const missing = missingEnergyFields(hints);
     if (missing.length) {
         $("wizard").hidden = true;
         status(`Complete Settings > Dashboards > Energy in Home Assistant: ${missing.join(": ")}: These settings are read-only here. Refresh after correcting them.`);
@@ -889,62 +959,8 @@ async function load(refresh = false, discard = false, signal) {
         showStep(layout.area >= 4 ? layout.area : -1);
         return;
     }
-    for (const [id, kind, selected] of [
-        [
-            "grid",
-            "power",
-            hints.grid_power_entities?.[0] || hints.grid_power || config.installation?.grid_power_entity,
-        ],
-        [
-            "export-energy",
-            "energy",
-            hints.grid_export,
-        ],
-    ]) {
-        $(id).replaceChildren();
-        for (const [value, text] of sensorChoices(kind, selected)) {
-            const option = document.createElement("option");
-            option.value = value;
-            option.textContent = text;
-            $(id).append(option);
-        }
-        $(id).value = selected || "";
-        $(id).disabled = true;
-    }
-    $("grid-invert").checked =
-        false;
-    $("grid-invert").disabled = true;
-    $("import").value = config.installation
-        ? config.installation.import_limit_w / 1000
-        : "";
-    $("export").value = config.installation
-        ? config.installation.export_limit_w / 1000
-        : "";
-    $("allow-feed-in").checked = config.installation?.export_limit_w !== 0;
-    delete $("export").dataset.previousLimit;
-    const estimate = config.annual_estimate;
-    $("annual").value = config.demand?.annual_kwh ?? estimate?.annual_kwh ?? "";
-    $("annual-field").hidden = Boolean(estimate || config.demand);
-    $("grid-field").hidden = Boolean($("grid").value);
-    $("timezone").value = catalogue.data.timezone;
-    useHomeAssistantTimezone(catalogue.data.timezone);
-    const savedSolar = config.solar?.sources || [];
-    pendingSolarSources = hints.solar_sources.filter(entity => !savedSolar.some(source => source.entity_id === entity));
-    for (const source of [
-        ...hints.solar_sources.map((entity_id) => savedSolar.find((source) => source.entity_id === entity_id) || suggestedSolarSource(entity_id)),
-    ])
-        addSolar(source);
-    const savedBatteries = config.installation?.batteries || [], usedBatteries = new Set();
-    const detectedBatteries = hints.batteries.map((hint) => {
-        const { energy_entity, soc_entity, power_entity } = hint;
-        const saved = savedBatteries.find((battery) => !usedBatteries.has(battery) &&
-            (battery.energy_entity === energy_entity || (!battery.energy_entity && ((soc_entity && battery.soc_entity === soc_entity) || (power_entity && battery.power_entity === power_entity)))));
-        if (saved) usedBatteries.add(saved);
-        return { ...saved, ...hint, power_inverted: false };
-    });
-    for (const battery of detectedBatteries)
-        addBattery(battery);
-    const membershipChanged = savedSolar.some((source) => !hints.solar_sources.includes(source.entity_id)) || usedBatteries.size < savedBatteries.length;
+    loadConnectionFields(catalogue, hints);
+    const membershipChanged = loadDetectedDevices(hints);
     $("connect").hidden = true;
     $("wizard").hidden = false;
     $("installation-save-bar").hidden = false;

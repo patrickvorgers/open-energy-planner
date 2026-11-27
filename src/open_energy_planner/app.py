@@ -89,6 +89,184 @@ DATABASE_URL_UNSET = object()
 _LOGGER = logging.getLogger(__name__)
 
 
+def _register_live_observations(
+    app, live, installation, repository, demand, lock, persist_then_install, snapshot
+):
+    """Expose versioned source updates and observation admission in live mode."""
+
+    async def configure_sources(request):
+        """Validate and commit source replacement only if the editor's expected revision matches."""
+        try:
+            body = await request.json()
+            candidate = parse_configuration(body)
+        except (ValueError, TypeError, KeyError):
+            raise web.HTTPBadRequest(text="Invalid source configuration") from None
+        async with lock:
+            if installation.current is not None:
+                raise web.HTTPConflict(text="Edit measurement roles through installation settings")
+            current_revision = live.configuration.revision if live.configuration else None
+            if body.get("expected_revision") != current_revision:
+                raise web.HTTPConflict(text="Source configuration changed. Reload before saving")
+            await persist_then_install(
+                repository.store_sources,
+                candidate,
+                live.install_configuration,
+                contract_input=False,
+            )
+        return await snapshot(request)
+
+    async def observations(request):
+        """Validate a complete report against current source bindings before refreshing live planning."""
+        from .home_assistant.observation_wire import observation_status
+
+        async with lock:
+            if live.configuration is None:
+                raise web.HTTPConflict(text="Configure measurement sources first")
+            try:
+                from datetime import UTC, datetime
+
+                body = await request.json()
+                is_peer = request.headers.get("X-OEP-View") == "commands"
+                if (
+                    is_peer
+                    and isinstance(body, dict)
+                    and body.get("config_revision") != live.configuration.revision
+                ):
+                    raise web.HTTPConflict(text="The measurement configuration changed")
+                report = parse_report(body, live.configuration, datetime.now(UTC))
+                if live.report is not None and report.captured_at <= live.report.captured_at:
+                    raise ValueError("Observation reports must advance capture time")
+                cancellation = None
+                if installation.current is not None and any(
+                    battery.calibration_enabled for battery in installation.current.batteries
+                ):
+                    previous_progress = installation.calibration.command_revision
+                    if installation.calibration.issue is None:
+                        cancellation = await complete_write(installation.observe, report)
+                    if installation.calibration.command_revision != previous_progress:
+                        live.invalidate("battery_calibration_changed")
+                demand.set_weather_location(report.location)
+                await live.receive_async(report)
+                if cancellation is not None:
+                    raise cancellation
+            except (ValueError, TypeError, KeyError):
+                raise web.HTTPBadRequest(text="Invalid observation report") from None
+            if is_peer:
+                return web.json_response(
+                    {
+                        "accepted": True,
+                        "instance_id": repository.state["instance_id"],
+                        "config_revision": live.configuration.revision,
+                        "observations": observation_status(live.configuration, live.report),
+                    }
+                )
+        return await snapshot(request)
+
+    app.router.add_put("/v1/sources", configure_sources)
+    app.router.add_post("/v1/observations", observations)
+
+
+def _register_plan_archive(app, repository):
+    """Expose immutable archive reads independently of live command state."""
+    from .runtime.diagnostics.http import phase
+
+    async def plan_history(request):
+        """List bounded immutable archive summaries without changing the active plan."""
+        try:
+            limit = int(request.query.get("limit", DEFAULT_HISTORY_LIMIT))
+            with phase(request, "archive"):
+                items = await asyncio.to_thread(
+                    repository.list_plans, limit=limit, before=request.query.get("before")
+                )
+        except (ValueError, TypeError):
+            raise web.HTTPBadRequest(text="Invalid plan history query") from None
+        except OSError:
+            raise web.HTTPServiceUnavailable(text="Plan archive unavailable") from None
+        return web.json_response(
+            {"plans": items, "next_before": items[-1]["plan_id"] if len(items) == limit else None}
+        )
+
+    async def archived_plan(request):
+        """Read original content for inspection only. Never reinstall archived commands."""
+        try:
+            plan = await asyncio.to_thread(repository.get_plan, request.match_info["plan_id"])
+        except (OSError, ValueError):
+            raise web.HTTPServiceUnavailable(text="Plan archive unavailable or invalid") from None
+        if plan is None:
+            raise web.HTTPNotFound(text="Archived plan not found")
+        return await asyncio.to_thread(lambda: web.json_response(public_reference_plan(plan)))
+
+    app.router.add_get("/v1/plans", plan_history)
+    app.router.add_get("/v1/plans/{plan_id}", archived_plan)
+
+
+def _register_weather_inputs(app, live, lock, factory, store, demand, solar, oldest_demand_history):
+    """Project shared weather into its independent solar and demand consumers."""
+
+    def solar_configured():
+        """Enable solar weather and original-run work when PV has at least one source."""
+        return bool(solar.configuration and solar.configuration.sources)
+
+    def device_weather_configured():
+        """Use shared original weather for selected temperature-sensitive devices."""
+        return demand.configuration is not None and any(
+            item["weather_sensitive"] for item in demand.consumers.selected
+        )
+
+    def oldest_original_run_history():
+        """Keep solar history and admit up to a year of device comparison weather."""
+        device_start = oldest_demand_history() if device_weather_configured() else None
+        if device_start is not None:
+            device_start = max(device_start, replay_weather_history_floor(datetime.now(UTC)))
+        return min(
+            (
+                instant
+                for instant in (
+                    device_start,
+                    *(item.hours[0].start for item in solar.histories.values() if item.hours),
+                )
+                if instant is not None
+            ),
+            default=None,
+        )
+
+    def receive_live_weather(location, rows, service, reference, until, received_at):
+        """Send one accepted run to the two independent prediction owners."""
+        from .weather.model import TemperatureHour
+
+        solar.set_weather(location, rows, service=service, received_at=received_at)
+        demand.set_live_weather(
+            tuple(TemperatureHour(row.start, row.celsius, row.received_at) for row in rows),
+            reference,
+            until,
+        )
+
+    async def receive_original_runs(location, runs):
+        """Commit a partial cohort without withdrawing missing runs, even during cancellation."""
+        if device_weather_configured():
+            demand.set_original_weather_runs(runs)
+        if solar_configured():
+            cancellation = await complete_write(
+                partial(solar.set_forecast_runs, authoritative=False), location, runs
+            )
+            if cancellation:
+                raise cancellation
+
+    register_live_weather(
+        app,
+        live,
+        lock,
+        factory,
+        store,
+        oldest_original_run_history,
+        lambda: solar_configured() or demand.configuration is not None,
+        receive_live_weather,
+        lambda: solar_configured() or device_weather_configured(),
+        receive_original_runs,
+        solar_api.SOLAR_WORKER_POLL_SECONDS,
+    )
+
+
 def create_app(
     directory,
     token,
@@ -918,110 +1096,10 @@ def create_app(
     app.router.add_post("/v1/replan", replan)
 
     if live:
-
-        async def configure_sources(request):
-            """Validate and commit source replacement only if the editor's expected revision matches."""
-            try:
-                body = await request.json()
-                candidate = parse_configuration(body)
-            except (ValueError, TypeError, KeyError):
-                raise web.HTTPBadRequest(text="Invalid source configuration") from None
-            async with lock:
-                if installation.current is not None:
-                    raise web.HTTPConflict(
-                        text="Edit measurement roles through installation settings"
-                    )
-                current_revision = live.configuration.revision if live.configuration else None
-                if body.get("expected_revision") != current_revision:
-                    raise web.HTTPConflict(
-                        text="Source configuration changed. Reload before saving"
-                    )
-                await persist_then_install(
-                    repository.store_sources,
-                    candidate,
-                    live.install_configuration,
-                    contract_input=False,
-                )
-            return await snapshot(request)
-
-        async def observations(request):
-            """Validate a complete report against current source bindings before refreshing live planning."""
-            from .home_assistant.observation_wire import observation_status
-
-            async with lock:
-                if live.configuration is None:
-                    raise web.HTTPConflict(text="Configure measurement sources first")
-                try:
-                    from datetime import UTC, datetime
-
-                    body = await request.json()
-                    is_peer = request.headers.get("X-OEP-View") == "commands"
-                    if (
-                        is_peer
-                        and isinstance(body, dict)
-                        and body.get("config_revision") != live.configuration.revision
-                    ):
-                        raise web.HTTPConflict(text="The measurement configuration changed")
-                    report = parse_report(body, live.configuration, datetime.now(UTC))
-                    if live.report is not None and report.captured_at <= live.report.captured_at:
-                        raise ValueError("Observation reports must advance capture time")
-                    cancellation = None
-                    if installation.current is not None and any(
-                        battery.calibration_enabled for battery in installation.current.batteries
-                    ):
-                        previous_progress = installation.calibration.command_revision
-                        if installation.calibration.issue is None:
-                            cancellation = await complete_write(installation.observe, report)
-                        if installation.calibration.command_revision != previous_progress:
-                            live.invalidate("battery_calibration_changed")
-                    demand.set_weather_location(report.location)
-                    await live.receive_async(report)
-                    if cancellation is not None:
-                        raise cancellation
-                except (ValueError, TypeError, KeyError):
-                    raise web.HTTPBadRequest(text="Invalid observation report") from None
-                if is_peer:
-                    return web.json_response(
-                        {
-                            "accepted": True,
-                            "instance_id": repository.state["instance_id"],
-                            "config_revision": live.configuration.revision,
-                            "observations": observation_status(live.configuration, live.report),
-                        }
-                    )
-            return await snapshot(request)
-
-        app.router.add_put("/v1/sources", configure_sources)
-        app.router.add_post("/v1/observations", observations)
-
-    async def plan_history(request):
-        """List bounded immutable archive summaries without changing the active plan."""
-        try:
-            limit = int(request.query.get("limit", DEFAULT_HISTORY_LIMIT))
-            with phase(request, "archive"):
-                items = await asyncio.to_thread(
-                    repository.list_plans, limit=limit, before=request.query.get("before")
-                )
-        except (ValueError, TypeError):
-            raise web.HTTPBadRequest(text="Invalid plan history query") from None
-        except OSError:
-            raise web.HTTPServiceUnavailable(text="Plan archive unavailable") from None
-        return web.json_response(
-            {"plans": items, "next_before": items[-1]["plan_id"] if len(items) == limit else None}
+        _register_live_observations(
+            app, live, installation, repository, demand, lock, persist_then_install, snapshot
         )
-
-    async def archived_plan(request):
-        """Read original content for inspection only. Never reinstall archived commands."""
-        try:
-            plan = await asyncio.to_thread(repository.get_plan, request.match_info["plan_id"])
-        except (OSError, ValueError):
-            raise web.HTTPServiceUnavailable(text="Plan archive unavailable or invalid") from None
-        if plan is None:
-            raise web.HTTPNotFound(text="Archived plan not found")
-        return await asyncio.to_thread(lambda: web.json_response(public_reference_plan(plan)))
-
-    app.router.add_get("/v1/plans", plan_history)
-    app.router.add_get("/v1/plans/{plan_id}", archived_plan)
+    _register_plan_archive(app, repository)
 
     app.router.add_get("/v1/snapshot", snapshot)
     app.router.add_get("/v1/readiness", readiness)
@@ -1097,68 +1175,9 @@ def create_app(
         live.strategy_issue = lambda: strategy.issue
     register_strategy(app, strategy, live, lock, persist_then_install)
 
-    def solar_configured():
-        """Enable solar weather and original-run work when PV has at least one source."""
-        return bool(solar.configuration and solar.configuration.sources)
-
-    def device_weather_configured():
-        """Use shared original weather for selected temperature-sensitive devices."""
-        return demand.configuration is not None and any(
-            item["weather_sensitive"] for item in demand.consumers.selected
-        )
-
-    def oldest_original_run_history():
-        """Keep solar history and admit up to a year of device comparison weather."""
-        device_start = oldest_demand_history() if device_weather_configured() else None
-        if device_start is not None:
-            device_start = max(device_start, replay_weather_history_floor(datetime.now(UTC)))
-        return min(
-            (
-                instant
-                for instant in (
-                    device_start,
-                    *(item.hours[0].start for item in solar.histories.values() if item.hours),
-                )
-                if instant is not None
-            ),
-            default=None,
-        )
-
-    def receive_live_weather(location, rows, service, reference, until, received_at):
-        """Send one accepted run to the two independent prediction owners."""
-        from .weather.model import TemperatureHour
-
-        solar.set_weather(location, rows, service=service, received_at=received_at)
-        demand.set_live_weather(
-            tuple(TemperatureHour(row.start, row.celsius, row.received_at) for row in rows),
-            reference,
-            until,
-        )
-
-    async def receive_original_runs(location, runs):
-        """Commit a partial cohort without withdrawing missing runs, even during cancellation."""
-        if device_weather_configured():
-            demand.set_original_weather_runs(runs)
-        if solar_configured():
-            cancellation = await complete_write(
-                partial(solar.set_forecast_runs, authoritative=False), location, runs
-            )
-            if cancellation:
-                raise cancellation
-
     register_solar(app, solar, live, lock, persist_then_install, snapshot, setup_catalogue)
-    register_live_weather(
-        app,
-        live,
-        lock,
-        live_weather_factory,
-        weather_store,
-        oldest_original_run_history,
-        lambda: solar_configured() or demand.configuration is not None,
-        receive_live_weather,
-        lambda: solar_configured() or device_weather_configured(),
-        receive_original_runs,
-        solar_api.SOLAR_WORKER_POLL_SECONDS,
+    _register_weather_inputs(
+        app, live, lock, live_weather_factory, weather_store, demand, solar, oldest_demand_history
     )
     register_installation(
         app, installation, solar, live, lock, persist_then_install, snapshot, setup_catalogue

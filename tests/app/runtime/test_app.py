@@ -39,6 +39,25 @@ def test_short_token_is_rejected(tmp_path):
         create_app(tmp_path, "short")
 
 
+@pytest.mark.parametrize("source,expected_status", [("synthetic", 404), ("home_assistant", 409)])
+def test_observation_route_requires_authenticated_live_configuration(
+    tmp_path, source, expected_status
+):
+    """Only the authenticated live app can admit a measurement report after configuration."""
+    from aiohttp.test_utils import TestClient, TestServer
+
+    async def scenario():
+        async with TestClient(TestServer(create_app(tmp_path, TOKEN, source=source))) as client:
+            async with client.post("/v1/observations", json={}) as response:
+                assert response.status == 401
+            async with client.post(
+                "/v1/observations", json={}, headers={"Authorization": f"Bearer {TOKEN}"}
+            ) as response:
+                assert response.status == expected_status
+
+    asyncio.run(scenario())
+
+
 def test_control_retries_create_only_one_new_plan_and_ack_is_not_execution(tmp_path):
     """Retry one enable request. Retain one new plan and record acknowledgement without claiming physical execution."""
 
