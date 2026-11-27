@@ -1117,12 +1117,16 @@ def test_partial_first_interval_uses_quarter_axis_without_inventing_prior_energy
     page.get_by_role("button", name="Connect", exact=True).click()
     expect(page.locator("#overview-status")).to_contain_text("Connected")
     state = page.evaluate("""() => ({
+        forecastTicks: Chart.getChart(document.getElementById("forecast-chart")).scales.x.ticks.map(tick => tick.value),
         axes: ['plan-chart','reference-chart','self-consumption-chart','forecast-chart','price-chart'].map(id => Chart.getChart(document.getElementById(id)).scales.x.min),
         ends: ['plan-chart','reference-chart','self-consumption-chart','forecast-chart','price-chart'].map(id => Chart.getChart(document.getElementById(id)).scales.x.max),
         first: Chart.getChart(document.getElementById('plan-chart')).data.datasets[0].data[0],
         last: Chart.getChart(document.getElementById('plan-chart')).data.datasets[0].data.at(-1)
     })""")
     assert state["axes"] == [beginning.timestamp() * 1000] * 5
+    assert state["forecastTicks"] == [
+        (beginning + timedelta(minutes=minutes)).timestamp() * 1000 for minutes in (0, 15, 30)
+    ]
     assert state["first"]["start"] == beginning.timestamp() * 1000
     assert state["first"]["end"] == (beginning + timedelta(minutes=15)).timestamp() * 1000
     assert state["first"]["coveredStart"] == partial.timestamp() * 1000

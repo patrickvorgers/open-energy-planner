@@ -712,6 +712,29 @@ function inspectGridExchange(datasets, element) {
     $("evidence-time").scrollIntoView({block: "nearest"});
 }
 
+/** Use calendar dates for daily totals and quarter boundaries for planning charts. */
+function buildOverviewTimeTicks(scale, canvas, datasets, calendarDates) {
+    if (calendarDates) {
+        const boundaries = [...new Set(datasets.flatMap(dataset => dataset.data.map(point => point.x)))].sort((left, right) => left - right);
+        const labels = Math.max(2, Math.min(MAX_TIME_AXIS_LABELS, Math.floor((scale.maxWidth || canvas.clientWidth) / DAILY_DATE_LABEL_MIN_WIDTH_PX)));
+        scale.ticks = [...new Set(Array.from({length: labels}, (_entry, index) => boundaries[Math.round(index * (boundaries.length - 1) / (labels - 1))]))].filter(Number.isFinite).map(value => ({value}));
+        return;
+    }
+    const first = Math.ceil(scale.min / QUARTER_MILLISECONDS);
+    const last = Math.floor(scale.max / QUARTER_MILLISECONDS);
+    const stride = Math.max(1, Math.ceil((last - first) / (MAX_TIME_AXIS_LABELS - 1)));
+    scale.ticks = [];
+    for (let quarter = first; quarter <= last; quarter += stride) scale.ticks.push({value: quarter * QUARTER_MILLISECONDS});
+}
+
+/** Configure the primary value scale and the optional battery state scale. */
+function overviewValueAxes({id, unit, minimum, balance, hasSoc, linked}) {
+    return {
+        y: {min: minimum ?? undefined, suggestedMin: balance ? 0 : undefined, stacked: balance, beginAtZero: id === "price-chart", title: {display: Boolean(unit), text: unit}, afterFit: linked ? scale => { scale.width = LINKED_LEFT_AXIS_PX; } : undefined, grid: {color: (context) => context.tick.value === 0 ? "#455d70" : "#edf1f5", lineWidth: (context) => context.tick.value === 0 ? 2 : 1}, ticks: {maxTicksLimit: 6, callback: (value) => unit === "W" ? number(value) : valueText(value, unit)}},
+        ...(hasSoc ? {soc: {position: "right", min: 0, max: 100, stacked: false, afterFit: linked ? scale => { scale.width = LINKED_RIGHT_AXIS_PX; } : undefined, title: {display: true, text: "SoC (%)"}, ticks: {callback: (value) => percentage(value, false)}, grid: {drawOnChartArea: false}}} : {})
+    };
+}
+
 /**
  * Render series into canvas id, destroying its previous chart, removing its tooltip
  * and rebuilding its accessible legend. Current-price series retain their visibility.
@@ -807,23 +830,10 @@ function chart(id, series, {utcDays = false, calendarDates = false, unit = "", m
                 afterBody: items => chartTooltipNotes(items, {id, balance, axisTime, priceHoverTime})
             }}},
             scales: {x: {type: "linear", offset: false, grid: {display: false}, display: id !== "plan-chart",
-                afterBuildTicks: utcDays ? undefined : (scale) => {
-                    if (calendarDates) {
-                        const boundaries = [...new Set(datasets.flatMap(dataset => dataset.data.map(point => point.x)))].sort((left, right) => left - right);
-                        const labels = Math.max(2, Math.min(MAX_TIME_AXIS_LABELS, Math.floor((scale.maxWidth || canvas.clientWidth) / DAILY_DATE_LABEL_MIN_WIDTH_PX)));
-                        scale.ticks = [...new Set(Array.from({length: labels}, (_entry, index) => boundaries[Math.round(index * (boundaries.length - 1) / (labels - 1))]))].filter(Number.isFinite).map(value => ({value}));
-                        return;
-                    }
-                    const first = Math.ceil(scale.min / QUARTER_MILLISECONDS);
-                    const last = Math.floor(scale.max / QUARTER_MILLISECONDS);
-                    const stride = Math.max(1, Math.ceil((last - first) / (MAX_TIME_AXIS_LABELS - 1)));
-                    scale.ticks = [];
-                    for (let quarter = first; quarter <= last; quarter += stride) scale.ticks.push({value: quarter * QUARTER_MILLISECONDS});
-                },
+                afterBuildTicks: utcDays ? undefined : (scale) => buildOverviewTimeTicks(scale, canvas, datasets, calendarDates),
                 ticks: {maxTicksLimit: MAX_TIME_AXIS_LABELS, maxRotation: 0, callback: (value) => utcDays || calendarDates ? axisTime(value) : calendarTime(value)},
                 title: {display: utcDays || calendarDates, text: "Calendar date"}},
-                y: {min: minimum ?? undefined, suggestedMin: balance ? 0 : undefined, stacked: balance, beginAtZero: id === "price-chart", title: {display: Boolean(unit), text: unit}, afterFit: linked ? scale => { scale.width = LINKED_LEFT_AXIS_PX; } : undefined, grid: {color: (context) => context.tick.value === 0 ? "#455d70" : "#edf1f5", lineWidth: (context) => context.tick.value === 0 ? 2 : 1}, ticks: {maxTicksLimit: 6, callback: (value) => unit === "W" ? number(value) : valueText(value, unit)}},
-                ...(hasSoc ? {soc: {position: "right", min: 0, max: 100, stacked: false, afterFit: linked ? scale => { scale.width = LINKED_RIGHT_AXIS_PX; } : undefined, title: {display: true, text: "SoC (%)"}, ticks: {callback: (value) => percentage(value, false)}, grid: {drawOnChartArea: false}}} : {})},
+                ...overviewValueAxes({id, unit, minimum, balance, hasSoc, linked})},
             onClick: id === "energy-chart" ? (_event, elements) => inspectGridExchange(datasets, elements[0]) : undefined
         }
     });
@@ -1333,6 +1343,61 @@ async function finishPlanSupplements(simulationRead, plan, id, request) {
     }
 }
 
+/** Replace interval prices with their original native rates and explicit gaps when available. */
+function applyIntervalTariffEvidence(plan, {spot, buy, sell}) {
+    const tariffEvidence = plan.input_snapshot?.tariff_evidence || [];
+    if (tariffEvidence.length) {
+        buy.length = 0; sell.length = 0;
+        for (const tariff of tariffEvidence) {
+            const start = Date.parse(tariff.start), end = Date.parse(tariff.end);
+            if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) continue;
+            for (const [points, value] of [[spot, tariff.market_price], [buy, tariff.buy_price], [sell, tariff.sell_price]]) {
+                const previousEnd = points.at(-1)?.[0];
+                if (previousEnd != null && start > previousEnd) points.push([previousEnd, null], [start, null]);
+                points.push([start, typeof value === "number" ? value : null, tariff.price_kind], [end, typeof value === "number" ? value : null, tariff.price_kind]);
+            }
+        }
+    }
+}
+
+/** Use recorded grid totals or both recorded directional flows. */
+function intervalGridTotals(flow) {
+    const imported = flow.grid_import ?? (flow.grid_to_load != null && flow.grid_to_battery != null ? flow.grid_to_load + flow.grid_to_battery : null);
+    const exported = flow.grid_export ?? (flow.pv_to_grid != null && flow.battery_to_grid != null ? flow.pv_to_grid + flow.battery_to_grid : null);
+    return {imported, exported};
+}
+
+/** Add solar commands and corresponding inspector cards in their declared order. */
+function appendIntervalSolarEvidence(plan, step, command, inverterGroups, {commands, deviceValues}) {
+    for (const [index, [source]] of (step.pv_sources || []).entries()) {
+        const enabled = command?.devices?.[source]?.enabled;
+        const name = plan.comparison_names?.[source] || `Solar ${index + 1}`;
+        const production = enabled === false ? "Curtailment requested" : enabled === true ? "Production allowed" : "Fixed production";
+        commands.push(`${name}: ${production}`);
+        const inverter = plan.input_snapshot?.problem?.pv_sources?.find((unit) => unit.source_id === source)?.inverter_id;
+        deviceValues.push(intervalCard(name, [["Solar production", production]], inverterGroups.get(inverter)));
+    }
+}
+
+/** Add battery commands, stored energy, and attributed routes for one inspected interval. */
+function appendIntervalBatteryEvidence({plan, flow, command, intervalIndex, batteryLabels, identities, inverterGroups}, {commands, deviceValues, batteryFlowValues}) {
+    for (const [index, battery] of (flow.batteries || []).entries()) {
+        const name = batteryLabels.get(battery.device_id) || `Battery ${index + 1}`;
+        const target = command?.devices?.[battery.device_id];
+        const text = target?.mode === "follow_grid_target" ? "Zero on the meter (local regulation)" : target?.power_w != null ? `${Math.round(target.power_w)} W fixed power (+ discharge)` : "No command";
+        commands.push(`${name}: ${text}: Stored: ${number(battery.end_kwh)} kWh`);
+        const inverter = identities.find((unit) => unit.device_id === battery.device_id)?.inverter_id;
+        deviceValues.push(intervalCard(name, [["Control", text], ["Stored energy", battery.end_kwh, "kWh"]], inverterGroups.get(inverter)));
+        const attribution = plan.battery_flow_attribution?.[intervalIndex]?.[battery.device_id];
+        for (const {key, title, routes} of BATTERY_FLOW_GROUPS) {
+            const values = batteryRouteValues(battery, attribution, key);
+            const facts = routes.filter(([route]) => values?.[route] >= BATTERY_FLOW_DISPLAY_MIN)
+                .map(([route, label]) => [label, values[route], "kWh"]);
+            if (facts.length) batteryFlowValues.push(intervalCard(`${name}: ${title}`, facts));
+        }
+    }
+}
+
 /**
  * Fetch frozen advice and separate valuations, ignoring stale selection responses.
  * Read plan and simulations concurrently, displaying the original as soon as it arrives. Evidence loads only on disclosure.
@@ -1400,8 +1465,7 @@ async function showPlan(signal, background = false) {
         intervals.forEach((step, i) => {
             // Keep every declared interval in the inspector. Absent evidence must not shift later values.
             const flow = plan.expected_flows?.[i] || {};
-            const imported = flow.grid_import ?? (flow.grid_to_load != null && flow.grid_to_battery != null ? flow.grid_to_load + flow.grid_to_battery : null);
-            const exported = flow.grid_export ?? (flow.pv_to_grid != null && flow.battery_to_grid != null ? flow.pv_to_grid + flow.battery_to_grid : null);
+            const {imported, exported} = intervalGridTotals(flow);
             const command = plan.steps.find((entry) => new Date(entry.start) <= new Date(step.start) && new Date(entry.end) > new Date(step.start));
             const time = new Date(step.start).getTime();
             // Use the recorded boundary. Rebuilding microsecond durations can exceed Date's millisecond endpoint.
@@ -1424,29 +1488,11 @@ async function showPlan(signal, background = false) {
                     applianceValues.push(intervalCard(name, [["Energy in this interval", energy, "kWh"], ["Cycle starts", when(task.start)], ["Cycle ends", when(task.end)]]));
                 }
             }
-            for (const [index, battery] of (flow.batteries || []).entries()) {
-                const name = batteryLabels.get(battery.device_id) || `Battery ${index + 1}`;
-                const target = command?.devices?.[battery.device_id];
-                const text = target?.mode === "follow_grid_target" ? "Zero on the meter (local regulation)" : target?.power_w != null ? `${Math.round(target.power_w)} W fixed power (+ discharge)` : "No command";
-                commands.push(`${name}: ${text}: Stored: ${number(battery.end_kwh)} kWh`);
-                const inverter = identities.find((unit) => unit.device_id === battery.device_id)?.inverter_id;
-                deviceValues.push(intervalCard(name, [["Control", text], ["Stored energy", battery.end_kwh, "kWh"]], inverterGroups.get(inverter)));
-                const attribution = plan.battery_flow_attribution?.[i]?.[battery.device_id];
-                for (const {key, title, routes} of BATTERY_FLOW_GROUPS) {
-                    const values = batteryRouteValues(battery, attribution, key);
-                    const facts = routes.filter(([route]) => values?.[route] >= BATTERY_FLOW_DISPLAY_MIN)
-                        .map(([route, label]) => [label, values[route], "kWh"]);
-                    if (facts.length) batteryFlowValues.push(intervalCard(`${name}: ${title}`, facts));
-                }
-            }
-            for (const [index, [source]] of (step.pv_sources || []).entries()) {
-                const enabled = command?.devices?.[source]?.enabled;
-                const name = plan.comparison_names?.[source] || `Solar ${index + 1}`;
-                const production = enabled === false ? "Curtailment requested" : enabled === true ? "Production allowed" : "Fixed production";
-                commands.push(`${name}: ${production}`);
-                const inverter = plan.input_snapshot?.problem?.pv_sources?.find((unit) => unit.source_id === source)?.inverter_id;
-                deviceValues.push(intervalCard(name, [["Solar production", production]], inverterGroups.get(inverter)));
-            }
+            appendIntervalBatteryEvidence(
+                {plan, flow, command, intervalIndex: i, batteryLabels, identities, inverterGroups},
+                {commands, deviceValues, batteryFlowValues}
+            );
+            appendIntervalSolarEvidence(plan, step, command, inverterGroups, {commands, deviceValues});
             inspectSteps.push({start: time, end, commands,
                 gridImport: imported, gridExport: exported, currency,
                 ...rates,
@@ -1483,19 +1529,7 @@ async function showPlan(signal, background = false) {
         }
         chart("energy-chart", gridExchangeSeries(plan, periodCostPlan?.projection.comparison || periodCostPlan?.scenarios?.self_consumption?.comparison, periodCostPlan?.scenarios?.without_battery?.comparison), {unit: "W", preserveVisibility: samePlan, deferRange: true});
         chart("forecast-chart", [{name: "Household demand forecast: AC", points: demandForecast, color: "#23965e"}, {name: "Available solar forecast: DC", points: solarForecast, color: "#b58900"}], {unit: "kW", minimum: 0, preserveVisibility: samePlan, deferRange: true});
-        const tariffEvidence = plan.input_snapshot?.tariff_evidence || [];
-        if (tariffEvidence.length) {
-            buy.length = 0; sell.length = 0;
-            for (const tariff of tariffEvidence) {
-                const start = Date.parse(tariff.start), end = Date.parse(tariff.end);
-                if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) continue;
-                for (const [points, value] of [[spot, tariff.market_price], [buy, tariff.buy_price], [sell, tariff.sell_price]]) {
-                    const previousEnd = points.at(-1)?.[0];
-                    if (previousEnd != null && start > previousEnd) points.push([previousEnd, null], [start, null]);
-                    points.push([start, typeof value === "number" ? value : null, tariff.price_kind], [end, typeof value === "number" ? value : null, tariff.price_kind]);
-                }
-            }
-        }
+        applyIntervalTariffEvidence(plan, {spot, buy, sell});
         const priceSeries = [{name: "Spot market rate", points: spot, color: "#d9a300"}, {name: "Import rate", points: buy, color: "#d56788"}, {name: "Export rate", points: sell, color: "#399bc1"}];
         if (bonusRules.length) priceSeries.push({name: "Export rate incl. bonus", points: bonusSell, color: "#9255b7"});
         priceInputPlanId = id;
