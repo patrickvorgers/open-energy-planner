@@ -808,6 +808,14 @@ def test_frozen_household_device_and_pv_evidence_survives_restart_without_hindsi
         }
     assert plan == old_plan
 
+    missing_solar_plan = deepcopy(plan)
+    missing_solar_plan["input_snapshot"]["solar_evidence"][0]["forecast_version"] = "absent"
+    missing_solar = evidence(
+        missing_solar_plan, archive, archive.documents, solar, START + timedelta(hours=4)
+    )
+    assert missing_solar["series"] == [household, heat]
+    assert missing_solar["issues"] == ["Original solar forecast evidence unavailable"]
+
     archive.documents.write("quality-components-original.json", {"selected": False})
     missing_components = evidence(
         plan, archive, archive.documents, solar, START + timedelta(hours=4)
