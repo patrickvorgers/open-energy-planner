@@ -593,7 +593,7 @@ def test_a_dark_validation_day_counts_when_its_zero_measurements_are_complete():
 
 
 def test_meter_gap_and_negative_correction_remain_excluded_without_rewriting_history():
-    """An absent counter hour and a decreasing correction are invalid evidence rather than dark-hour zeros."""
+    """Meter gaps and corrections are excluded, even when a corrected hour also lacks weather."""
     configuration = plant()
     history, physical, weather, before = training_data()
     gap_at = START + timedelta(days=12, hours=12)
@@ -606,6 +606,7 @@ def test_meter_gap_and_negative_correction_remain_excluded_without_rewriting_his
             if row.start != gap_at
         ),
     )
+    weather = tuple(row for row in weather if row.start != correction_at)
     original = deepcopy(history)
     result = fit_boosted_model(
         configuration.sources[0],
@@ -619,6 +620,7 @@ def test_meter_gap_and_negative_correction_remain_excluded_without_rewriting_his
     assert history == original
     assert result.summary.excluded_counts["history_gap"] == 1
     assert result.summary.excluded_counts["meter_correction"] == 1
+    assert "weather_missing" not in result.summary.excluded_counts
     assert result.summary.excluded_counts["production_out_of_range"] == 1
     assert result.model is not None
 

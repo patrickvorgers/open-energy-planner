@@ -771,42 +771,8 @@ def _periods(excluded):
     return tuple(periods)
 
 
-def fit_boosted_model(
-    source,
-    inverter,
-    location,
-    history,
-    physical_hours,
-    weather,
-    before,
-    *,
-    forecast_runs=None,
-    forecast_physical=None,
-    known_at=None,
-    feedback=None,
-):
-    """Train direct measured production on clean older daylight and score a later week.
-
-    PVWatts enters only the held-out comparison. Neither its estimates nor model
-    errors select training targets. Statistical anomalies are diagnostics only.
-    Raw cumulative history remains unchanged. Control declarations are bounded
-    to their explicit historical UTC period and cannot authorize future outcomes.
-    """
-    before = aware(before)
-    known_at = aware(known_at) if known_at is not None else before
-    if known_at < before:
-        raise ValueError("Solar training knowledge precedes its outcome cutoff")
-    source_hours = max(0, len(history.hours) - 1) if history else 0
-    samples = _weather_samples(
-        source, location, weather, physical_hours, forecast_runs, forecast_physical
-    )
-    instants = tuple(following.start for following in history.hours[1:]) if history else ()
-    geometry = _history_geometry(instants, location)
-    max_power_kw = (
-        inverter.ac_limit_w / 1000
-        if source.measurement_boundary == "ac"
-        else source.capacity_w / 1000 * MAX_DC_CAPACITY_MULTIPLE
-    )
+def _training_rows(source, history, samples, geometry, before, known_at, max_power_kw, feedback):
+    """Build eligible measured rows and retain the first exclusion reason per weather sample."""
     rows, excluded, diagnostics = [], [], []
     for previous, following in pairwise(history.hours if history else ()):
         instant = following.start
@@ -848,17 +814,18 @@ def fit_boosted_model(
             if source.can_curtail and observed == 0 and conditions.ghi >= HIGH_IRRADIANCE_W_M2:
                 diagnostics.append((instant, "possible_production_limitation"))
     rows.sort(key=lambda row: (row[0], row[3]))
-    excluded, diagnostics = sorted(set(excluded)), sorted(set(diagnostics))
-    validation_end = before.replace(hour=0, minute=0, second=0, microsecond=0)
-    cutoff = validation_end - timedelta(days=VALIDATION_DAYS)
-    training = [(row[0], None, row[2], row[3]) for row in rows if row[0] < cutoff]
-    validation = [row for row in rows if cutoff <= row[0] < validation_end]
+    return rows, sorted(set(excluded)), sorted(set(diagnostics))
+
+
+def _yield_anomalies(training, capacity_w):
+    """Report irradiance-yield anomalies in older training hours without removing them."""
     groups = defaultdict(list)
     for row in training:
         if row[3][GHI_FEATURE_INDEX] * 1000 >= MIN_DIAGNOSTIC_IRRADIANCE_W_M2:
             groups[(row[0].hour, (row[0].timetuple().tm_yday - 1) // OUTLIER_SEASON_DAYS)].append(
                 row
             )
+    anomalies = []
     for group in groups.values():
         if len(group) < MIN_OUTLIER_GROUP_SAMPLES:
             continue
@@ -866,14 +833,61 @@ def fit_boosted_model(
         quartiles = quantiles(ratios, n=4, method="inclusive")
         distance = max(
             (quartiles[2] - quartiles[0]) * OUTLIER_IQR_MULTIPLIER,
-            source.capacity_w / 1000 * MIN_OUTLIER_RATIO_DISTANCE / 1000,
+            capacity_w / 1000 * MIN_OUTLIER_RATIO_DISTANCE / 1000,
         )
         center = median(ratios)
-        diagnostics.extend(
+        anomalies.extend(
             (row[0], "irradiance_yield_anomaly")
             for row, ratio in zip(group, ratios, strict=True)
             if abs(ratio - center) > distance
         )
+    return anomalies
+
+
+def fit_boosted_model(
+    source,
+    inverter,
+    location,
+    history,
+    physical_hours,
+    weather,
+    before,
+    *,
+    forecast_runs=None,
+    forecast_physical=None,
+    known_at=None,
+    feedback=None,
+):
+    """Train direct measured production on clean older daylight and score a later week.
+
+    PVWatts enters only the held-out comparison. Neither its estimates nor model
+    errors select training targets. Statistical anomalies are diagnostics only.
+    Raw cumulative history remains unchanged. Control declarations are bounded
+    to their explicit historical UTC period and cannot authorize future outcomes.
+    """
+    before = aware(before)
+    known_at = aware(known_at) if known_at is not None else before
+    if known_at < before:
+        raise ValueError("Solar training knowledge precedes its outcome cutoff")
+    source_hours = max(0, len(history.hours) - 1) if history else 0
+    samples = _weather_samples(
+        source, location, weather, physical_hours, forecast_runs, forecast_physical
+    )
+    instants = tuple(following.start for following in history.hours[1:]) if history else ()
+    geometry = _history_geometry(instants, location)
+    max_power_kw = (
+        inverter.ac_limit_w / 1000
+        if source.measurement_boundary == "ac"
+        else source.capacity_w / 1000 * MAX_DC_CAPACITY_MULTIPLE
+    )
+    rows, excluded, diagnostics = _training_rows(
+        source, history, samples, geometry, before, known_at, max_power_kw, feedback
+    )
+    validation_end = before.replace(hour=0, minute=0, second=0, microsecond=0)
+    cutoff = validation_end - timedelta(days=VALIDATION_DAYS)
+    training = [(row[0], None, row[2], row[3]) for row in rows if row[0] < cutoff]
+    validation = [row for row in rows if cutoff <= row[0] < validation_end]
+    diagnostics.extend(_yield_anomalies(training, source.capacity_w))
     diagnostics = sorted(set(diagnostics))
     training_days = len({row[0].date() for row in training})
     validation_days = len({row[0].date() for row in validation})
