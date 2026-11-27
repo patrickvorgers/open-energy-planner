@@ -214,6 +214,16 @@ def test_successful_selected_ci_package_remains_eligible(evidence):
     assert dev_bundle.evidence(evidence, 40969348570, "e" * 64)["build"] == "733.1"
 
 
+def test_ambiguous_pr_association_fails_before_reading_installation_artifacts(evidence):
+    """A run with two matching merged PR associations has no unique source."""
+    associated = evidence.documents[
+        f"repos/patrickvorgers/open-energy-planner/commits/{HEAD}/pulls?per_page=100"
+    ]
+    associated.append({**associated[0], "number": 122})
+    with pytest.raises(VerificationError, match="no unique merged PR"):
+        dev_bundle.evidence(evidence, 40969348570, "e" * 64)
+
+
 @pytest.mark.parametrize("focused", [False, True])
 @pytest.mark.parametrize("conclusion", ["failure", "cancelled", None])
 def test_unsuccessful_tree_steps_never_admit_a_package(evidence, focused, conclusion):

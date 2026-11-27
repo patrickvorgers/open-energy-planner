@@ -71,6 +71,54 @@ def complete_rows(document, key):
     return rows
 
 
+def _verified_merge(client, root, head, event):
+    """Resolve exactly one signed source merge still reachable from main."""
+    associated = client.get_list(f"{root}/commits/{head}/pulls?per_page={API_PAGE_SIZE}")
+    require(len(associated) < API_PAGE_SIZE, "Incomplete merged PR evidence")
+    candidates = [
+        pull
+        for pull in associated
+        if pull.get("base", {}).get("ref") == "main"
+        and (
+            pull.get("head", {}).get("sha") == head
+            if event == "pull_request"
+            else pull.get("merge_commit_sha") == head
+        )
+    ]
+    require(len(candidates) == 1, "CI source has no unique merged PR")
+    pull = client.get(f"{root}/pulls/{positive_id(candidates[0].get('number'))}")
+    require(
+        pull.get("merged") is True
+        and pull.get("base", {}).get("ref") == "main"
+        and all(
+            pull.get(key, {}).get("repo", {}).get("full_name") == REPOSITORY
+            for key in ("base", "head")
+        )
+        and (
+            pull.get("head", {}).get("sha") == head
+            if event == "pull_request"
+            else pull.get("merge_commit_sha") == head
+        ),
+        "CI source PR has not been merged onto main",
+    )
+    merged_sha = sha(pull.get("merge_commit_sha"))
+    merged = client.get(f"{root}/git/commits/{merged_sha}")
+    require(
+        merged.get("sha") == merged_sha
+        and merged.get("verification", {}).get("verified") is True
+        and merged.get("verification", {}).get("reason") == "valid",
+        "Merged source is not GitHub Verified",
+    )
+    tree = sha(merged.get("tree", {}).get("sha"))
+    ancestry = client.get(f"{root}/compare/{merged_sha}...main")
+    require(
+        ancestry.get("status") in {"ahead", "identical"}
+        and ancestry.get("merge_base_commit", {}).get("sha") == merged_sha,
+        "Source merge is no longer on main",
+    )
+    return merged_sha, tree
+
+
 def evidence(client, run_id, archive_digest):
     """Bind a successful original run and artifact to a verified merge that remains on main."""
     root = f"repos/{REPOSITORY}"
@@ -94,49 +142,7 @@ def evidence(client, run_id, archive_digest):
         ),
         "CI run is not a successful original Checks run",
     )
-    associated = client.get_list(f"{root}/commits/{head}/pulls?per_page={API_PAGE_SIZE}")
-    require(len(associated) < API_PAGE_SIZE, "Incomplete merged PR evidence")
-    candidates = [
-        pull
-        for pull in associated
-        if pull.get("base", {}).get("ref") == "main"
-        and (
-            pull.get("head", {}).get("sha") == head
-            if run["event"] == "pull_request"
-            else pull.get("merge_commit_sha") == head
-        )
-    ]
-    require(len(candidates) == 1, "CI source has no unique merged PR")
-    pull = client.get(f"{root}/pulls/{positive_id(candidates[0].get('number'))}")
-    require(
-        pull.get("merged") is True
-        and pull.get("base", {}).get("ref") == "main"
-        and all(
-            pull.get(key, {}).get("repo", {}).get("full_name") == REPOSITORY
-            for key in ("base", "head")
-        )
-        and (
-            pull.get("head", {}).get("sha") == head
-            if run["event"] == "pull_request"
-            else pull.get("merge_commit_sha") == head
-        ),
-        "CI source PR has not been merged onto main",
-    )
-    merged_sha = sha(pull.get("merge_commit_sha"))
-    merged = client.get(f"{root}/git/commits/{merged_sha}")
-    require(
-        merged.get("sha") == merged_sha
-        and merged.get("verification", {}).get("verified") is True
-        and merged.get("verification", {}).get("reason") == "valid",
-        "Merged source is not GitHub Verified",
-    )
-    tree = sha(merged.get("tree", {}).get("sha"))
-    ancestry = client.get(f"{root}/compare/{merged_sha}...main")
-    require(
-        ancestry.get("status") in {"ahead", "identical"}
-        and ancestry.get("merge_base_commit", {}).get("sha") == merged_sha,
-        "Source merge is no longer on main",
-    )
+    merged_sha, tree = _verified_merge(client, root, head, run["event"])
     jobs = complete_rows(
         client.get(
             f"{root}/actions/runs/{run_id}/attempts/{attempt}/jobs?per_page={API_PAGE_SIZE}"
