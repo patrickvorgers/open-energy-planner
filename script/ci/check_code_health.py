@@ -85,8 +85,25 @@ def unmatched(functions_in_revision, other_revision):
             yield function
 
 
+def increased_budgets(function, former):
+    """Report each metric that grew above its limit."""
+    measurements = (
+        (
+            "cyclomatic complexity",
+            function.complexity,
+            former.complexity if former else 0,
+            MAX_COMPLEXITY,
+        ),
+        ("lines of code", function.code_lines, former.code_lines if former else 0, MAX_CODE_LINES),
+    )
+    for label, value, before, limit in measurements:
+        if value > max(limit, before):
+            measurement = f"{before} to {value}" if former else str(value)
+            yield f"{label} {measurement} (limit {limit})"
+
+
 def code_health_findings(path, current_source, old_path=None, old_source=""):
-    """Flag new or growing over-budget measurements without a checked-in baseline."""
+    """Compare the function groups and report new or growing measurements."""
     previous = functions(old_path, old_source) if old_path else {}
     for name, current in functions(path, current_source).items():
         prior = previous.get(name, ())
@@ -94,23 +111,20 @@ def code_health_findings(path, current_source, old_path=None, old_source=""):
         replaced = list(unmatched(prior, current))
         former = replaced[0] if len(modified) == len(replaced) == 1 else None
         for function in modified:
-            for label, value, before, limit in (
-                (
-                    "cyclomatic complexity",
-                    function.complexity,
-                    former.complexity if former else 0,
-                    MAX_COMPLEXITY,
-                ),
-                (
-                    "lines of code",
-                    function.code_lines,
-                    former.code_lines if former else 0,
-                    MAX_CODE_LINES,
-                ),
-            ):
-                if value > max(limit, before):
-                    measurement = f"{before} to {value}" if former else str(value)
-                    yield f"{path}:{function.line}: {name}: {label} {measurement} (limit {limit})"
+            for issue in increased_budgets(function, former):
+                yield f"{path}:{function.line}: {name}: {issue}"
+
+
+def worktree_findings(root, base):
+    """Load the relevant Git and working-tree source pairs for comparison."""
+    for path, old_path in changed_sources(root, base):
+        source_path = root / path
+        if source_path.is_symlink():
+            continue
+        prior = git_text(root, "show", f"{base}:{old_path}") if old_path else ""
+        yield from code_health_findings(
+            path, source_path.read_text(encoding="utf-8"), old_path, prior
+        )
 
 
 def main():
@@ -125,16 +139,7 @@ def main():
         base = git_text(
             root, "rev-parse", "--verify", "--end-of-options", f"{args.base}^{{commit}}"
         )
-        base = base.strip()
-        findings = []
-        for path, old_path in changed_sources(root, base):
-            source_path = root / path
-            if source_path.is_symlink():
-                continue
-            prior = git_text(root, "show", f"{base}:{old_path}") if old_path else ""
-            findings.extend(
-                code_health_findings(path, source_path.read_text(encoding="utf-8"), old_path, prior)
-            )
+        findings = list(worktree_findings(root, base.strip()))
     except (OSError, ValueError, subprocess.SubprocessError) as error:
         parser.exit(2, f"Could not check code health: {error}\n")
     if findings:
