@@ -670,6 +670,77 @@ def test_http_lifecycle_publishes_current_forecast_while_history_waits_and_cance
     asyncio.run(scenario())
 
 
+def test_live_response_from_previous_location_is_never_admitted():
+    """A location switch during unlocked I/O discards old weather before archive publication."""
+    from types import SimpleNamespace
+
+    from aiohttp import web
+
+    from open_energy_planner.weather.service import register
+    from tests.app.solar.support import weather
+
+    async def scenario():
+        """Change the site during the first read and wait for the next site's weather."""
+        first = SITE
+        second = replace(SITE, latitude=53)
+        live = SimpleNamespace(report=SimpleNamespace(location=first))
+        lock = asyncio.Lock()
+        received = []
+        archived = []
+        published = asyncio.Event()
+
+        class SwitchingSource:
+            """Return a completed response even after the installation changed."""
+
+            async def read(self, location, now):
+                """Acquire the app lock, as an independent location update would do."""
+                async with lock:
+                    if location == first:
+                        live.report = SimpleNamespace(location=second)
+                return weather(now, days=1)
+
+        @asynccontextmanager
+        async def factory():
+            """Provide the synthetic source for one lifecycle."""
+            yield SwitchingSource()
+
+        def receive(location, rows, _service, _reference, _until, _received_at):
+            """Record usable weather only and signal that the latest site was accepted."""
+            if rows:
+                received.append(location)
+                published.set()
+
+        def archive_series(namespace, reference, rows):
+            """Record every attempted durable weather publication."""
+            archived.append((namespace, reference, len(rows)))
+
+        app = web.Application()
+        register(
+            app,
+            live,
+            lock,
+            factory,
+            SimpleNamespace(archive_series=archive_series),
+            lambda: None,
+            lambda: True,
+            receive,
+            lambda: False,
+            None,
+            0.001,
+        )
+        runner = web.AppRunner(app)
+        await runner.setup()
+        try:
+            await asyncio.wait_for(published.wait(), timeout=2)
+            assert received == [second]
+            assert len(archived) == 1
+            assert archived[0][0] == "weather"
+        finally:
+            await runner.cleanup()
+
+    asyncio.run(scenario())
+
+
 def test_a_known_missing_run_does_not_block_older_training_and_is_retried_independently():
     """A 404 leaves an explicit run gap while older days advance and that exact initialization retries later."""
 

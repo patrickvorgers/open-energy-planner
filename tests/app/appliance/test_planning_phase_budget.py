@@ -119,6 +119,10 @@ def test_many_partial_uniform_profiles_keep_other_tasks_and_household_energy(
     assert len(prepared.problem.intervals) <= 8192
     if not distinct:
         assert len(prepared.problem.intervals) < 1200
+        # A fixed cycle began one second early; a flexible cycle has a one-second final phase.
+        offset = 299 if fixed else 1
+        boundary = NOW + timedelta(seconds=offset)
+        assert any(interval.start == boundary for interval in prepared.problem.intervals)
     # Every fixed run ends 42,900 seconds into the horizon, replacing .5*42900/(48*3600) kWh of expectation.
     # Short partial tasks replace only their cycle kWh within the full ready/deadline window.
     # The ordinary one-hour window replaces .5/48 kWh in either case.
