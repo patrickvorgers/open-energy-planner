@@ -41,32 +41,8 @@ def _validate_grid_exchange(problem, flow, duration_hours, interval_index, settl
             raise ValueError("Battery export during protected bonus window")
 
 
-def validate(problem, plan, tolerance=DEFAULT_VALIDATION_TOLERANCE):
-    """Recompute conservation, limits, reserve, whole commands and costs without importing solver code."""
-
-    def require(condition, reason):
-        """Reject invalid or incomplete evidence before it can become an HA command."""
-        if not condition:
-            raise ValueError(reason)
-
-    def close(left_value, right_value):
-        """Compare interval quantities using the same absolute numerical acceptance tolerance."""
-        return (
-            isfinite(left_value)
-            and isfinite(right_value)
-            and abs(left_value - right_value) <= tolerance
-        )
-
-    require(
-        isinstance(plan, InstallationPlan) and len(plan.flows) == len(problem.intervals),
-        "Installation plan shape",
-    )
-    from open_energy_planner.appliances.ev.validation import validate as validate_ev
-
-    validate_ev(problem, plan, tolerance)
-    from open_energy_planner.appliances.thermal.validation import validate as validate_thermal
-
-    validate_thermal(problem, plan, tolerance)
+def _validate_appliance_starts(problem, plan, require):
+    """Check identities and timing against fixed starts and scheduling windows."""
     starts = dict(plan.appliance_starts)
     require(
         len(starts) == len(plan.appliance_starts)
@@ -97,6 +73,66 @@ def validate(problem, plan, tolerance=DEFAULT_VALIDATION_TOLERANCE):
                 <= problem.intervals[-1].start + timedelta(hours=problem.intervals[-1].duration_h),
                 "Appliance time window",
             )
+    return starts
+
+
+def _validate_bonus_settlement(problem, plan, settled, require, close):
+    """Validate reported bonus evidence and price the independently settled export."""
+    require(len(settled) == len(plan.export_bonus_results), "Missing bonus evidence")
+    revenue = 0
+    for rule, expected, reported in zip(
+        problem.export_bonuses, settled, plan.export_bonus_results, strict=True
+    ):
+        require(
+            expected.rule_id == reported.rule_id
+            and len(expected.quota_kwh) == len(reported.quota_kwh)
+            and len(expected.counters_kwh) == len(reported.counters_kwh),
+            "Bonus result shape",
+        )
+        require(
+            all(
+                close(claimed_bonus, expected_bonus)
+                for claimed_bonus, expected_bonus in zip(
+                    (*expected.quota_kwh, *expected.counters_kwh),
+                    (*reported.quota_kwh, *reported.counters_kwh),
+                    strict=True,
+                )
+            ),
+            "Bonus settlement",
+        )
+        revenue += sum(
+            rate * quota_kwh for rate, quota_kwh in zip(rule.rates, expected.quota_kwh, strict=True)
+        )
+    return revenue
+
+
+def validate(problem, plan, tolerance=DEFAULT_VALIDATION_TOLERANCE):
+    """Recompute conservation, limits, reserve, whole commands and costs without importing solver code."""
+
+    def require(condition, reason):
+        """Reject invalid or incomplete evidence before it can become an HA command."""
+        if not condition:
+            raise ValueError(reason)
+
+    def close(left_value, right_value):
+        """Compare interval quantities using the same absolute numerical acceptance tolerance."""
+        return (
+            isfinite(left_value)
+            and isfinite(right_value)
+            and abs(left_value - right_value) <= tolerance
+        )
+
+    require(
+        isinstance(plan, InstallationPlan) and len(plan.flows) == len(problem.intervals),
+        "Installation plan shape",
+    )
+    from open_energy_planner.appliances.ev.validation import validate as validate_ev
+
+    validate_ev(problem, plan, tolerance)
+    from open_energy_planner.appliances.thermal.validation import validate as validate_thermal
+
+    validate_thermal(problem, plan, tolerance)
+    starts = _validate_appliance_starts(problem, plan, require)
     previous = {
         battery_entry.device_id: battery_entry.battery.initial_kwh
         for battery_entry in problem.batteries
@@ -309,31 +345,7 @@ def validate(problem, plan, tolerance=DEFAULT_VALIDATION_TOLERANCE):
             )
         purchase += step.buy_price * flow.grid_import
         sale += step.sell_price * flow.grid_export
-    require(len(settled) == len(plan.export_bonus_results), "Missing bonus evidence")
-    revenue = 0
-    for rule, expected, reported in zip(
-        problem.export_bonuses, settled, plan.export_bonus_results, strict=True
-    ):
-        require(
-            expected.rule_id == reported.rule_id
-            and len(expected.quota_kwh) == len(reported.quota_kwh)
-            and len(expected.counters_kwh) == len(reported.counters_kwh),
-            "Bonus result shape",
-        )
-        require(
-            all(
-                close(claimed_bonus, expected_bonus)
-                for claimed_bonus, expected_bonus in zip(
-                    (*expected.quota_kwh, *expected.counters_kwh),
-                    (*reported.quota_kwh, *reported.counters_kwh),
-                    strict=True,
-                )
-            ),
-            "Bonus settlement",
-        )
-        revenue += sum(
-            rate * quota_kwh for rate, quota_kwh in zip(rule.rates, expected.quota_kwh, strict=True)
-        )
+    revenue = _validate_bonus_settlement(problem, plan, settled, require, close)
     cash = purchase - sale - revenue + wear
     terminal = sum(curve.value(previous[curve.device_id]) for curve in problem.terminal_valuations)
     costs = Costs(purchase, sale, revenue, wear, cash, terminal, cash - terminal)

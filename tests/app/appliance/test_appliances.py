@@ -334,6 +334,9 @@ def test_solver_selects_independently_known_contiguous_cycle(strategy):
     corrupt = replace(result.plan, appliance_starts=(("task", START),))
     with pytest.raises(ValueError, match="conservation"):
         validate(problem, corrupt)
+    duplicate = replace(result.plan, appliance_starts=result.plan.appliance_starts * 2)
+    with pytest.raises(ValueError, match="^Appliance start identities$"):
+        validate(problem, duplicate)
 
 
 def test_infeasible_appliance_does_not_block_other_installation_planning():
