@@ -217,7 +217,9 @@ def repowise_summary_matches(check_run, head, base):
     report = output.get("text") if isinstance(output, dict) else None
     if not isinstance(report, str):
         return False
-    _, fence, state_block = report.replace("\r\n", "\n").rstrip().rpartition("\n```json\n")
+    # A report with no findings can begin with the metadata fence.
+    normalized = "\n" + report.replace("\r\n", "\n").rstrip()
+    _, fence, state_block = normalized.rpartition("\n```json\n")
     if not fence or not state_block.endswith("\n```"):
         return False
     state_json = state_block.removesuffix("\n```")
