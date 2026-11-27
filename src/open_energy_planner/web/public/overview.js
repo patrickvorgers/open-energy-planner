@@ -1447,6 +1447,82 @@ function renderOriginalPlanHeader(plan, id) {
     return {samePlan, currency};
 }
 
+/** Prepare each frozen interval's inspector evidence, series, and physical balance. */
+function prepareOriginalPlanEvidence(plan, currency) {
+    const buy = [], sell = [], spot = [], bonusSell = [], demandForecast = [], solarForecast = [];
+    const bonusRules = plan.input_snapshot?.problem?.export_bonuses || [];
+    const batteryLabels = new Map();
+    const identities = plan.input_snapshot?.problem?.batteries || plan.expected_flows?.[0]?.batteries || [];
+    const names = identities.map((battery, index) => plan.comparison_names?.[battery.device_id] || `Battery ${index + 1}`);
+    identities.forEach((battery, index) => {
+        // Names are presentation, not identity. Only duplicate names need a readable ordinal.
+        const label = names.filter((name) => name === names[index]).length > 1 ? `${names[index]}: ${index + 1}` : names[index];
+        batteryLabels.set(battery.device_id, label);
+    });
+    inspectSteps = [];
+    clearLinkedInspection();
+    const intervals = plan.input_snapshot?.problem?.intervals || [];
+    const inverterGroups = new Map((plan.input_snapshot?.problem?.inverters || []).map((inverter, index) =>
+        [inverter.inverter_id, {id: inverter.inverter_id, title: plan.comparison_names?.[inverter.inverter_id] || `Inverter ${index + 1}`} ]));
+    intervals.forEach((step, i) => {
+        // Keep every declared interval in the inspector. Absent evidence must not shift later values.
+        const flow = plan.expected_flows?.[i] || {};
+        const {imported, exported} = intervalGridTotals(flow);
+        const command = plan.steps.find((entry) => new Date(entry.start) <= new Date(step.start) && new Date(entry.end) > new Date(step.start));
+        const time = new Date(step.start).getTime();
+        // Use the recorded boundary. Rebuilding microsecond durations can exceed Date's millisecond endpoint.
+        const boundary = intervals[i + 1]?.start ?? command?.end;
+        const end = boundary ? Date.parse(boundary) : Math.floor(time + step.duration_h * 3600000);
+        const prices = plan.input_snapshot?.problem?.intervals?.[i] || step;
+        const tariff = plan.input_snapshot?.tariff_evidence?.find((t) => Date.parse(t.start) <= time && Date.parse(t.end) > time);
+        const add = (list, value, priceKind) => { if (value != null) list.push([time, value, priceKind], [end, value, priceKind]); };
+        add(buy, prices.buy_price, tariff?.price_kind); add(sell, prices.sell_price, tariff?.price_kind);
+        const rates = intervalContractRates({plan, bonusRules, index: i, start: time, end, prices, tariff, bonusSell});
+        const originalDemand = householdForecastEnergy(plan, prices);
+        add(demandForecast, prices.duration_h > 0 && originalDemand != null ? originalDemand / prices.duration_h : null);
+        add(solarForecast, prices.duration_h > 0 && typeof prices.pv_kwh === "number" ? prices.pv_kwh / prices.duration_h : null);
+        const commands = [], deviceValues = [], applianceValues = [], batteryFlowValues = [];
+        for (const task of plan.appliance_schedule || []) {
+            const energy = task.interval_kwh[i];
+            if (energy > 0) {
+                const name = plan.comparison_names?.[task.entity_id] || "Appliance";
+                commands.push(`${name}: ${number(energy)} kWh in this interval: Cycle starts: ${when(task.start)}, ends ${when(task.end)}`);
+                applianceValues.push(intervalCard(name, [["Energy in this interval", energy, "kWh"], ["Cycle starts", when(task.start)], ["Cycle ends", when(task.end)]]));
+            }
+        }
+        appendIntervalBatteryEvidence(
+            {plan, flow, command, intervalIndex: i, batteryLabels, identities, inverterGroups},
+            {commands, deviceValues, batteryFlowValues}
+        );
+        appendIntervalSolarEvidence(plan, step, command, inverterGroups, {commands, deviceValues});
+        inspectSteps.push({start: time, end, commands,
+            gridImport: imported, gridExport: exported, currency,
+            ...rates,
+            priceStatus: tariff ? `${tariff.price_kind === "published" ? "Published market rate" : tariff.price_kind === "forecast" ? "Forecast market rate" : "Market rate provenance unclassified"}: Native ${tariff.native_resolution_minutes}-minute resolution` : "Market provenance unavailable",
+            values: [
+                intervalCard("Energy in this interval", [["Grid import", imported, "kWh"], ["Grid export", exported, "kWh"], ["Household demand: AC", step.load_kwh, "kWh"], ["Available solar: DC", step.pv_kwh, "kWh"]]),
+                intervalCard("Electricity rates", [["Import", prices.buy_price, `${currency}/kWh`], ["Export", prices.sell_price, `${currency}/kWh`]]),
+                ...applianceValues, ...deviceValues
+            ],
+            applianceValues, batteryFlowValues,
+            priceSource: intervalCard("Price source", [["Market rate", tariff ? optionLabel(tariff.price_kind || "unknown") : null], ["Native resolution", tariff?.native_resolution_minutes, "minutes"]]),
+            balances: []});
+    });
+    const balances = energyBalances(plan, new Map([...Object.entries(plan.comparison_names || {}), ...batteryLabels]));
+    inspectSteps.forEach((step, index) => {
+        step.balances = balances.map((group) => {
+            const result = intervalCard(group.inverter ? inverterGroups.get(group.id)?.title || "Inverter" : group.name,
+                group.series.map((series) => [series.name, series.type === "bar" ? series.intervals[index]?.value : series.points[index * 2 + 1]?.[1], series.type === "bar" ? "kW" : "%"]));
+            if (group.missing) result.observations.push(`${group.missing} interval(s) have unavailable physical evidence. Missing values are not zero.`);
+            return result;
+        });
+    });
+    return {
+        balance: balances[0], batteryLabels, bonusRules,
+        points: {buy, sell, spot, bonusSell, demandForecast, solarForecast}
+    };
+}
+
 /** Render the selected plan's original charts together on the active range. */
 function renderOriginalPlanCharts(plan, balance, batteryLabels, points, {id, currency, samePlan, bonusRules}) {
     const {spot, buy, sell, bonusSell, demandForecast, solarForecast} = points;
@@ -1511,78 +1587,8 @@ async function showPlan(signal, background = false) {
         const plan = data.plan;
         if (plan?.plan_id !== id) throw new Error("Cannot read this view: The plan identity does not match. Please retry.");
         const {samePlan, currency} = renderOriginalPlanHeader(plan, id);
-        const buy = [], sell = [], spot = [], bonusSell = [], demandForecast = [], solarForecast = [];
-        const bonusRules = plan.input_snapshot?.problem?.export_bonuses || [];
-        const batteryLabels = new Map();
-        const identities = plan.input_snapshot?.problem?.batteries || plan.expected_flows?.[0]?.batteries || [];
-        const names = identities.map((battery, index) => plan.comparison_names?.[battery.device_id] || `Battery ${index + 1}`);
-        identities.forEach((battery, index) => {
-            // Names are presentation, not identity. Only duplicate names need a readable ordinal.
-            const label = names.filter((name) => name === names[index]).length > 1 ? `${names[index]}: ${index + 1}` : names[index];
-            batteryLabels.set(battery.device_id, label);
-        });
-        inspectSteps = [];
-        clearLinkedInspection();
-        const intervals = plan.input_snapshot?.problem?.intervals || [];
-        const inverterGroups = new Map((plan.input_snapshot?.problem?.inverters || []).map((inverter, index) =>
-            [inverter.inverter_id, {id: inverter.inverter_id, title: plan.comparison_names?.[inverter.inverter_id] || `Inverter ${index + 1}`} ]));
-        intervals.forEach((step, i) => {
-            // Keep every declared interval in the inspector. Absent evidence must not shift later values.
-            const flow = plan.expected_flows?.[i] || {};
-            const {imported, exported} = intervalGridTotals(flow);
-            const command = plan.steps.find((entry) => new Date(entry.start) <= new Date(step.start) && new Date(entry.end) > new Date(step.start));
-            const time = new Date(step.start).getTime();
-            // Use the recorded boundary. Rebuilding microsecond durations can exceed Date's millisecond endpoint.
-            const boundary = intervals[i + 1]?.start ?? command?.end;
-            const end = boundary ? Date.parse(boundary) : Math.floor(time + step.duration_h * 3600000);
-            const prices = plan.input_snapshot?.problem?.intervals?.[i] || step;
-            const tariff = plan.input_snapshot?.tariff_evidence?.find((t) => Date.parse(t.start) <= time && Date.parse(t.end) > time);
-            const add = (list, value, priceKind) => { if (value != null) list.push([time, value, priceKind], [end, value, priceKind]); };
-            add(buy, prices.buy_price, tariff?.price_kind); add(sell, prices.sell_price, tariff?.price_kind);
-            const rates = intervalContractRates({plan, bonusRules, index: i, start: time, end, prices, tariff, bonusSell});
-            const originalDemand = householdForecastEnergy(plan, prices);
-            add(demandForecast, prices.duration_h > 0 && originalDemand != null ? originalDemand / prices.duration_h : null);
-            add(solarForecast, prices.duration_h > 0 && typeof prices.pv_kwh === "number" ? prices.pv_kwh / prices.duration_h : null);
-            const commands = [], deviceValues = [], applianceValues = [], batteryFlowValues = [];
-            for (const task of plan.appliance_schedule || []) {
-                const energy = task.interval_kwh[i];
-                if (energy > 0) {
-                    const name = plan.comparison_names?.[task.entity_id] || "Appliance";
-                    commands.push(`${name}: ${number(energy)} kWh in this interval: Cycle starts: ${when(task.start)}, ends ${when(task.end)}`);
-                    applianceValues.push(intervalCard(name, [["Energy in this interval", energy, "kWh"], ["Cycle starts", when(task.start)], ["Cycle ends", when(task.end)]]));
-                }
-            }
-            appendIntervalBatteryEvidence(
-                {plan, flow, command, intervalIndex: i, batteryLabels, identities, inverterGroups},
-                {commands, deviceValues, batteryFlowValues}
-            );
-            appendIntervalSolarEvidence(plan, step, command, inverterGroups, {commands, deviceValues});
-            inspectSteps.push({start: time, end, commands,
-                gridImport: imported, gridExport: exported, currency,
-                ...rates,
-                priceStatus: tariff ? `${tariff.price_kind === "published" ? "Published market rate" : tariff.price_kind === "forecast" ? "Forecast market rate" : "Market rate provenance unclassified"}: Native ${tariff.native_resolution_minutes}-minute resolution` : "Market provenance unavailable",
-                values: [
-                    intervalCard("Energy in this interval", [["Grid import", imported, "kWh"], ["Grid export", exported, "kWh"], ["Household demand: AC", step.load_kwh, "kWh"], ["Available solar: DC", step.pv_kwh, "kWh"]]),
-                    intervalCard("Electricity rates", [["Import", prices.buy_price, `${currency}/kWh`], ["Export", prices.sell_price, `${currency}/kWh`]]),
-                    ...applianceValues, ...deviceValues
-                ],
-                applianceValues, batteryFlowValues,
-                priceSource: intervalCard("Price source", [["Market rate", tariff ? optionLabel(tariff.price_kind || "unknown") : null], ["Native resolution", tariff?.native_resolution_minutes, "minutes"]]),
-                balances: []});
-        });
-        const balances = energyBalances(plan, new Map([...Object.entries(plan.comparison_names || {}), ...batteryLabels]));
-        inspectSteps.forEach((step, index) => {
-            step.balances = balances.map((group) => {
-                const result = intervalCard(group.inverter ? inverterGroups.get(group.id)?.title || "Inverter" : group.name,
-                    group.series.map((series) => [series.name, series.type === "bar" ? series.intervals[index]?.value : series.points[index * 2 + 1]?.[1], series.type === "bar" ? "kW" : "%"]));
-                if (group.missing) result.observations.push(`${group.missing} interval(s) have unavailable physical evidence. Missing values are not zero.`);
-                return result;
-            });
-        });
-        renderOriginalPlanCharts(
-            plan, balances[0], batteryLabels, {buy, sell, spot, bonusSell, demandForecast, solarForecast},
-            {id, currency, samePlan, bonusRules}
-        );
+        const {balance, batteryLabels, points, bonusRules} = prepareOriginalPlanEvidence(plan, currency);
+        renderOriginalPlanCharts(plan, balance, batteryLabels, points, {id, currency, samePlan, bonusRules});
         renderedPlanId = id;
         planSourceNamesGeneration = sourceNamesAtRequest;
         if (requestedPlan === id) requestedPlan = null;
