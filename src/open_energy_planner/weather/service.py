@@ -102,6 +102,64 @@ def register(
                 weather_logger = BackgroundLog(_LOGGER, "Live weather refresh")
                 events = app.get(EVENTS)
 
+                async def install_weather(location, weather):
+                    """Archive and publish the response only while its installation still matches."""
+                    async with lock:
+                        if not (
+                            live.report
+                            and live.report.location == location
+                            and needs_live_weather()
+                        ):
+                            return False
+                        (
+                            rows,
+                            service,
+                            reference,
+                            until,
+                            received_at,
+                        ) = await archive.accept(weather, getattr(source, "service", None))
+                        receive_live_weather(location, rows, service, reference, until, received_at)
+                        if isinstance(source, OpenMeteoWeatherSource) and needs_original_runs():
+                            await receive_original_runs(location, source.forecast_runs)
+                        if weather:
+                            weather_logger.success(
+                                f"Received {len(weather)} weather hours. Next refresh in {WEATHER_REFRESH_HOURS * MINUTES_PER_HOUR:g} minutes."
+                            )
+                        else:
+                            weather_logger.unavailable(
+                                "Existing forecasts keep their original validity.",
+                                reason="no usable current weather hours were returned",
+                                retry_seconds=WEATHER_REFRESH_HOURS
+                                * MINUTES_PER_HOUR
+                                * SECONDS_PER_MINUTE,
+                            )
+                        return True
+
+                async def finish_weather(activity, installed, weather):
+                    """Report the admitted, empty or superseded outcome without crossing the app lock."""
+                    await events.finish(
+                        activity,
+                        Outcome.SKIPPED
+                        if not installed
+                        else Outcome.COMPLETED
+                        if weather
+                        else Outcome.FAILED,
+                        "Live weather was discarded because the installation changed."
+                        if not installed
+                        else "Live weather received."
+                        if weather
+                        else "No usable live weather returned. Existing forecasts keep their original validity.",
+                        usable=installed and bool(weather),
+                    )
+                    if installed:
+                        events.availability(
+                            "solar-weather",
+                            Health.AVAILABLE if weather else Health.DEGRADED,
+                            "Live weather available."
+                            if weather
+                            else "No new usable live weather. Check forecast validity.",
+                        )
+
                 async def update_weather():
                     """Fetch one live run for configured forecasts at the current HA location."""
                     last_location, due = None, datetime.min.replace(tzinfo=UTC)
@@ -132,69 +190,10 @@ def register(
                             )
                             try:
                                 weather = await source.read(location, now)
-                                installed = False
-                                async with lock:
-                                    if (
-                                        live.report
-                                        and live.report.location == location
-                                        and needs_live_weather()
-                                    ):
-                                        (
-                                            rows,
-                                            service,
-                                            reference,
-                                            until,
-                                            received_at,
-                                        ) = await archive.accept(
-                                            weather, getattr(source, "service", None)
-                                        )
-                                        receive_live_weather(
-                                            location, rows, service, reference, until, received_at
-                                        )
-                                        if (
-                                            isinstance(source, OpenMeteoWeatherSource)
-                                            and needs_original_runs()
-                                        ):
-                                            await receive_original_runs(
-                                                location, source.forecast_runs
-                                            )
-                                        installed = True
-                                        if weather:
-                                            weather_logger.success(
-                                                f"Received {len(weather)} weather hours. Next refresh in {WEATHER_REFRESH_HOURS * MINUTES_PER_HOUR:g} minutes."
-                                            )
-                                        else:
-                                            weather_logger.unavailable(
-                                                "Existing forecasts keep their original validity.",
-                                                reason="no usable current weather hours were returned",
-                                                retry_seconds=WEATHER_REFRESH_HOURS
-                                                * MINUTES_PER_HOUR
-                                                * SECONDS_PER_MINUTE,
-                                            )
+                                installed = await install_weather(location, weather)
                                 due = now + timedelta(hours=WEATHER_REFRESH_HOURS)
                                 if activity:
-                                    await events.finish(
-                                        activity,
-                                        Outcome.SKIPPED
-                                        if not installed
-                                        else Outcome.COMPLETED
-                                        if weather
-                                        else Outcome.FAILED,
-                                        "Live weather was discarded because the installation changed."
-                                        if not installed
-                                        else "Live weather received."
-                                        if weather
-                                        else "No usable live weather returned. Existing forecasts keep their original validity.",
-                                        usable=installed and bool(weather),
-                                    )
-                                    if installed:
-                                        events.availability(
-                                            "solar-weather",
-                                            Health.AVAILABLE if weather else Health.DEGRADED,
-                                            "Live weather available."
-                                            if weather
-                                            else "No new usable live weather. Check forecast validity.",
-                                        )
+                                    await finish_weather(activity, installed, weather)
                             except Exception as error:
                                 if asyncio.current_task().cancelling():
                                     raise asyncio.CancelledError from error
