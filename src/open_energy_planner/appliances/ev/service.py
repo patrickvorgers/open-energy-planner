@@ -188,40 +188,9 @@ class EVService:
         self.power_deviations.clear()
         self.issue = None
 
-    def receive(self, body, now, timezone=None):
-        """Accept bounded current HA readings with exact configured provenance and explicit unknowns."""
-        if not isinstance(body, dict) or set(body) != {
-            "configuration_version",
-            "at",
-            "vehicles",
-            "points",
-        }:
-            raise ValueError("Invalid EV observation report")
-        if body["configuration_version"] != self.configuration_version:
-            raise ValueError("EV configuration changed. Refresh before reporting")
-        at = instant(body["at"])
-        if not -CLOCK_SKEW_SECONDS <= (now - at).total_seconds() < REPORT_MAX_AGE_SECONDS:
-            raise ValueError("EV report is stale or from the future")
-        if self.report and at <= instant(self.report["at"]):
-            raise ValueError("EV reports must advance chronologically")
-        for kind, fields in (
-            ("vehicles", {"id", "soc", "observed_at", "reported_at", "timestamp_kind"}),
-            ("points", {"id", "session_id", "connected", "power_w"}),
-        ):
-            rows = body[kind]
-            expected = {row["id"] for row in self.state[kind]}
-            if not isinstance(rows, list) or len(rows) != len(expected):
-                raise ValueError("EV report membership mismatch")
-            optional = (
-                {"connected", "charging", "home", "source_timestamp_attribute"}
-                if kind == "vehicles"
-                else {"energy_kwh", "energy_observed_at"}
-            )
-            if any(not isinstance(row, dict) or set(row) - optional != fields for row in rows):
-                raise ValueError("Invalid EV reading fields")
-            if {row["id"] for row in rows} != expected:
-                raise ValueError("EV reading identity mismatch")
-        for row in body["vehicles"]:
+    def _validate_vehicle_readings(self, rows, at):
+        """Require configured provenance before applying SoC or recognition evidence."""
+        for row in rows:
             if row["soc"] is not None:
                 number(row["soc"], 0, FULL_SOC_PERCENT)
                 observed = instant(row["observed_at"])
@@ -285,6 +254,41 @@ class EVService:
                     )
                 ):
                     raise ValueError("Invalid vehicle recognition evidence")
+
+    def receive(self, body, now, timezone=None):
+        """Accept bounded current HA readings with exact configured provenance and explicit unknowns."""
+        if not isinstance(body, dict) or set(body) != {
+            "configuration_version",
+            "at",
+            "vehicles",
+            "points",
+        }:
+            raise ValueError("Invalid EV observation report")
+        if body["configuration_version"] != self.configuration_version:
+            raise ValueError("EV configuration changed. Refresh before reporting")
+        at = instant(body["at"])
+        if not -CLOCK_SKEW_SECONDS <= (now - at).total_seconds() < REPORT_MAX_AGE_SECONDS:
+            raise ValueError("EV report is stale or from the future")
+        if self.report and at <= instant(self.report["at"]):
+            raise ValueError("EV reports must advance chronologically")
+        for kind, fields in (
+            ("vehicles", {"id", "soc", "observed_at", "reported_at", "timestamp_kind"}),
+            ("points", {"id", "session_id", "connected", "power_w"}),
+        ):
+            rows = body[kind]
+            expected = {row["id"] for row in self.state[kind]}
+            if not isinstance(rows, list) or len(rows) != len(expected):
+                raise ValueError("EV report membership mismatch")
+            optional = (
+                {"connected", "charging", "home", "source_timestamp_attribute"}
+                if kind == "vehicles"
+                else {"energy_kwh", "energy_observed_at"}
+            )
+            if any(not isinstance(row, dict) or set(row) - optional != fields for row in rows):
+                raise ValueError("Invalid EV reading fields")
+            if {row["id"] for row in rows} != expected:
+                raise ValueError("EV reading identity mismatch")
+        self._validate_vehicle_readings(body["vehicles"], at)
         for row in body["points"]:
             identity(row["session_id"])
             if row["connected"] is not None and type(row["connected"]) is not bool:
