@@ -98,6 +98,18 @@ def test_market_switch_removes_unsupported_sources_but_outage_keeps_choices(pric
     )
     expect(page.locator("#price-source-controls select")).to_have_count(0)
 
+    page.evaluate("window.sources.update(window.snapshot)")
+    control.select_option("epex_predictor")
+    control.focus()
+    page.evaluate(
+        "window.sources.update({market_area: 'HU', source_preferences: {available_sources: []}})"
+    )
+    expect(control).to_be_focused()
+    expect(control).to_have_value("epex_predictor")
+    assert page.evaluate("window.sources.dirty")
+    page.evaluate("window.sources.discard()")
+    expect(page.locator("#price-source-controls select")).to_have_count(0)
+
 
 @pytest.fixture(
     params=[
