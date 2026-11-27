@@ -151,7 +151,7 @@ def test_calendar_bands_follow_installation_days_and_resize(
 
 @pytest.mark.parametrize("app_site", ["savings"], indirect=True)
 def test_overview_calendar_headers_refresh_without_duplicates(app_page):
-    """Planning charts retain data and headings on refresh. Clock ticks and tooltips omit timezone names while retaining repeated wintertime timestamps."""
+    """Keep one shared day header on redraw and preserve repeated wintertime ticks and tooltips."""
     from playwright.sync_api import expect
 
     from tests.frontend.browser.helpers import TOKEN
@@ -163,22 +163,33 @@ def test_overview_calendar_headers_refresh_without_duplicates(app_page):
     page.get_by_label("Installation API token", exact=True).fill(TOKEN)
     page.get_by_role("button", name="Connect", exact=True).click()
     expect(page.locator("#overview-status")).to_contain_text("Connected")
-    expect(
-        page.locator("#price-chart").locator("..").locator(".chart-day-headings > span")
-    ).not_to_have_count(0)
+    canvas = page.locator("#price-chart")
+    optimizer_days = (
+        page.locator("#plan-chart").locator("..").get_by_role("list", name="Chart calendar days")
+    )
+    price_days = canvas.locator("..").get_by_role("list", name="Chart calendar days")
+    expect(optimizer_days).to_be_visible()
+    headings = optimizer_days.locator(":scope > *")
+    original_headings = headings.all_text_contents()
+    assert original_headings
+    expect(price_days).to_have_count(0)
     before = page.evaluate(
         "JSON.stringify(Chart.getChart(document.getElementById('price-chart')).data)"
     )
     page.evaluate("""() => {
-        const chart=Chart.getChart(document.getElementById('price-chart'));
-        for(let index=0;index<3;index++) chart.update('none');
+        for (const id of ['plan-chart', 'price-chart']) {
+            const chart = Chart.getChart(document.getElementById(id));
+            for (let index = 0; index < 3; index++) chart.update('none');
+        }
     }""")
-    assert page.locator("#price-chart").locator("..").locator(".chart-day-headings").count() == 1
+    expect(optimizer_days).to_have_count(1)
+    expect(headings).to_have_text(original_headings)
+    expect(price_days).to_have_count(0)
     assert (
         page.evaluate("JSON.stringify(Chart.getChart(document.getElementById('price-chart')).data)")
         == before
     )
-    page.locator("#price-chart").locator("..").locator("..").screenshot(
+    page.locator(".optimizer-scenario").screenshot(
         path=f"results/ci/calendar-overview-{page.viewport_size['width']}.png"
     )
     page.evaluate("""async () => {
@@ -193,7 +204,6 @@ def test_overview_calendar_headers_refresh_without_duplicates(app_page):
         chart.options.scales.x.max=Date.parse('2026-10-25T02:00:00Z');
         chart.update('none');
     }""")
-    canvas = page.locator("#price-chart")
     axis_labels = canvas.evaluate(
         "canvas=>Chart.getChart(canvas).scales.x.ticks.map(tick=>tick.label)"
     )
