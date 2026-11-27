@@ -946,6 +946,38 @@ class PlanCoordinator:
             _LOGGER.warning("Invalid thermal projection. Heating commands withdrawn")
         return True
 
+    async def _sync_service_solar_forecasts(self, now):
+        """Refresh forecasts when due and stop the service pass if capture outlives HA unload."""
+        if (
+            self.catalogue_context is not None
+            and self.catalogue_discovery.healthy
+            and (
+                self.solar_forecast_attempted_at is None
+                or self.solar_forecast_generation != self.solar_forecast_bridge.generation
+                or now - self.solar_forecast_attempted_at
+                >= timedelta(minutes=SOLAR_FORECAST_REFRESH_MINUTES)
+            )
+        ):
+            self.solar_forecast_attempted_at = now
+            self.solar_forecast_generation = self.solar_forecast_bridge.generation
+            try:
+                generation = self.solar_forecast_bridge.generation
+                predictions = await self.solar_forecast_bridge.capture(
+                    self.catalogue_context.snapshot["suggestions"].get("solar_configurations", []),
+                    now,
+                )
+                if self.closed:
+                    return False
+                if self.catalogue_discovery.healthy:
+                    await self.client.request("POST", "/v1/solar/ha-forecasts", predictions)
+                    self.solar_forecast_sent = now
+                    self.solar_forecast_generation = generation
+            except (InstallationMismatchError, ReleaseMismatchError):
+                raise
+            except (ClientError, TimeoutError, ValueError, TypeError, KeyError):
+                _LOGGER.debug("Solar forecast refresh failed", exc_info=True)
+        return True
+
     async def sync_services(self, _now=None):
         """Service setup, optional virtual projections and Recorder away from plan reconciliation."""
         if self.closed or self.services_lock.locked():
@@ -971,36 +1003,8 @@ class PlanCoordinator:
                 now = dt_util.utcnow()
                 if not await self._sync_service_catalogue(data, now):
                     return
-                if (
-                    self.catalogue_context is not None
-                    and self.catalogue_discovery.healthy
-                    and (
-                        self.solar_forecast_attempted_at is None
-                        or self.solar_forecast_generation != self.solar_forecast_bridge.generation
-                        or now - self.solar_forecast_attempted_at
-                        >= timedelta(minutes=SOLAR_FORECAST_REFRESH_MINUTES)
-                    )
-                ):
-                    self.solar_forecast_attempted_at = now
-                    self.solar_forecast_generation = self.solar_forecast_bridge.generation
-                    try:
-                        generation = self.solar_forecast_bridge.generation
-                        predictions = await self.solar_forecast_bridge.capture(
-                            self.catalogue_context.snapshot["suggestions"].get(
-                                "solar_configurations", []
-                            ),
-                            now,
-                        )
-                        if self.closed:
-                            return
-                        if self.catalogue_discovery.healthy:
-                            await self.client.request("POST", "/v1/solar/ha-forecasts", predictions)
-                            self.solar_forecast_sent = now
-                            self.solar_forecast_generation = generation
-                    except (InstallationMismatchError, ReleaseMismatchError):
-                        raise
-                    except (ClientError, TimeoutError, ValueError, TypeError, KeyError):
-                        _LOGGER.debug("Solar forecast refresh failed", exc_info=True)
+                if not await self._sync_service_solar_forecasts(now):
+                    return
                 if self.ev_intent_generation != ev_intent_at_request:
                     return
                 if "ev" in data:

@@ -437,6 +437,64 @@ def _register_weather_inputs(app, live, lock, factory, store, demand, solar, old
     )
 
 
+def _discard_incompatible_active_plan(repository):
+    """Remove incompatible command authority while retaining historical evidence."""
+    if repository.state["plan"] and (
+        repository.state["plan"].get("release") != RELEASE
+        or repository.state["plan"].get("schema") != PLAN_SCHEMA_VERSION
+        or "input_sha256" not in repository.state["plan"]
+    ):
+        repository.state["plan"] = None
+        repository.save()
+
+
+def _restore_live_configuration(live, installation, repository):
+    """Apply installation bindings or the last submitted live measurement configuration."""
+    saved = repository.state.get("measurement_config")
+    if installation.current:
+        live.install_configuration(installation_sources(installation.current))
+    elif saved:
+        live.configure(parse_configuration(saved, revision=saved["revision"]))
+    else:
+        live.refresh()
+
+
+def _register_archive_lifecycle(app, repository, lock, save_state):
+    """Register the durability worker before any task that uses the archive."""
+
+    async def archive_lifecycle(_app):
+        """Flush background revocations and close last, after planning/source writers have drained."""
+
+        async def flush_invalidations():
+            """Bound idle work using the existing worker cadence. A failed flush never reinstates commands."""
+            while True:
+                async with lock:
+                    if repository.pending_invalidation:
+                        try:
+                            await save_state()
+                        except OSError:
+                            logging.getLogger(__name__).error(
+                                "Archive write failed. Commands remain revoked"
+                            )
+                await asyncio.sleep(FORECAST_WORKER_POLL_SECONDS)
+
+        worker = asyncio.create_task(flush_invalidations())
+        try:
+            yield
+        finally:
+            worker.cancel()
+            with suppress(asyncio.CancelledError):
+                await worker
+            try:
+                async with lock:
+                    if repository.pending_invalidation:
+                        await save_state()
+            finally:
+                await asyncio.to_thread(repository.close)
+
+    app.cleanup_ctx.append(archive_lifecycle)
+
+
 def create_app(
     directory,
     token,
@@ -535,14 +593,7 @@ def create_app(
     # Declared fixture devices remain available when planning inputs are invalidated.
     synthetic_batteries = capture().problem.batteries if source == "synthetic" else ()
 
-    # Retained incompatible evidence remains archived and cannot become an active command.
-    if repository.state["plan"] and (
-        repository.state["plan"].get("release") != RELEASE
-        or repository.state["plan"].get("schema") != PLAN_SCHEMA_VERSION
-        or "input_sha256" not in repository.state["plan"]
-    ):
-        repository.state["plan"] = None
-        repository.save()
+    _discard_incompatible_active_plan(repository)
 
     async def publish(document):
         """Recheck current live inputs under the state lock before saving a complete candidate.
@@ -674,13 +725,7 @@ def create_app(
             now,
             (setup_catalogue.value or {}).get("timezone", "UTC"),
         )
-        saved = repository.state.get("measurement_config")
-        if installation.current:
-            live.install_configuration(installation_sources(installation.current))
-        elif saved:
-            live.configure(parse_configuration(saved, revision=saved["revision"]))
-        else:
-            live.refresh()
+        _restore_live_configuration(live, installation, repository)
 
     @web.middleware
     async def authentication(request, handler):
@@ -774,37 +819,7 @@ def create_app(
         app[INGRESS_PEER] = ingress_peer
     from .pairing import Pairing, register_pairing
 
-    async def archive_lifecycle(_app):
-        """Flush background revocations and close last, after planning/source writers have drained."""
-
-        async def flush_invalidations():
-            """Bound idle work using the existing worker cadence. A failed flush never reinstates commands."""
-            while True:
-                async with lock:
-                    if repository.pending_invalidation:
-                        try:
-                            await save_state()
-                        except OSError:
-                            logging.getLogger(__name__).error(
-                                "Archive write failed. Commands remain revoked"
-                            )
-                await asyncio.sleep(FORECAST_WORKER_POLL_SECONDS)
-
-        worker = asyncio.create_task(flush_invalidations())
-        try:
-            yield
-        finally:
-            worker.cancel()
-            with suppress(asyncio.CancelledError):
-                await worker
-            try:
-                async with lock:
-                    if repository.pending_invalidation:
-                        await save_state()
-            finally:
-                await asyncio.to_thread(repository.close)
-
-    app.cleanup_ctx.append(archive_lifecycle)
+    _register_archive_lifecycle(app, repository, lock, save_state)
 
     from .activities.api import register as register_activities
 

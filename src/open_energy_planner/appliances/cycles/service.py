@@ -941,6 +941,80 @@ class ApplianceService:
         self.commit(data, extra=((request_key, {"request": request, "task_id": task["id"]}),))
         return task
 
+    def _admit_phase_windows(
+        self, intervals, task_windows, origins_by_entity, entities, excluded_entities
+    ):
+        """Apply the phase refinement budget in task order.
+
+        Args:
+            intervals: Original planning intervals that provide parent boundaries.
+            task_windows: Candidate (work, first, last) tuples in admission order.
+            origins_by_entity: Candidate start times for each task's entity.
+            entities: Caller-owned set of meters whose expected loads are replaced.
+            excluded_entities: Meters still replaced by a separately modeled service.
+
+        Returns:
+            Admitted (work, first, last) tuples in task order, and sorted uniform
+            phase boundaries. The budget counts extra boundary edges and limits
+            boundary checks to MAX_PHASE_BOUNDARY_CHECKS.
+
+        Side Effects:
+            Adds rejected entity IDs to self._phase_limited_entities.
+            Removes their meters from entities unless another service replaces them.
+        """
+        horizon_seconds = sum(step.duration_h for step in intervals) * 3600
+        remaining_edges = (
+            MAX_REFINED_PLAN_INTERVALS - len(intervals) - int(horizon_seconds / SAMPLE_SECONDS)
+        )
+        remaining_checks = MAX_PHASE_BOUNDARY_CHECKS
+        admitted = []
+        uniform_boundaries = set()
+        parent_boundaries = {
+            boundary
+            for step in intervals
+            for boundary in (step.start, step.start + timedelta(hours=step.duration_h))
+        }
+
+        for work, first, last in task_windows:
+            if work.profile.phase_durations_seconds is not None:
+                edge_count = len(work.profile.power_w) + 1
+                origin_count = len(origins_by_entity[work.entity_id])
+                checks = (
+                    edge_count
+                    * origin_count
+                    * sum(
+                        step.start < last and step.start + timedelta(hours=step.duration_h) > first
+                        for step in intervals
+                    )
+                )
+                if edge_count * origin_count > remaining_edges or checks > remaining_checks:
+                    self._phase_limited_entities.add(work.entity_id)
+                    if work.entity_id not in excluded_entities:
+                        entities.discard(work.entity_id)
+                    continue
+                remaining_edges -= edge_count * origin_count
+                remaining_checks -= checks
+            else:
+                additions, checks, extra_edges = _uniform_window_edges(
+                    work,
+                    (first, last),
+                    intervals,
+                    uniform_boundaries,
+                    parent_boundaries,
+                    remaining_edges,
+                    remaining_checks,
+                )
+                remaining_checks -= min(checks, remaining_checks)
+                if additions is None:
+                    self._phase_limited_entities.add(work.entity_id)
+                    if work.entity_id not in excluded_entities:
+                        entities.discard(work.entity_id)
+                    continue
+                remaining_edges -= extra_edges
+                uniform_boundaries.update(additions)
+            admitted.append((work, first, last))
+        return admitted, sorted(uniform_boundaries)
+
     def prepare(self, snapshot, demand, now, *, excluded_entities=(), replacement_windows=()):
         """Replace controlled baselines and refine task windows for physical peaks.
 
@@ -1051,61 +1125,9 @@ class ApplianceService:
                 task_windows.append((observed, observed.fixed_start, observed.deadline))
         if not works and not entities and not self.consumers.selected:
             return replace(snapshot, appliance_revision=self.planning_revision)
-        horizon_seconds = sum(step.duration_h for step in problem.intervals) * 3600
-        remaining_edges = (
-            MAX_REFINED_PLAN_INTERVALS
-            - len(problem.intervals)
-            - int(horizon_seconds / SAMPLE_SECONDS)
+        task_windows, uniform_boundaries = self._admit_phase_windows(
+            problem.intervals, task_windows, origins_by_entity, entities, excluded_entities
         )
-        remaining_checks = MAX_PHASE_BOUNDARY_CHECKS
-        admitted = []
-        uniform_boundaries = set()
-        parent_boundaries = {
-            boundary
-            for step in problem.intervals
-            for boundary in (step.start, step.start + timedelta(hours=step.duration_h))
-        }
-
-        for work, first, last in task_windows:
-            if work.profile.phase_durations_seconds is not None:
-                edge_count = len(work.profile.power_w) + 1
-                origin_count = len(origins_by_entity[work.entity_id])
-                checks = (
-                    edge_count
-                    * origin_count
-                    * sum(
-                        step.start < last and step.start + timedelta(hours=step.duration_h) > first
-                        for step in problem.intervals
-                    )
-                )
-                if edge_count * origin_count > remaining_edges or checks > remaining_checks:
-                    self._phase_limited_entities.add(work.entity_id)
-                    if work.entity_id not in excluded_entities:
-                        entities.discard(work.entity_id)
-                    continue
-                remaining_edges -= edge_count * origin_count
-                remaining_checks -= checks
-            else:
-                additions, checks, extra_edges = _uniform_window_edges(
-                    work,
-                    (first, last),
-                    problem.intervals,
-                    uniform_boundaries,
-                    parent_boundaries,
-                    remaining_edges,
-                    remaining_checks,
-                )
-                remaining_checks -= min(checks, remaining_checks)
-                if additions is None:
-                    self._phase_limited_entities.add(work.entity_id)
-                    if work.entity_id not in excluded_entities:
-                        entities.discard(work.entity_id)
-                    continue
-                remaining_edges -= extra_edges
-                uniform_boundaries.update(additions)
-            admitted.append((work, first, last))
-        task_windows = admitted
-        uniform_boundaries = sorted(uniform_boundaries)
         works = [work for work in works if work.entity_id not in self._phase_limited_entities]
         result = self.consumers.result or {}
         forecasts = {row["entity_id"]: row["forecast"] for row in result.get("devices", [])}
