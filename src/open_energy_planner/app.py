@@ -530,7 +530,7 @@ async def _publish_daily_prices(service, daily_prices, price_timezone, savings_m
 
 
 def _register_price_worker(
-    app, factory, engine, install, refresh_requested, live, lock, update_daily
+    app, *, factory, engine, install, refresh_requested, live, lock, update_daily
 ):
     """Own scheduled price refresh, wakeups and worker cleanup for the optional service."""
     if factory is None:
@@ -730,7 +730,7 @@ def _register_planning_lifecycle(app, planner, live, capture, lock, appliances, 
 
 
 async def _attach_reference_forecast(
-    document, installation, solar, demand, setup, thermal, ev, contracts
+    document, *, installation, solar, demand, setup, thermal, ev, contracts
 ):
     """Record the optional comparison and its input evidence for a complete installation."""
     if not (installation.current and solar.configuration and demand.configuration):
@@ -775,6 +775,7 @@ async def _attach_reference_forecast(
 
 async def _publish_candidate(
     document,
+    *,
     lock,
     live,
     planner,
@@ -807,7 +808,14 @@ async def _publish_candidate(
                 raise PublicationSuperseded(reason)
         previous = repository.state["plan"]
         await _attach_reference_forecast(
-            document, installation, solar, demand, setup_catalogue.value, thermal, ev, contracts
+            document,
+            installation=installation,
+            solar=solar,
+            demand=demand,
+            setup=setup_catalogue.value,
+            thermal=thermal,
+            ev=ev,
+            contracts=contracts,
         )
         from .forecast_quality.api import capture_sources
 
@@ -825,6 +833,7 @@ async def _publish_candidate(
 
 def _register_planning_endpoints(
     app,
+    *,
     source,
     repository,
     planner,
@@ -942,6 +951,7 @@ def _register_planning_endpoints(
 
 def _register_configuration_endpoints(
     app,
+    *,
     installation,
     demand,
     solar,
@@ -1010,7 +1020,9 @@ def _register_configuration_endpoints(
     return setup_catalogue
 
 
-def _open_app_repository(directory, token, source, database_engine, database_url, migrate_database):
+def _open_app_repository(
+    directory, *, token, source, database_engine, database_url, migrate_database
+):
     """Validate the app's input mode and open the requested storage backend."""
     if not token or len(token) < MIN_API_TOKEN_LENGTH:
         raise ValueError("A local API token of at least 24 characters is required")
@@ -1040,6 +1052,7 @@ def _synthetic_battery_catalogue(source, capture):
 
 def _restore_app_live_inputs(
     source,
+    *,
     planner,
     repository,
     basis_source,
@@ -1076,7 +1089,7 @@ def _set_ingress_peer(app, ingress_peer):
         app[INGRESS_PEER] = ingress_peer
 
 
-def _register_local_pairing(app, directory, token, instance_id, discovery_options):
+def _register_local_pairing(app, *, directory, token, instance_id, discovery_options):
     """Expose local pairing and enable discovery when the caller supplied options."""
     from .pairing import Pairing, register_pairing
 
@@ -1090,6 +1103,7 @@ def _register_local_pairing(app, directory, token, instance_id, discovery_option
 
 def _register_financial_and_forecast_apis(
     app,
+    *,
     repository,
     contracts,
     bonus_counters,
@@ -1180,7 +1194,12 @@ def create_app(
     holding provider fetching or live control state.
     """
     repository = _open_app_repository(
-        directory, token, source, database_engine, database_url, migrate_database
+        directory,
+        token=token,
+        source=source,
+        database_engine=database_engine,
+        database_url=database_url,
+        migrate_database=migrate_database,
     )
     contracts = ContractStore(SqlDocuments(repository.engine, "contracts"))
     bonus_counters = CounterStore(SqlDocuments(repository.engine, "bonus-counters"))
@@ -1244,19 +1263,19 @@ def create_app(
         """Publish a candidate against the current app state."""
         await _publish_candidate(
             document,
-            lock,
-            live,
-            planner,
-            repository,
-            installation,
-            solar,
-            demand,
-            setup_catalogue,
-            thermal,
-            ev,
-            contracts,
-            appliances,
-            save_state,
+            lock=lock,
+            live=live,
+            planner=planner,
+            repository=repository,
+            installation=installation,
+            solar=solar,
+            demand=demand,
+            setup_catalogue=setup_catalogue,
+            thermal=thermal,
+            ev=ev,
+            contracts=contracts,
+            appliances=appliances,
+            save_state=save_state,
         )
 
     notification_center = NotificationCenter()
@@ -1310,15 +1329,15 @@ def create_app(
     )
     live = _restore_app_live_inputs(
         source,
-        planner,
-        repository,
-        basis_source,
-        ev,
-        thermal,
-        demand,
-        installation,
-        lambda: setup_catalogue,
-        publish_plan_status,
+        planner=planner,
+        repository=repository,
+        basis_source=basis_source,
+        ev=ev,
+        thermal=thermal,
+        demand=demand,
+        installation=installation,
+        get_setup_catalogue=lambda: setup_catalogue,
+        publish_plan_status=publish_plan_status,
     )
 
     async def save_state():
@@ -1347,7 +1366,11 @@ def create_app(
     )
 
     _register_local_pairing(
-        app, directory, token, repository.state["instance_id"], discovery_options
+        app,
+        directory=directory,
+        token=token,
+        instance_id=repository.state["instance_id"],
+        discovery_options=discovery_options,
     )
 
     prices = None
@@ -1477,13 +1500,13 @@ def create_app(
 
     _register_price_worker(
         app,
-        price_factory,
-        repository.engine,
-        install_price_service,
-        price_refresh_requested,
-        live,
-        lock,
-        lambda service: _publish_daily_prices(
+        factory=price_factory,
+        engine=repository.engine,
+        install=install_price_service,
+        refresh_requested=price_refresh_requested,
+        live=live,
+        lock=lock,
+        update_daily=lambda service: _publish_daily_prices(
             service, daily_prices, installation_timezone, savings_mutation_lock
         ),
     )
@@ -1502,48 +1525,48 @@ def create_app(
 
     _register_planning_endpoints(
         app,
-        source,
-        repository,
-        planner,
-        live,
-        lock,
-        capture,
-        appliances,
-        installation,
-        demand,
-        persist_then_install,
-        snapshot,
-        lambda: snapshot_handler,
-        publish_plan_status,
-        save_state,
-        plan_watch,
-        solar,
-        lambda: setup_catalogue,
-        installation_basis,
-        synthetic_batteries,
-        ev,
+        source=source,
+        repository=repository,
+        planner=planner,
+        live=live,
+        lock=lock,
+        capture=capture,
+        appliances=appliances,
+        installation=installation,
+        demand=demand,
+        persist_then_install=persist_then_install,
+        snapshot=snapshot,
+        get_snapshot_handler=lambda: snapshot_handler,
+        publish_plan_status=publish_plan_status,
+        save_state=save_state,
+        plan_watch=plan_watch,
+        solar=solar,
+        get_setup_catalogue=lambda: setup_catalogue,
+        installation_basis=installation_basis,
+        synthetic_batteries=synthetic_batteries,
+        ev=ev,
     )
 
     setup_catalogue = _register_configuration_endpoints(
         app,
-        installation,
-        demand,
-        solar,
-        lock,
-        live,
-        persist_then_install,
-        installation_basis,
-        setup_catalogue,
-        contracts,
-        appliances,
-        ev,
-        thermal,
-        repository,
-        strategy,
-        snapshot,
-        live_weather_factory,
-        weather_store,
-        oldest_demand_history,
+        installation=installation,
+        demand=demand,
+        solar=solar,
+        lock=lock,
+        live=live,
+        persist_then_install=persist_then_install,
+        installation_basis=installation_basis,
+        setup_catalogue=setup_catalogue,
+        contracts=contracts,
+        appliances=appliances,
+        ev=ev,
+        thermal=thermal,
+        repository=repository,
+        strategy=strategy,
+        snapshot=snapshot,
+        live_weather_factory=live_weather_factory,
+        weather_store=weather_store,
+        oldest_demand_history=oldest_demand_history,
     )
 
     (
@@ -1553,20 +1576,20 @@ def create_app(
         forecast_history_request,
     ) = _register_financial_and_forecast_apis(
         app,
-        repository,
-        contracts,
-        bonus_counters,
-        installation,
-        solar,
-        demand,
-        lock,
-        setup_catalogue,
-        live,
-        savings_mutation_lock,
-        strategy,
-        installation_basis,
-        satellite_factory,
-        weather_store.documents,
+        repository=repository,
+        contracts=contracts,
+        bonus_counters=bonus_counters,
+        installation=installation,
+        solar=solar,
+        demand=demand,
+        lock=lock,
+        setup_catalogue=setup_catalogue,
+        live=live,
+        savings_mutation_lock=savings_mutation_lock,
+        strategy=strategy,
+        installation_basis=installation_basis,
+        satellite_factory=satellite_factory,
+        weather_documents=weather_store.documents,
     )
     snapshot_handler = create_snapshot_handler(
         lock=lock,
