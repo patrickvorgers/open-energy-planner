@@ -316,6 +316,54 @@ def _select_model(source, models, scores, control, now, *, enforce_ml_policy):
     return chosen, learning_issue
 
 
+def _save_comparison_capture(documents, prefix, capture, models, field, future_hours):
+    """Freeze a local day only once, when all currently available models cover it."""
+    for model, energies in models.items():
+        steps = [
+            {
+                "start": row.start.isoformat(),
+                "duration_h": row.duration_h,
+                "kwh": getattr(row, field),
+            }
+            for row in energies
+        ]
+        values = [integral(steps, instant, instant + HOUR) for instant in future_hours]
+        if all(value is not None for value in values):
+            capture["models"][model] = values
+    target = prefix + capture["day"] + ".json"
+    evidence_issue = None
+    try:
+        if (
+            set(capture["models"]) == set(models)
+            and not documents.exists(target)
+            and ForecastSource.PVWATTS in capture["models"]
+        ):
+            documents.write(target, capture)
+    except OSError:
+        evidence_issue = "Solar accuracy evidence could not be saved"
+    return evidence_issue
+
+
+def _historical_scores(assessment, configuration, source, location, model_policy, now):
+    """Compare eligible replay scores for exactly the current source and forecast schedule."""
+    if not (
+        isinstance(assessment, HistoricalForecastAssessment)
+        and assessment.status == BacktestStatus.ELIGIBLE
+        and assessment.created_at <= now
+        and assessment.run_initializations == scheduled_runs(now)
+        and assessment.source_family
+        == evidence_family(configuration, source, location, model_policy)
+        and assessment.model_policy == model_policy
+    ):
+        return None
+    return {
+        ForecastSource.PVWATTS: fsum(score.baseline_mae_kwh for score in assessment.per_origin)
+        / len(assessment.per_origin),
+        ForecastSource.ML: fsum(score.service_mae_kwh for score in assessment.per_origin)
+        / len(assessment.per_origin),
+    }
+
+
 def choose_sources(
     store,
     configuration,
@@ -405,29 +453,9 @@ def choose_sources(
             "ha_versions": (ha_references or {}).get(source.entity_id, []),
             "ha_configuration_versions": provider_revisions,
         }
-        for model, energies in models.items():
-            steps = [
-                {
-                    "start": row.start.isoformat(),
-                    "duration_h": row.duration_h,
-                    "kwh": getattr(row, field),
-                }
-                for row in energies
-            ]
-            values = [integral(steps, instant, instant + HOUR) for instant in future_hours]
-            if all(value is not None for value in values):
-                capture["models"][model] = values
-        target = prefix + capture["day"] + ".json"
-        evidence_issue = None
-        try:
-            if (
-                set(capture["models"]) == set(models)
-                and not store.documents.exists(target)
-                and ForecastSource.PVWATTS in capture["models"]
-            ):
-                store.documents.write(target, capture)
-        except OSError:
-            evidence_issue = "Solar accuracy evidence could not be saved"
+        evidence_issue = _save_comparison_capture(
+            store.documents, prefix, capture, models, field, future_hours
+        )
         history = histories.get(source.entity_id)
         cohorts, scores, issue = _score_comparisons(
             store.documents,
@@ -446,29 +474,18 @@ def choose_sources(
         )
         admission_basis = "captured_forecasts"
         assessment = (historical_assessments or {}).get(source_id)
-        if (
-            not scores
-            and issue is None
-            and ForecastSource.ML in models
-            and isinstance(assessment, HistoricalForecastAssessment)
-            and assessment.status == BacktestStatus.ELIGIBLE
-            and assessment.created_at <= now
-            and assessment.run_initializations == scheduled_runs(now)
-            and assessment.source_family
-            == evidence_family(
-                configuration, source, baseline.location, (ml_policies or {}).get(source_id)
+        if not scores and issue is None and ForecastSource.ML in models:
+            historical_scores = _historical_scores(
+                assessment,
+                configuration,
+                source,
+                baseline.location,
+                (ml_policies or {}).get(source_id),
+                now,
             )
-            and assessment.model_policy == (ml_policies or {}).get(source_id)
-        ):
-            scores = {
-                ForecastSource.PVWATTS: fsum(
-                    score.baseline_mae_kwh for score in assessment.per_origin
-                )
-                / len(assessment.per_origin),
-                ForecastSource.ML: fsum(score.service_mae_kwh for score in assessment.per_origin)
-                / len(assessment.per_origin),
-            }
-            admission_basis = "historical_forecast_backtest"
+            if historical_scores is not None:
+                scores = historical_scores
+                admission_basis = "historical_forecast_backtest"
         preference = source.forecast_source
         chosen, learning_issue = _select_model(
             source,

@@ -491,6 +491,11 @@ def test_capture_waits_for_every_available_candidate_then_freezes_the_same_build
     captured = list(store.documents.iter_prefix("source-day-"))
     assert len(captured) == 1
     assert captured[0]["captured_at"] == later.isoformat()
+    assert captured[0]["day"] == "2026-06-21"
+    assert len(captured[0]["hours"]) == 24
+    assert captured[0]["hours"][0] == "2026-06-20T22:00:00+00:00"
+    assert captured[0]["hours"][-1] == "2026-06-21T21:00:00+00:00"
+    assert captured[0]["baseline_version"] == prediction(later, 0.7).version
     assert captured[0]["models"]["pvwatts"] == pytest.approx([0.7] * 24)
     assert captured[0]["models"]["ha"] == pytest.approx([0.45] * 24)
     choose_sources(
