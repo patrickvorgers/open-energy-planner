@@ -637,6 +637,14 @@ whole UTC Recorder hours inside the local day are compared. Boundary fractions
 are not reconstructed. A missing cumulative endpoint, negative correction or
 missing forecast excludes that day from the common cohort. MAE averages absolute
 hourly kWh errors over the common hours. Ties retain PVWatts before ML before HA.
+Selection records an exclusion reason for each rejected day it examines. It
+uses up to seven complete matched days for daily totals while retaining the
+latest three for hourly MAE. For Automatic only, seven matched days can veto an
+hourly ML win when at least five individual days and the pooled total are
+underestimated by at least 15%, and PVWatts has a lower sum of absolute daily
+errors. Missing older evidence leaves the hourly ranking intact once its three
+days are valid. A manual selection keeps its existing eligibility rules. Both
+checks use frozen forecast evidence and do not change the archive family.
 No prices, bonuses or simulated savings enter this ranking. Until a complete
 cohort exists, Automatic retains PVWatts unless ML has passed the separate
 historical forecast assessment. A newly available HA candidate still needs a
@@ -653,9 +661,10 @@ hash uses the public entry identity and modification timestamp, never provider
 credentials. A setting change invalidates the old coordinator's freshness until
 Core reloads it and OEP observes a successful refresh. Previously good forecasts
 from a different provider configuration cannot promote the new configuration.
-Unreadable optional accuracy evidence retains the physical forecast with an
-explicit comparison issue. It does not overwrite damaged evidence or block an
-otherwise valid baseline. Manual selection does not depend on old accuracy data.
+Unreadable evidence encountered before three matching days retains the physical
+forecast with an explicit comparison issue. Unreadable older evidence stops the
+daily-total check and leaves an established hourly ranking available. Damaged
+evidence stays unchanged. Manual selection does not depend on old accuracy data.
 
 Accuracy admission checks the combined measured AC output of all sources on the
 same inverter against 98% of its declared AC rating. Two 2.5 kWh hourly meters on

@@ -284,11 +284,25 @@ publication; unavailable publication metadata remains unknown.
 
 The disclosure separates these comparisons:
 
+For a solar source, **Forecast used on** identifies the model in the original
+midnight record for the selected date. **Active forecast model now** explains
+the current choice. Under **Complete forecast comparison**, expand **Why days
+were excluded** to see the dates and reasons for unavailable, incomplete or
+ineligible evidence. A day can have a visible graph and still be excluded from
+the automatic comparison.
+
 | Comparison | What it tells you |
 |---|---|
 | **Complete forecast comparison** | How well independently saved PVWatts, XGBoost and Home Assistant predictions matched the same later production hours. PVWatts and XGBoost share captured ECMWF IFS forecasts. The Home Assistant provider uses its own weather. This assesses the complete forecast, including its weather source, and determines Automatic selection. |
 | **Model comparison** | How PVWatts and XGBoost performed with the same archived weather forecasts and held-out measured production. The historical backtest simulates 48-hour plans at two origins per weather run. It does not claim that the app or provider actually published a forecast at those simulated origins. |
 | **Historical forecast backtest** | Whether four predetermined weather runs met both 48-hour planning-origin accuracy requirements. Counts, per-origin errors and expandable simulated windows explain the evidence that can admit ML without waiting for new days. |
+
+Automatic compares hourly accuracy over three complete matched days. It uses
+seven matched days for a separate check of daily production totals. If machine
+learning would win on hourly accuracy but underestimates by at least 15% on five
+or more days and by at least 15% across the seven days together, Automatic
+uses PVWatts when PVWatts has the smaller sum of absolute daily errors. A
+manual forecast choice follows its existing eligibility rules.
 
 The model comparison reports training and validation hours and days separately.
 Missing validation coverage is different from insufficient training history.

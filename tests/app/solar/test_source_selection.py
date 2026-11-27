@@ -340,6 +340,11 @@ def test_automatic_uses_three_identical_complete_days_and_survives_restart(tmp_p
     )
     assert changed["pv0"][0] == "pvwatts"
     assert changed_status["pv0"]["complete_days"] == 0
+    assert {
+        item["day"]
+        for item in changed_status["pv0"]["comparison_exclusions"]
+        if item["reason"] == "ha_configuration_changed"
+    } == set(status["pv0"]["comparison_days"])
     # A single missing sum prevents a complete matched day. No candidate gets fewer hours.
     broken = replace(
         history, hours=tuple(hour for index, hour in enumerate(history.hours) if index != 40)
@@ -357,6 +362,66 @@ def test_automatic_uses_three_identical_complete_days_and_survives_restart(tmp_p
     )
     assert chosen["pv0"][0] == "pvwatts"
     assert status["pv0"]["mae_kwh"] == {}
+    assert "missing_measurements" in {
+        item["reason"] for item in status["pv0"]["comparison_exclusions"]
+    }
+
+
+@pytest.mark.parametrize(
+    "repeated,preference,expected",
+    [(True, "automatic", "pvwatts"), (False, "automatic", "ml"), (True, "ml", "ml")],
+)
+def test_solar_selection_protects_daily_totals_only_after_repeated_errors(
+    tmp_path, repeated, preference, expected
+):
+    """Prefer accurate daily energy over ML's hourly win only for repeated material bias."""
+    store = make_store(tmp_path, SolarStore)
+    configuration = plant()
+    configuration = replace(
+        configuration, sources=(replace(configuration.sources[0], forecast_source=preference),)
+    )
+    fitted = (SimpleNamespace(source_id="pv0"),)
+    for day in range(7):
+        now = START + timedelta(days=day)
+        baseline = prediction(now, 0.8, configuration=configuration)
+        # Alternating 0.2 and 1.4 gives the correct 19.2 kWh daily total and 0.6 kWh hourly MAE.
+        baseline = replace(
+            baseline,
+            energies=tuple(
+                replace(energy, ac_kwh=0.2 if index % 2 else 1.4)
+                for index, energy in enumerate(baseline.energies)
+            ),
+        )
+        # One large miss plus six small misses also exceeds 15% in aggregate.
+        amount = 0.64 if repeated else (0.0 if day == 0 else 0.786)
+        choose_sources(store, configuration, baseline, prediction(now, amount), fitted, {}, {}, now)
+    now = START + timedelta(days=8)
+    history = EnergyHistory(
+        "sensor.pv0",
+        tuple(
+            EnergyHour(START + timedelta(hours=index), index * 0.8, index * 0.8)
+            for index in range(8 * 24 + 1)
+        ),
+    )
+    chosen, statuses = choose_sources(
+        store,
+        configuration,
+        prediction(now, 0.8, configuration=configuration),
+        prediction(now, 0.64),
+        fitted,
+        {},
+        {"sensor.pv0": history},
+        now,
+    )
+    status = statuses["pv0"]
+    totals = status["daily_total_comparison"]
+    assert len(totals["days"]) == 7
+    assert status["mae_kwh"]["ml"] < status["mae_kwh"]["pvwatts"]
+    assert totals["models"]["pvwatts"]["absolute_error_kwh"] == pytest.approx(0)
+    assert totals["models"]["ml"]["bias_kwh"] < -0.15 * totals["measured_kwh"]
+    assert totals["models"]["ml"]["materially_underestimated_days"] == (7 if repeated else 1)
+    assert totals["ml_held"] is (expected == "pvwatts")
+    assert chosen["pv0"][0] == expected
 
 
 @pytest.mark.parametrize(

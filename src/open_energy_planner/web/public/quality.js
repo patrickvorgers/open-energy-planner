@@ -92,6 +92,7 @@ function graph(source, index, inProgress) {
     const evidenceTime = (value, options = {}) => when(value, options) + (hourOccurrences.get(Date.parse(value)) || "");
     const article = document.createElement("article"), heading = document.createElement("h2"), wrap = document.createElement("div"), canvas = document.createElement("canvas");
     article.className = "chart-card"; heading.textContent = source.title; article.append(heading);
+    if (subjectOf(source) === "solar") paragraph(article, `Forecast used on ${dateLabel(displayedDay.day)}: ${source.model_label}`, "quality-original-model");
     const daily = source.daily;
     const totals = document.createElement("dl"); totals.className = "quality-daily quality-summary";
     const complete = daily.measured_kwh != null && !daily.evaluation_issue;

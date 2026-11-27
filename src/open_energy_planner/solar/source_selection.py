@@ -42,6 +42,9 @@ from open_energy_planner.weather.run import FORECAST_WEATHER_POLICY
 HOUR = timedelta(hours=1)
 DAY = timedelta(days=1)
 SOURCE_POLICY = "matched-local-day-mae-ac-clipping-v3"
+DAILY_TOTAL_COMPARISON_DAYS = 7
+MIN_UNDERESTIMATED_DAYS = 5
+MIN_UNDERESTIMATION_SHARE = 0.15
 
 
 def ha_energies(configuration, baseline, predictions, now):
@@ -172,6 +175,17 @@ def _read_comparison(documents, path, source_id, day, timezone, hours):
     return record
 
 
+def _production_control_issue(source, hours, control):
+    """Identify excluded learning dates separately from unavailable unrestricted production."""
+    if not all(learning_interval(source, instant, instant + HOUR) for instant in hours):
+        return "outside_learning_period"
+    if not all(
+        unrestricted_interval(source, instant, instant + HOUR, control) for instant in hours
+    ):
+        return "restricted_or_unverified_production"
+    return None
+
+
 def _score_comparisons(
     documents,
     source,
@@ -188,13 +202,13 @@ def _score_comparisons(
     control,
     evidence_issue,
 ):
-    """Return matched days, hourly kWh errors by model and any evidence issue.
+    """Return matched days, hourly kWh errors, exclusions and any evidence issue.
 
     Skip days with incomplete or ineligible readings. Unreadable evidence
-    discards all collected days and suppresses scoring.
+    stops the scan and suppresses scoring if the hourly cohort is incomplete.
     """
     actual = meter_hours.get(source.entity_id, {})
-    cohorts = []
+    cohorts, exclusions = [], []
     for day_index in range(1, MAX_ACCURACY_LOOKBACK_DAYS + 1):
         day = tomorrow - day_index * DAY
         hours, end = comparison_hours(day, timezone)
@@ -206,28 +220,29 @@ def _score_comparisons(
         try:
             record = _read_comparison(documents, path, source.source_id, day, timezone, hours)
         except (OSError, ValueError, TypeError, KeyError):
-            evidence_issue = (
-                "Stored solar accuracy evidence is unreadable. Automatic comparison is unavailable"
-            )
-            cohorts = []
+            exclusions.append({"day": day.isoformat(), "reason": "unreadable_capture"})
+            if len(cohorts) < MIN_ACCURACY_DAYS:
+                evidence_issue = "Stored solar accuracy evidence is unreadable. Automatic comparison is unavailable"
+                cohorts = []
             break
         if record is None:
+            exclusions.append({"day": day.isoformat(), "reason": "missing_capture"})
             continue
         if not set(models) <= set(record["models"]):
+            exclusions.append({"day": day.isoformat(), "reason": "missing_models"})
             continue
         if (
             ForecastSource.HOME_ASSISTANT in models
             and record.get("ha_configuration_versions", []) != provider_revisions
         ):
+            exclusions.append({"day": day.isoformat(), "reason": "ha_configuration_changed"})
             continue
-        if not all(
-            learning_interval(source, instant, instant + HOUR)
-            and unrestricted_interval(source, instant, instant + HOUR, control)
-            for instant in hours
-        ):
+        if reason := _production_control_issue(source, hours, control):
+            exclusions.append({"day": day.isoformat(), "reason": reason})
             continue
         values = [actual.get(instant) for instant in hours]
         if any(value is None for value in values):
+            exclusions.append({"day": day.isoformat(), "reason": "missing_measurements"})
             continue
         if any(
             ac_comparison_issue(
@@ -242,20 +257,58 @@ def _score_comparisons(
             )
             for instant in hours
         ):
+            exclusions.append({"day": day.isoformat(), "reason": "inverter_limit_evidence"})
             continue
         cohorts.append((record, values))
-        if len(cohorts) == MIN_ACCURACY_DAYS:
+        if len(cohorts) == DAILY_TOTAL_COMPARISON_DAYS:
             break
+    hourly_cohorts = cohorts[:MIN_ACCURACY_DAYS]
     scores = {}
-    if len(cohorts) == MIN_ACCURACY_DAYS and evidence_issue is None:
+    if len(hourly_cohorts) == MIN_ACCURACY_DAYS and evidence_issue is None:
         scores = {
             model: mean_absolute_error(
-                [predicted for record, _values in cohorts for predicted in record["models"][model]],
-                [observed for _record, values in cohorts for observed in values],
+                [
+                    predicted
+                    for record, _values in hourly_cohorts
+                    for predicted in record["models"][model]
+                ],
+                [observed for _record, values in hourly_cohorts for observed in values],
             )
             for model in models
         }
-    return cohorts, scores, evidence_issue
+    return cohorts, scores, exclusions, evidence_issue
+
+
+def _daily_total_evidence(cohorts, models):
+    """Summarize signed and absolute daily errors on identical completed days."""
+    measured = [fsum(values) for _record, values in cohorts]
+    errors = {}
+    for model in models:
+        daily = [
+            fsum(record["models"][model]) - actual
+            for (record, _values), actual in zip(cohorts, measured, strict=True)
+        ]
+        errors[model] = {
+            "bias_kwh": fsum(daily),
+            "absolute_error_kwh": fsum(abs(error) for error in daily),
+            "materially_underestimated_days": sum(
+                actual > 0 and error <= -actual * MIN_UNDERESTIMATION_SHARE
+                for error, actual in zip(daily, measured, strict=True)
+            ),
+        }
+    return fsum(measured), errors
+
+
+def _persistent_ml_underestimate(cohorts, measured, errors):
+    """Require repeated material underestimation and a better physical daily forecast."""
+    ml = errors.get(ForecastSource.ML)
+    if len(cohorts) < DAILY_TOTAL_COMPARISON_DAYS or measured <= 0 or ml is None:
+        return False
+    return (
+        ml["materially_underestimated_days"] >= MIN_UNDERESTIMATED_DAYS
+        and ml["bias_kwh"] <= -measured * MIN_UNDERESTIMATION_SHARE
+        and errors[ForecastSource.PVWATTS]["absolute_error_kwh"] < ml["absolute_error_kwh"]
+    )
 
 
 def _select_model(source, models, scores, control, now, *, enforce_ml_policy):
@@ -384,7 +437,8 @@ def choose_sources(
 
     At most one immutable capture per source/day is retained. Candidates cannot
     gain an advantage from a shorter horizon, missing hours or later revisions.
-    All currently available candidates share the same three complete daily windows.
+    All available candidates share three complete days for hourly accuracy and
+    seven for the Automatic daily-total safeguard.
     Old raw Recorder data cannot reconstruct forecasts that were never captured.
 
     Args:
@@ -457,7 +511,7 @@ def choose_sources(
             store.documents, prefix, capture, models, field, future_hours
         )
         history = histories.get(source.entity_id)
-        cohorts, scores, issue = _score_comparisons(
+        cohorts, scores, exclusions, issue = _score_comparisons(
             store.documents,
             source,
             baseline.location.timezone,
@@ -495,17 +549,35 @@ def choose_sources(
             now,
             enforce_ml_policy=source_id in (ml_policies or {}),
         )
+        measured, daily_errors = _daily_total_evidence(cohorts, models)
+        ml_held = (
+            preference == ForecastSource.AUTOMATIC
+            and chosen == ForecastSource.ML
+            and _persistent_ml_underestimate(cohorts, measured, daily_errors)
+        )
+        if ml_held:
+            chosen = ForecastSource.PVWATTS
+            learning_issue = "PVWatts is active because machine learning repeatedly underestimated daily production."
         selected[source_id] = (chosen, models[chosen])
+        comparison_days = [record["day"] for record, _values in cohorts]
         statuses[source_id] = {
             "requested": preference,
             "active": chosen,
             "mae_kwh": scores,
-            "complete_days": len(cohorts),
+            "complete_days": min(len(comparison_days), MIN_ACCURACY_DAYS),
             "required_days": 0
             if admission_basis == "historical_forecast_backtest"
             else MIN_ACCURACY_DAYS,
             "admission_basis": admission_basis,
-            "comparison_days": [record["day"] for record, _values in cohorts],
+            "comparison_days": comparison_days[:MIN_ACCURACY_DAYS],
+            "comparison_exclusions": exclusions,
+            "daily_total_comparison": {
+                "days": comparison_days,
+                "required_days": DAILY_TOTAL_COMPARISON_DAYS,
+                "measured_kwh": measured,
+                "models": daily_errors,
+                "ml_held": ml_held,
+            },
             "history_version": version(document(history)) if history else None,
             "issue": issue
             or learning_issue
