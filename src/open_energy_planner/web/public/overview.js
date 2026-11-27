@@ -178,18 +178,9 @@ function renderTooltip({chart: instance, tooltip}, node, balance = false, balanc
     node.hidden = !tooltip.opacity || Boolean(instance.canvas.closest("[hidden]"));
     if (node.hidden) return;
     node.replaceChildren();
-    let items = [...tooltip.dataPoints];
-    if (balance && Number.isFinite(balanceTime)) {
-        // Narrow screens can select a nearby SoC endpoint instead of the subpixel-width bar.
-        const time = balanceTime;
-        const bars = instance.data.datasets.flatMap((dataset, index) => {
-            if (dataset.type !== "bar" || !instance.isDatasetVisible(index)) return [];
-            const point = dataset.data.find(point => point.start <= time && time < point.end && point.y != null);
-            return point ? [{dataset, raw: point, parsed: point}] : [];
-        });
-        if (bars.length) items = bars;
-    }
-    const interval = balance ? balanceTooltipInterval(items, tooltip.interval) : null;
+    const {items: pointItems, interval} = balance
+        ? balanceTooltipData(instance, tooltip, balanceTime) : {items: tooltip.dataPoints, interval: null};
+    let items = [...pointItems];
     const title = document.createElement("p"); title.className = "chart-tooltip-title";
     title.textContent = interval ? `From ${when(interval.start)} to ${when(interval.end)}` : tooltip.title.join(" - "); node.append(title);
     if (tooltip.periodLabel) {
@@ -225,9 +216,17 @@ function renderTooltip({chart: instance, tooltip}, node, balance = false, balanc
     }
     positionChartTooltip(node, instance.canvas, tooltip.caretX, tooltip.caretY);
 }
-/** Use the pinned interval when the legend hides all matching flow rows. */
-function balanceTooltipInterval(items, pinnedInterval) {
-    return items.find(item => item.raw.start != null)?.raw ?? pinnedInterval;
+/** Distinguish a selected balance interval from inspection of a single SoC point. */
+function balanceTooltipData(chart, {dataPoints, interval: pinnedInterval}, time) {
+    const pointReadout = {items: dataPoints, interval: dataPoints.find(item => item.raw.start != null)?.raw};
+    if (!Number.isFinite(time)) return pointReadout;
+    const bars = chart.data.datasets.flatMap((dataset, index) => {
+        if (dataset.type !== "bar" || !chart.isDatasetVisible(index)) return [];
+        const point = dataset.data.find(point => point.start <= time && time < point.end && point.y != null);
+        return point ? [{dataset, raw: point, parsed: point}] : [];
+    });
+    const interval = bars[0]?.raw ?? optimizerQuarter(chart, time) ?? pinnedInterval;
+    return interval ? {items: bars, interval} : pointReadout;
 }
 /** Show plan cash flows before bonus and battery valuation. Missing evidence remains unknown. */
 function linkedCostTable({gridImport, gridExport, buyRate, sellRate, currency}) {
@@ -286,23 +285,25 @@ function clearLinkedInspection() {
     $("linked-chart-reading").textContent = "";
 }
 
-/** Keep the plotted quarter and its recorded coverage independently of which series are visible. */
-function linkedBalanceInterval(chart, time, {start, end}) {
-    const coverage = chart.data.datasets.find(dataset => dataset.type === "bar")
+/** Find the Optimizer's plotted coverage even when all flow series are hidden. */
+function optimizerQuarter(chart, time) {
+    if (chart.canvas.id !== "plan-chart") return null;
+    return chart.data.datasets.find(dataset => dataset.type === "bar")
         ?.data.find(point => point.start <= time && time < point.end);
-    return coverage ?? {start, end, coveredStart: start, coveredEnd: end};
 }
 
 /** Render the selected quarter for the chart that received the input. */
 function renderLinkedTooltip(chart, tooltip, interval, y) {
-    const time = (interval.start + interval.end) / 2;
+    const {start, end} = interval;
+    const time = (start + end) / 2;
     const x = chart.scales.x.getPixelForValue(time);
     if (chart.canvas.id === "plan-chart") {
-        renderTooltip({chart, tooltip: {opacity: 1, dataPoints: [], interval: linkedBalanceInterval(chart, time, interval), caretX: x, caretY: y}}, tooltip, true, time);
+        const selectedRange = {start, end, coveredStart: start, coveredEnd: end};
+        renderTooltip({chart, tooltip: {opacity: 1, dataPoints: [], interval: selectedRange, caretX: x, caretY: y}}, tooltip, true, time);
     } else {
         const title = document.createElement("p");
         title.className = "chart-tooltip-title";
-        title.textContent = `From ${when(interval.start)} to ${when(interval.end)}`;
+        title.textContent = `From ${when(start)} to ${when(end)}`;
         tooltip.replaceChildren(title, linkedCostTable(interval));
         for (const ranking of planRankNotes(time)) {
             const note = document.createElement("p");

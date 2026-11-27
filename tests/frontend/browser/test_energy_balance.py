@@ -287,23 +287,26 @@ def _assert_inspection_with_only_battery_state_visible(page, canvas, popup):
             ["16", "-16"]
         )
         expect(popup).not_to_contain_text("Household demand")
-        expect(page.locator("#linked-chart-reading")).to_contain_text("SoC at start")
 
+    midpoint = datetime(2026, 10, 23, 0, 7, 30, tzinfo=UTC).timestamp() * 1000
+    point = canvas.evaluate(
+        """(canvas, time) => {
+            const chart = Chart.getChart(canvas);
+            return {x: chart.scales.x.getPixelForValue(time), y: chart.chartArea.top + 20};
+        }""",
+        midpoint,
+    )
+    canvas.hover(position=point)
+    expect_balance()
     canvas.press("Home")
     expect_balance()
+    reading = page.locator("#linked-chart-reading")
+    expect(reading).to_contain_text("SoC at start")
     if page.viewport_size["width"] < 500:
         canvas.press("Escape")
-        midpoint = datetime(2026, 10, 23, 0, 7, 30, tzinfo=UTC).timestamp() * 1000
-        point = canvas.evaluate(
-            """(canvas, time) => {
-                const chart = Chart.getChart(canvas);
-                return {x: chart.scales.x.getPixelForValue(time),
-                        y: (chart.chartArea.top + chart.chartArea.bottom) / 2};
-            }""",
-            midpoint,
-        )
         canvas.tap(position=point)
         expect_balance()
+        expect(reading).to_contain_text("SoC at start")
     open_chart_series(page, "plan-chart")
     legend.get_by_role("button", name="Select all", exact=True).click()
     page.keyboard.press("Escape")
