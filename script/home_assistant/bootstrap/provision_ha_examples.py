@@ -69,39 +69,65 @@ async def entity_registry(session, url):
     return await native_command(session, url, {"type": "config/entity_registry/list"})
 
 
+async def _provision_sidebar(session, url, journal):
+    """Enable the sidebar once and distinguish rejected writes from uncertain outcomes."""
+    if "sidebar" in journal.state["completed"]:
+        return
+    command = {
+        "type": "supervisor/api",
+        "endpoint": "/addons/local_open_energy_planner/info",
+        "method": "get",
+    }
+    information = await native_command(session, url, command)
+    if (
+        not information.get("ingress_panel")
+        and "attempted:sidebar" not in journal.state["completed"]
+    ):
+        journal.complete("attempted:sidebar")
+        try:
+            await native_command(
+                session,
+                url,
+                {
+                    **command,
+                    "endpoint": "/addons/local_open_energy_planner/options",
+                    "method": "post",
+                    "data": {"ingress_panel": True},
+                },
+            )
+        except CommandNotApplied:
+            journal.discard("attempted:sidebar")
+            raise
+        information = await native_command(session, url, command)
+        if not information.get("ingress_panel"):
+            raise RuntimeError("Open Energy Planner sidebar panel was not enabled")
+    journal.complete("sidebar")
+
+
+async def _provision_automation(request, journal, key, body):
+    """Create a missing laboratory automation and preserve its one-time receipt."""
+    automation_id = "oep_lab_" + key.removeprefix("automation:").replace("-", "_")
+    path = "/api/config/automation/config/" + automation_id
+    try:
+        await request("GET", path)
+    except ClientResponseError as error:
+        if error.status != 404:
+            raise
+        if "attempted:" + key not in journal.state["completed"]:
+            journal.complete("attempted:" + key)
+            try:
+                await request("POST", path, json=body)
+            except ClientResponseError as rejected:
+                if 400 <= rejected.status < 500:
+                    journal.discard("attempted:" + key)
+                raise
+    journal.complete(key)
+
+
 async def provision(session, url, request, journal_path, *, app_request):
     """Wait for normal virtual-device discovery and create missing automation instances once."""
     journal = ExampleJournal(journal_path)
-    if "sidebar" not in journal.state["completed"]:
-        command = {
-            "type": "supervisor/api",
-            "endpoint": "/addons/local_open_energy_planner/info",
-            "method": "get",
-        }
-        information = await native_command(session, url, command)
-        if (
-            not information.get("ingress_panel")
-            and "attempted:sidebar" not in journal.state["completed"]
-        ):
-            journal.complete("attempted:sidebar")
-            try:
-                await native_command(
-                    session,
-                    url,
-                    {
-                        **command,
-                        "endpoint": "/addons/local_open_energy_planner/options",
-                        "method": "post",
-                        "data": {"ingress_panel": True},
-                    },
-                )
-            except CommandNotApplied:
-                journal.discard("attempted:sidebar")
-                raise
-            information = await native_command(session, url, command)
-            if not information.get("ingress_panel"):
-                raise RuntimeError("Open Energy Planner sidebar panel was not enabled")
-        journal.complete("sidebar")
+    await _provision_sidebar(session, url, journal)
     expected = {
         "automation:" + source.removeprefix("sensor.oep_test_").removesuffix("_energy")
         for source in journal.state["appliances"]
@@ -157,19 +183,4 @@ async def provision(session, url, request, journal_path, *, app_request):
                 raise RuntimeError("Virtual example devices did not become available") from None
             await asyncio.sleep(ENTITY_WAIT_SECONDS)
     for key, body in definitions:
-        automation_id = "oep_lab_" + key.removeprefix("automation:").replace("-", "_")
-        path = "/api/config/automation/config/" + automation_id
-        try:
-            await request("GET", path)
-        except ClientResponseError as error:
-            if error.status != 404:
-                raise
-            if "attempted:" + key not in journal.state["completed"]:
-                journal.complete("attempted:" + key)
-                try:
-                    await request("POST", path, json=body)
-                except ClientResponseError as rejected:
-                    if 400 <= rejected.status < 500:
-                        journal.discard("attempted:" + key)
-                    raise
-        journal.complete(key)
+        await _provision_automation(request, journal, key, body)
