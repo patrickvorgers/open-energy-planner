@@ -529,12 +529,16 @@ async def _publish_daily_prices(service, daily_prices, price_timezone, savings_m
                 raise cancellation
 
 
-def _register_price_worker(app, factory, install, refresh_requested, live, lock, update_daily):
-    """Own scheduled price refresh, wakeups and worker cleanup for the active service."""
+def _register_price_worker(
+    app, factory, engine, install, refresh_requested, live, lock, update_daily
+):
+    """Own scheduled price refresh, wakeups and worker cleanup for the optional service."""
+    if factory is None:
+        return
 
     async def price_lifecycle(_app):
         """Install the price service for the same lifetime as its background worker."""
-        async with factory() as prices:
+        async with factory(engine) as prices:
             install(prices)
             price_logger = BackgroundLog(_LOGGER, "Market price refresh")
 
@@ -725,420 +729,129 @@ def _register_planning_lifecycle(app, planner, live, capture, lock, appliances, 
     app.cleanup_ctx.append(cleanup)
 
 
-def create_app(
-    directory,
-    token,
-    *,
-    solver=None,
-    source="synthetic",
-    basis_source=None,
-    price_factory=None,
-    weather_factory=None,
-    live_weather_factory=None,
-    satellite_factory=None,
-    demand_scorer=None,
-    discovery_options=None,
-    ingress_peer=None,
-    database_engine=None,
-    database_url=DATABASE_URL_UNSET,
-    migrate_database=False,
+async def _attach_reference_forecast(
+    document, installation, solar, demand, setup, thermal, ev, contracts
 ):
-    """Create the authenticated local API for an explicit synthetic or HA input mode.
+    """Record the optional comparison and its input evidence for a complete installation."""
+    if not (installation.current and solar.configuration and demand.configuration):
+        return
 
-    The shared async lock serializes live refresh and repository mutation, including
-    threaded publication saves. HA mode requires independent future-input providers.
-    An omitted database URL uses the deployment environment. Explicit None selects
-    local SQLite, including after a UI-managed return from an external backend.
-    Physical control remains outside this application. A separate app-owned
-    mutation lock orders price retention against financial publication without
-    holding provider fetching or live control state.
+    from dataclasses import asdict
+
+    from .savings.flexible import REFERENCE_POLICY
+    from .savings.forecast import comparison
+
+    document["reference_policy"] = REFERENCE_POLICY
+    document["comparison_bindings"] = {
+        "terms": [asdict(energy_term) for energy_term in demand.configuration.terms],
+        "solar": [asdict(source_item) for source_item in solar.configuration.sources],
+        "batteries": [asdict(battery) for battery in installation.current.batteries],
+        **((setup or {}).get("suggestions", {}).get("settlement", {})),
+    }
+    try:
+        document["reference_forecast"] = await asyncio.to_thread(comparison, document)
+    # Optional reference defects cannot block publication. The helper logs a value-free stack.
+    except Exception as error:  # noqa: BLE001
+        document["reference_forecast_issue"] = request_error_message(
+            error,
+            logger=_LOGGER,
+            operation="Reference forecast",
+            safe_messages=REFERENCE_FORECAST_MESSAGES,
+            fallback=REFERENCE_FORECAST_UNAVAILABLE,
+        )
+    from .home_assistant.names import comparison_names
+
+    document["comparison_names"] = comparison_names(
+        setup,
+        thermal.state,
+        ev.state,
+        installation.current,
+        solar.configuration,
+        demand.consumers.selected,
+    )
+    document["currency"] = contracts.current.currency if contracts.current else None
+    document["market_area"] = contracts.current.market_area if contracts.current else None
+
+
+async def _publish_candidate(
+    document,
+    lock,
+    live,
+    planner,
+    repository,
+    installation,
+    solar,
+    demand,
+    setup_catalogue,
+    thermal,
+    ev,
+    contracts,
+    appliances,
+    save_state,
+):
+    """Recheck current live inputs under the state lock before saving a complete candidate.
+
+    Restore the previous in-memory pointer if persistence fails. No other state
+    mutation may run while the threaded save owns this lock.
     """
-    if not token or len(token) < MIN_API_TOKEN_LENGTH:
-        raise ValueError("A local API token of at least 24 characters is required")
-    if source not in ("synthetic", "home_assistant"):
-        raise ValueError("Select an explicit supported input mode")
-    repository = SqlPlanRepository(
-        directory,
-        engine=database_engine,
-        database_url=os.environ.get("OEP_DATABASE_URL")
-        if database_url is DATABASE_URL_UNSET
-        else database_url,
-        migrate_database=migrate_database or os.environ.get("OEP_MIGRATE_DATABASE") == "1",
-    )
-    contracts = ContractStore(SqlDocuments(repository.engine, "contracts"))
-    bonus_counters = CounterStore(SqlDocuments(repository.engine, "bonus-counters"))
-    demand_store = DemandStore(SqlDocuments(repository.engine, "demand"))
-    demand = DemandRuntime(demand_store, scorer=demand_scorer, plans=repository)
-    from open_energy_planner.appliances.cycles.service import ApplianceService
+    from .planning import PublicationSuperseded
 
-    appliances = ApplianceService(SqlDocuments(repository.engine, "planning"), demand.consumers)
-    from open_energy_planner.appliances.ev.service import EVService
-
-    ev = EVService(SqlDocuments(repository.engine, "planning"), demand.consumers, appliances)
-    from open_energy_planner.appliances.thermal.service import ThermalService
-
-    thermal = ThermalService(
-        SqlDocuments(repository.engine, "planning"), demand.consumers, appliances, ev
-    )
-    weather_store = SeriesArchive(SqlDocuments(repository.engine, "weather"))
-    solar = SolarRuntime(SolarStore(SqlDocuments(repository.engine, "solar")))
-    solar.weather_archive = weather_store
-    installation = InstallationStore(SqlDocuments(repository.engine, "installation"))
-    strategy = StrategyStore(SqlDocuments(repository.engine, "planning"))
-    installation_basis = basis_source is None
-    if installation_basis:
-        basis_source = InstallationBasisSource(installation, demand, solar)
-    pending_contract_id = uuid4().hex
-    bonus_history = BonusHistory()
-    bonus_preview = BonusBudgetPreview()
-    lock = ApplicationStateLock()
-    setup_catalogue = HACatalogue()
-    savings_mutation_lock = asyncio.Lock()
-    planner = None
-    live = None
-    from .home_assistant.plan_api import command_mode
-    from .home_assistant.plan_status_watch import WATCH_PATH, PlanStatusWatch
-
-    plan_watch = PlanStatusWatch()
-
-    def publish_plan_status():
-        """Signal command authority changes or new diagnostics when commands are absent."""
-        state, revision, plan = command_mode(repository, live)
-        plan_watch.publish(
-            (
-                state["enabled"],
-                state["command_suspended"],
-                revision,
-                bool(live and live.configuration),
-                plan["plan_id"] if plan else None,
-                None if plan else (planner.status, planner.reason),
-            )
-        )
-
-    from open_energy_planner.optimization.adapters.process.worker import ProcessSolver
-
-    from .planning import PlanningCoordinator, PlanningService, PublicationSuperseded
-    from .synthetic import capture
-
-    # Declared fixture devices remain available when planning inputs are invalidated.
-    synthetic_batteries = capture().problem.batteries if source == "synthetic" else ()
-
-    _discard_incompatible_active_plan(repository)
-
-    async def publish(document):
-        """Recheck current live inputs under the state lock before saving a complete candidate.
-
-        Restore the previous in-memory pointer if persistence fails. No other state
-        mutation may run while the threaded save owns this lock.
-        """
-        async with lock:
-            if live:
-                await live.refresh_async()
-                reason = planner.publication_rejection(
-                    document, datetime.now(UTC), live.current_snapshot
-                )
-                if reason:
-                    live.replan_requested = True
-                    raise PublicationSuperseded(reason)
-            previous = repository.state["plan"]
-            if installation.current and solar.configuration and demand.configuration:
-                from dataclasses import asdict
-
-                from .savings.flexible import REFERENCE_POLICY
-                from .savings.forecast import comparison
-
-                document["reference_policy"] = REFERENCE_POLICY
-                document["comparison_bindings"] = {
-                    "terms": [asdict(energy_term) for energy_term in demand.configuration.terms],
-                    "solar": [asdict(source_item) for source_item in solar.configuration.sources],
-                    "batteries": [asdict(battery) for battery in installation.current.batteries],
-                    **((setup_catalogue.value or {}).get("suggestions", {}).get("settlement", {})),
-                }
-                try:
-                    document["reference_forecast"] = await asyncio.to_thread(comparison, document)
-                # Optional reference defects cannot block publication. The helper logs a value-free stack.
-                except Exception as error:  # noqa: BLE001
-                    document["reference_forecast_issue"] = request_error_message(
-                        error,
-                        logger=_LOGGER,
-                        operation="Reference forecast",
-                        safe_messages=REFERENCE_FORECAST_MESSAGES,
-                        fallback=REFERENCE_FORECAST_UNAVAILABLE,
-                    )
-                from .home_assistant.names import comparison_names
-
-                document["comparison_names"] = comparison_names(
-                    setup_catalogue.value,
-                    thermal.state,
-                    ev.state,
-                    installation.current,
-                    solar.configuration,
-                    demand.consumers.selected,
-                )
-                document["currency"] = contracts.current.currency if contracts.current else None
-                document["market_area"] = (
-                    contracts.current.market_area if contracts.current else None
-                )
-            from .forecast_quality.api import capture_sources
-
-            capture_sources(document, demand, solar, setup_catalogue.value, ev, thermal)
-            repository.state["plan"] = document
-            try:
-                cancellation = await complete_write(appliances.accept_plan, document)
-                await save_state()
-                if cancellation is not None:
-                    raise cancellation
-            except Exception:
-                repository.state["plan"] = previous
-                raise
-
-    notification_center = NotificationCenter()
-
-    from .home_assistant.lifecycle import HomeAssistantLifecycle
-    from .home_assistant.notifications import MEASUREMENT_CAUSES
-
-    ha_lifecycle = HomeAssistantLifecycle()
-
-    def planning_status():
-        """Share immutable coordinator evidence with notification providers, never its mutation methods."""
-        _, _, active_plan = command_mode(repository, live)
-        return PlanningStatus(
-            planner.status,
-            planner.reason,
-            planner.blocked_since,
-            planner.block_reason,
-            has_published=planner.published is not None,
-            block_text=planner.block_text,
-            ev_fallback_active=bool(active_plan and active_plan.get("ev_control_deferred")),
-        )
-
-    def explain_live_problem(reason, _detail=None):
-        """Keep source-specific actionable context in both planning notices and transition logs."""
-        from .appliances.ev.notifications import explain_problem as explain_ev_problem
-        from .home_assistant.notifications import explain_live_problem as explain_measurements
-
-        return explain_ev_problem(reason) or explain_measurements(
-            live, reason, setup_catalogue.value
-        )
-
-    def current_planning_notices():
-        """Prefer confirmed HA lifecycle evidence over measurement symptoms during shutdown."""
-        state = planning_status()
-        notice = ha_lifecycle.notice()
-        if notice and state.status != "calculating" and state.cause in MEASUREMENT_CAUSES:
-            return (notice,)
-        notices = planning_notifications(state, notification_center.explain)
-        if notice:
-            return (*(notices or ()), notice)
-        return notices
-
-    planner = PlanningCoordinator(
-        PlanningService(solver or ProcessSolver()), publish, explain=notification_center.explain
-    )
-    notification_center.register(
-        "planning",
-        current_planning_notices,
-        explain=explain_live_problem,
-        fallback=True,
-    )
-    if source == "home_assistant":
-        # Recovery always needs fresh reports. Retained plans are history, not commands.
-        repository.state["plan"] = None
-        repository.save()
-        live = LiveInputs(planner, repository, basis_source, ev=ev)
-        live.command_authority_changed = publish_plan_status
-        live.prepare_snapshot = lambda snapshot, now: thermal.prepare(
-            snapshot,
-            demand,
-            now,
-            (setup_catalogue.value or {}).get("timezone", "UTC"),
-        )
-        _restore_live_configuration(live, installation, repository)
-
-    async def save_state():
-        """Finish state persistence under the caller-held lock before propagating cancellation."""
-        try:
-            cancellation = await complete_write(repository.save)
-        finally:
-            publish_plan_status()
-        if cancellation is not None:
-            raise cancellation
-
-    app = _create_http_application(token, repository, lock, save_state)
-    _register_runtime_status(app, notification_center, ha_lifecycle, source)
-    from .ingress import INGRESS_PEER
-
-    if ingress_peer:
-        app[INGRESS_PEER] = ingress_peer
-    from .pairing import Pairing, register_pairing
-
-    _register_archive_lifecycle(app, repository, lock, save_state)
-
-    def installation_timezone():
-        """Use the installation calendar, allowing UTC only for explicit synthetic mode."""
-        return (setup_catalogue.value or {}).get("timezone") or (
-            "UTC" if source == "synthetic" else None
-        )
-
-    events = _register_planning_activity(
-        app, repository.engine, planner, notification_center, installation_timezone
-    )
-
-    pairing = Pairing(directory, repository.state["instance_id"])
-    register_pairing(app, pairing)
-    if discovery_options is not None:
-        from .discovery import advertise
-
-        advertise(app, pairing, directory, token, **discovery_options)
-    prices = None
-    price_refresh_requested = asyncio.Event()
-    daily_prices = DailyPrices(SqlDocuments(repository.engine, "prices"))
-
-    from .storage.api import register as register_storage
-
-    register_storage(app, repository.engine, installation_timezone)
-
-    contract_basis = _prepare_contract_basis(
-        basis_source,
-        lambda: prices,
-        contracts,
-        bonus_counters,
-        live,
-        installation,
-        price_factory is not None,
-    )
-
-    async def persist_then_install(
-        save,
-        candidate,
-        install=None,
-        *,
-        contract_input=True,
-        force_replan=True,
-        defer_refresh=False,
-    ):
-        """Save under the caller-held app lock, then install before propagating cancellation.
-
-        Drain repeated request cancellations while the storage thread owns its
-        write. Writer failures propagate without installation or refresh. A
-        successful save becomes authoritative before cancellation is re-raised.
-        Contract-related writes activate contract inputs. Unrelated settings must
-        pass contract_input=False to retain the existing future-input adapter.
-        Explicit contract writes also wake the price owner to admit a newly configured area.
-        Background evidence writes use the next planning boundary with force_replan=False.
-        Command-affecting writes that defer refresh must revoke obsolete commands in
-        their install callback before the next planning boundary, as setup does.
-        """
-        cancellation = await complete_write(save, candidate)
-        if install is not None:
-            install(candidate)
-        if contract_input and force_replan:
-            price_refresh_requested.set()
+    async with lock:
         if live:
-            if contract_input:
-                live.basis_source = contract_basis
-            if defer_refresh:
-                live.replan_requested = True
-            else:
-                await live.refresh_async(force=force_replan)
-        _LOGGER.info(
-            "Configuration saved (%s). Updated settings are now active%s.",
-            type(candidate).__name__,
-            ". Planning prerequisites have been rechecked" if live and not defer_refresh else "",
-        )
-        if cancellation is not None:
-            raise cancellation
-
-    contract_api = ContractAPI(
-        app,
-        contracts,
-        bonus_counters,
-        bonus_history,
-        bonus_preview,
-        live,
-        setup_catalogue,
-        lambda: prices,
-        lock,
-        persist_then_install,
-        lambda request: snapshot(request),
-        pending_contract_id,
-        planning_status=planning_status,
-    )
-
-    build_demand = register_demand(
-        app,
-        demand,
-        live,
-        setup_catalogue,
-        lock,
-        persist_then_install,
-        lambda request: snapshot(request),
-    )
-
-    _register_demand_worker(app, demand, lock, events, build_demand, lambda: refresh_preferences())
-
-    def oldest_demand_history():
-        """Extend temperature coverage to the oldest loaded household or consumer endpoint."""
-        return min(
-            (
-                history.hours[0].start
-                for history in (
-                    *demand.histories.values(),
-                    *demand.consumers.histories.values(),
-                )
-                if history.hours
-            ),
-            default=None,
-        )
-
-    register_weather_history(
-        app,
-        live,
-        lock,
-        weather_factory,
-        weather_store.documents,
-        oldest_demand_history,
-        lambda: demand.configuration is not None,
-        demand.weather,
-        PRICE_SCHEDULE_POLL_SECONDS,
-    )
-
-    if price_factory is not None:
-
-        def install_price_service(service):
-            """Expose the pricing service and share savings mutation ordering."""
-            nonlocal prices
-            prices = service
-            prices.persistence_lock = savings_mutation_lock
-            prices.events = events
-
-        _register_price_worker(
-            app,
-            lambda: price_factory(repository.engine),
-            install_price_service,
-            price_refresh_requested,
-            live,
-            lock,
-            lambda service: _publish_daily_prices(
-                service, daily_prices, installation_timezone, savings_mutation_lock
-            ),
-        )
-
-    register_prices(app, lambda: prices, contracts, live, lock, daily_prices, installation_timezone)
-
-    async def snapshot(request):
-        """Dispatch once the snapshot's app-owned services have been registered."""
-        if request.headers.get("X-OEP-View") == "commands":
-            if request.method in {"GET", "HEAD"}:
-                raise web.HTTPNotFound()
-            return web.json_response(
-                {"accepted": True, "instance_id": repository.state["instance_id"]}
+            await live.refresh_async()
+            reason = planner.publication_rejection(
+                document, datetime.now(UTC), live.current_snapshot
             )
-        return await snapshot_handler(request)
+            if reason:
+                live.replan_requested = True
+                raise PublicationSuperseded(reason)
+        previous = repository.state["plan"]
+        await _attach_reference_forecast(
+            document, installation, solar, demand, setup_catalogue.value, thermal, ev, contracts
+        )
+        from .forecast_quality.api import capture_sources
+
+        capture_sources(document, demand, solar, setup_catalogue.value, ev, thermal)
+        repository.state["plan"] = document
+        try:
+            cancellation = await complete_write(appliances.accept_plan, document)
+            await save_state()
+            if cancellation is not None:
+                raise cancellation
+        except Exception:
+            repository.state["plan"] = previous
+            raise
+
+
+def _register_planning_endpoints(
+    app,
+    source,
+    repository,
+    planner,
+    live,
+    lock,
+    capture,
+    appliances,
+    installation,
+    demand,
+    persist_then_install,
+    snapshot,
+    get_snapshot_handler,
+    publish_plan_status,
+    save_state,
+    plan_watch,
+    solar,
+    get_setup_catalogue,
+    installation_basis,
+    synthetic_batteries,
+    ev,
+):
+    """Expose planning and HA command endpoints alongside their runtime lifecycle."""
+    from .home_assistant.plan_status_watch import WATCH_PATH
 
     async def ha_requests(request):
         """Serve HA setup and data requests separately from command transfers."""
-        return await snapshot_handler(request, ha_requests=True)
+        return await get_snapshot_handler()(request, ha_requests=True)
 
     async def readiness(_request):
         """Read startup readiness for the container without projecting a plan or history."""
@@ -1195,7 +908,12 @@ def create_app(
     def command_context():
         """Describe the actual device permissions used to validate a new command plan."""
         devices = device_catalogue(
-            installation, solar, setup_catalogue, installation_basis, synthetic_batteries, live
+            installation,
+            solar,
+            get_setup_catalogue(),
+            installation_basis,
+            synthetic_batteries,
+            live,
         )
         return {
             "devices": [
@@ -1220,6 +938,30 @@ def create_app(
 
     app.router.add_get(WATCH_PATH, watch_plan_status)
     app.on_shutdown.append(plan_watch.shutdown)
+
+
+def _register_configuration_endpoints(
+    app,
+    installation,
+    demand,
+    solar,
+    lock,
+    live,
+    persist_then_install,
+    installation_basis,
+    setup_catalogue,
+    contracts,
+    appliances,
+    ev,
+    thermal,
+    repository,
+    strategy,
+    snapshot,
+    live_weather_factory,
+    weather_store,
+    oldest_demand_history,
+):
+    """Wire setup, device settings and the installation-owned input APIs."""
     setup_catalogue = register_setup(
         app,
         installation,
@@ -1265,6 +1007,105 @@ def create_app(
     register_installation(
         app, installation, solar, live, lock, persist_then_install, snapshot, setup_catalogue
     )
+    return setup_catalogue
+
+
+def _open_app_repository(directory, token, source, database_engine, database_url, migrate_database):
+    """Validate the app's input mode and open the requested storage backend."""
+    if not token or len(token) < MIN_API_TOKEN_LENGTH:
+        raise ValueError("A local API token of at least 24 characters is required")
+    if source not in ("synthetic", "home_assistant"):
+        raise ValueError("Select an explicit supported input mode")
+    return SqlPlanRepository(
+        directory,
+        engine=database_engine,
+        database_url=os.environ.get("OEP_DATABASE_URL")
+        if database_url is DATABASE_URL_UNSET
+        else database_url,
+        migrate_database=migrate_database or os.environ.get("OEP_MIGRATE_DATABASE") == "1",
+    )
+
+
+def _input_basis(basis_source, installation, demand, solar):
+    """Default to installation-owned planning inputs while preserving injected adapters."""
+    if basis_source is not None:
+        return basis_source
+    return InstallationBasisSource(installation, demand, solar)
+
+
+def _synthetic_battery_catalogue(source, capture):
+    """Keep fixture devices available after their planning inputs become invalid."""
+    return capture().problem.batteries if source == "synthetic" else ()
+
+
+def _restore_app_live_inputs(
+    source,
+    planner,
+    repository,
+    basis_source,
+    ev,
+    thermal,
+    demand,
+    installation,
+    get_setup_catalogue,
+    publish_plan_status,
+):
+    """Restore live configuration while leaving command authority suspended until fresh reports."""
+    if source != "home_assistant":
+        return None
+    # Recovery always needs fresh reports. Retained plans are history, not commands.
+    repository.state["plan"] = None
+    repository.save()
+    live = LiveInputs(planner, repository, basis_source, ev=ev)
+    live.command_authority_changed = publish_plan_status
+    live.prepare_snapshot = lambda snapshot, now: thermal.prepare(
+        snapshot,
+        demand,
+        now,
+        (get_setup_catalogue().value or {}).get("timezone", "UTC"),
+    )
+    _restore_live_configuration(live, installation, repository)
+    return live
+
+
+def _set_ingress_peer(app, ingress_peer):
+    """Attach the optional ingress peer before enabling app routes."""
+    from .ingress import INGRESS_PEER
+
+    if ingress_peer:
+        app[INGRESS_PEER] = ingress_peer
+
+
+def _register_local_pairing(app, directory, token, instance_id, discovery_options):
+    """Expose local pairing and enable discovery when the caller supplied options."""
+    from .pairing import Pairing, register_pairing
+
+    pairing = Pairing(directory, instance_id)
+    register_pairing(app, pairing)
+    if discovery_options is not None:
+        from .discovery import advertise
+
+        advertise(app, pairing, directory, token, **discovery_options)
+
+
+def _register_financial_and_forecast_apis(
+    app,
+    repository,
+    contracts,
+    bonus_counters,
+    installation,
+    solar,
+    demand,
+    lock,
+    setup_catalogue,
+    live,
+    savings_mutation_lock,
+    strategy,
+    installation_basis,
+    satellite_factory,
+    weather_documents,
+):
+    """Wire savings and the forecast APIs that share its retained planning evidence."""
     from .savings.api import register as register_savings
 
     settlement_request, savings_runtime = register_savings(
@@ -1305,7 +1146,427 @@ def create_app(
         setup_catalogue,
         lock,
         satellite_factory,
-        weather_documents=weather_store.documents,
+        weather_documents=weather_documents,
+    )
+    return settlement_request, savings_runtime, refresh_preferences, forecast_history_request
+
+
+def create_app(
+    directory,
+    token,
+    *,
+    solver=None,
+    source="synthetic",
+    basis_source=None,
+    price_factory=None,
+    weather_factory=None,
+    live_weather_factory=None,
+    satellite_factory=None,
+    demand_scorer=None,
+    discovery_options=None,
+    ingress_peer=None,
+    database_engine=None,
+    database_url=DATABASE_URL_UNSET,
+    migrate_database=False,
+):
+    """Create the authenticated local API for an explicit synthetic or HA input mode.
+
+    The shared async lock serializes live refresh and repository mutation, including
+    threaded publication saves. HA mode requires independent future-input providers.
+    An omitted database URL uses the deployment environment. Explicit None selects
+    local SQLite, including after a UI-managed return from an external backend.
+    Physical control remains outside this application. A separate app-owned
+    mutation lock orders price retention against financial publication without
+    holding provider fetching or live control state.
+    """
+    repository = _open_app_repository(
+        directory, token, source, database_engine, database_url, migrate_database
+    )
+    contracts = ContractStore(SqlDocuments(repository.engine, "contracts"))
+    bonus_counters = CounterStore(SqlDocuments(repository.engine, "bonus-counters"))
+    demand_store = DemandStore(SqlDocuments(repository.engine, "demand"))
+    demand = DemandRuntime(demand_store, scorer=demand_scorer, plans=repository)
+    from open_energy_planner.appliances.cycles.service import ApplianceService
+
+    appliances = ApplianceService(SqlDocuments(repository.engine, "planning"), demand.consumers)
+    from open_energy_planner.appliances.ev.service import EVService
+
+    ev = EVService(SqlDocuments(repository.engine, "planning"), demand.consumers, appliances)
+    from open_energy_planner.appliances.thermal.service import ThermalService
+
+    thermal = ThermalService(
+        SqlDocuments(repository.engine, "planning"), demand.consumers, appliances, ev
+    )
+    weather_store = SeriesArchive(SqlDocuments(repository.engine, "weather"))
+    solar = SolarRuntime(SolarStore(SqlDocuments(repository.engine, "solar")))
+    solar.weather_archive = weather_store
+    installation = InstallationStore(SqlDocuments(repository.engine, "installation"))
+    strategy = StrategyStore(SqlDocuments(repository.engine, "planning"))
+    installation_basis = basis_source is None
+    basis_source = _input_basis(basis_source, installation, demand, solar)
+    pending_contract_id = uuid4().hex
+    bonus_history = BonusHistory()
+    bonus_preview = BonusBudgetPreview()
+    lock = ApplicationStateLock()
+    setup_catalogue = HACatalogue()
+    savings_mutation_lock = asyncio.Lock()
+    planner = None
+    live = None
+    from .home_assistant.plan_api import command_mode
+    from .home_assistant.plan_status_watch import PlanStatusWatch
+
+    plan_watch = PlanStatusWatch()
+
+    def publish_plan_status():
+        """Signal command authority changes or new diagnostics when commands are absent."""
+        state, revision, plan = command_mode(repository, live)
+        plan_watch.publish(
+            (
+                state["enabled"],
+                state["command_suspended"],
+                revision,
+                bool(live and live.configuration),
+                plan["plan_id"] if plan else None,
+                None if plan else (planner.status, planner.reason),
+            )
+        )
+
+    from open_energy_planner.optimization.adapters.process.worker import ProcessSolver
+
+    from .planning import PlanningCoordinator, PlanningService
+    from .synthetic import capture
+
+    synthetic_batteries = _synthetic_battery_catalogue(source, capture)
+
+    _discard_incompatible_active_plan(repository)
+
+    async def publish(document):
+        """Publish a candidate against the current app state."""
+        await _publish_candidate(
+            document,
+            lock,
+            live,
+            planner,
+            repository,
+            installation,
+            solar,
+            demand,
+            setup_catalogue,
+            thermal,
+            ev,
+            contracts,
+            appliances,
+            save_state,
+        )
+
+    notification_center = NotificationCenter()
+
+    from .home_assistant.lifecycle import HomeAssistantLifecycle
+    from .home_assistant.notifications import MEASUREMENT_CAUSES
+
+    ha_lifecycle = HomeAssistantLifecycle()
+
+    def planning_status():
+        """Share immutable coordinator evidence with notification providers, never its mutation methods."""
+        _, _, active_plan = command_mode(repository, live)
+        return PlanningStatus(
+            planner.status,
+            planner.reason,
+            planner.blocked_since,
+            planner.block_reason,
+            has_published=planner.published is not None,
+            block_text=planner.block_text,
+            ev_fallback_active=bool(active_plan and active_plan.get("ev_control_deferred")),
+        )
+
+    def explain_live_problem(reason, _detail=None):
+        """Keep source-specific actionable context in both planning notices and transition logs."""
+        from .appliances.ev.notifications import explain_problem as explain_ev_problem
+        from .home_assistant.notifications import explain_live_problem as explain_measurements
+
+        return explain_ev_problem(reason) or explain_measurements(
+            live, reason, setup_catalogue.value
+        )
+
+    def current_planning_notices():
+        """Prefer confirmed HA lifecycle evidence over measurement symptoms during shutdown."""
+        state = planning_status()
+        notice = ha_lifecycle.notice()
+        if notice and state.status != "calculating" and state.cause in MEASUREMENT_CAUSES:
+            return (notice,)
+        notices = planning_notifications(state, notification_center.explain)
+        if notice:
+            return (*(notices or ()), notice)
+        return notices
+
+    planner = PlanningCoordinator(
+        PlanningService(solver or ProcessSolver()), publish, explain=notification_center.explain
+    )
+    notification_center.register(
+        "planning",
+        current_planning_notices,
+        explain=explain_live_problem,
+        fallback=True,
+    )
+    live = _restore_app_live_inputs(
+        source,
+        planner,
+        repository,
+        basis_source,
+        ev,
+        thermal,
+        demand,
+        installation,
+        lambda: setup_catalogue,
+        publish_plan_status,
+    )
+
+    async def save_state():
+        """Finish state persistence under the caller-held lock before propagating cancellation."""
+        try:
+            cancellation = await complete_write(repository.save)
+        finally:
+            publish_plan_status()
+        if cancellation is not None:
+            raise cancellation
+
+    app = _create_http_application(token, repository, lock, save_state)
+    _register_runtime_status(app, notification_center, ha_lifecycle, source)
+    _set_ingress_peer(app, ingress_peer)
+
+    _register_archive_lifecycle(app, repository, lock, save_state)
+
+    def installation_timezone():
+        """Use the installation calendar, allowing UTC only for explicit synthetic mode."""
+        return (setup_catalogue.value or {}).get("timezone") or (
+            "UTC" if source == "synthetic" else None
+        )
+
+    events = _register_planning_activity(
+        app, repository.engine, planner, notification_center, installation_timezone
+    )
+
+    _register_local_pairing(
+        app, directory, token, repository.state["instance_id"], discovery_options
+    )
+
+    prices = None
+
+    def current_prices():
+        """Read the optional price service once it has started."""
+        return prices
+
+    price_refresh_requested = asyncio.Event()
+    daily_prices = DailyPrices(SqlDocuments(repository.engine, "prices"))
+
+    from .storage.api import register as register_storage
+
+    register_storage(app, repository.engine, installation_timezone)
+
+    contract_basis = _prepare_contract_basis(
+        basis_source,
+        current_prices,
+        contracts,
+        bonus_counters,
+        live,
+        installation,
+        price_factory is not None,
+    )
+
+    async def persist_then_install(
+        save,
+        candidate,
+        install=None,
+        *,
+        contract_input=True,
+        force_replan=True,
+        defer_refresh=False,
+    ):
+        """Save under the caller-held app lock, then install before propagating cancellation.
+
+        Drain repeated request cancellations while the storage thread owns its
+        write. Writer failures propagate without installation or refresh. A
+        successful save becomes authoritative before cancellation is re-raised.
+        Contract-related writes activate contract inputs. Unrelated settings must
+        pass contract_input=False to retain the existing future-input adapter.
+        Explicit contract writes also wake the price owner to admit a newly configured area.
+        Background evidence writes use the next planning boundary with force_replan=False.
+        Command-affecting writes that defer refresh must revoke obsolete commands in
+        their install callback before the next planning boundary, as setup does.
+        """
+        cancellation = await complete_write(save, candidate)
+        if install is not None:
+            install(candidate)
+        if contract_input and force_replan:
+            price_refresh_requested.set()
+        if live:
+            if contract_input:
+                live.basis_source = contract_basis
+            if defer_refresh:
+                live.replan_requested = True
+            else:
+                await live.refresh_async(force=force_replan)
+        _LOGGER.info(
+            "Configuration saved (%s). Updated settings are now active%s.",
+            type(candidate).__name__,
+            ". Planning prerequisites have been rechecked" if live and not defer_refresh else "",
+        )
+        if cancellation is not None:
+            raise cancellation
+
+    contract_api = ContractAPI(
+        app,
+        contracts,
+        bonus_counters,
+        bonus_history,
+        bonus_preview,
+        live,
+        setup_catalogue,
+        current_prices,
+        lock,
+        persist_then_install,
+        lambda request: snapshot(request),
+        pending_contract_id,
+        planning_status=planning_status,
+    )
+
+    build_demand = register_demand(
+        app,
+        demand,
+        live,
+        setup_catalogue,
+        lock,
+        persist_then_install,
+        lambda request: snapshot(request),
+    )
+
+    _register_demand_worker(app, demand, lock, events, build_demand, lambda: refresh_preferences())
+
+    def oldest_demand_history():
+        """Extend temperature coverage to the oldest loaded household or consumer endpoint."""
+        return min(
+            (
+                history.hours[0].start
+                for history in (
+                    *demand.histories.values(),
+                    *demand.consumers.histories.values(),
+                )
+                if history.hours
+            ),
+            default=None,
+        )
+
+    register_weather_history(
+        app,
+        live,
+        lock,
+        weather_factory,
+        weather_store.documents,
+        oldest_demand_history,
+        lambda: demand.configuration is not None,
+        demand.weather,
+        PRICE_SCHEDULE_POLL_SECONDS,
+    )
+
+    def install_price_service(service):
+        """Expose the pricing service and share savings mutation ordering."""
+        nonlocal prices
+        prices = service
+        prices.persistence_lock = savings_mutation_lock
+        prices.events = events
+
+    _register_price_worker(
+        app,
+        price_factory,
+        repository.engine,
+        install_price_service,
+        price_refresh_requested,
+        live,
+        lock,
+        lambda service: _publish_daily_prices(
+            service, daily_prices, installation_timezone, savings_mutation_lock
+        ),
+    )
+
+    register_prices(app, current_prices, contracts, live, lock, daily_prices, installation_timezone)
+
+    async def snapshot(request):
+        """Dispatch once the snapshot's app-owned services have been registered."""
+        if request.headers.get("X-OEP-View") == "commands":
+            if request.method in {"GET", "HEAD"}:
+                raise web.HTTPNotFound()
+            return web.json_response(
+                {"accepted": True, "instance_id": repository.state["instance_id"]}
+            )
+        return await snapshot_handler(request)
+
+    _register_planning_endpoints(
+        app,
+        source,
+        repository,
+        planner,
+        live,
+        lock,
+        capture,
+        appliances,
+        installation,
+        demand,
+        persist_then_install,
+        snapshot,
+        lambda: snapshot_handler,
+        publish_plan_status,
+        save_state,
+        plan_watch,
+        solar,
+        lambda: setup_catalogue,
+        installation_basis,
+        synthetic_batteries,
+        ev,
+    )
+
+    setup_catalogue = _register_configuration_endpoints(
+        app,
+        installation,
+        demand,
+        solar,
+        lock,
+        live,
+        persist_then_install,
+        installation_basis,
+        setup_catalogue,
+        contracts,
+        appliances,
+        ev,
+        thermal,
+        repository,
+        strategy,
+        snapshot,
+        live_weather_factory,
+        weather_store,
+        oldest_demand_history,
+    )
+
+    (
+        settlement_request,
+        savings_runtime,
+        refresh_preferences,
+        forecast_history_request,
+    ) = _register_financial_and_forecast_apis(
+        app,
+        repository,
+        contracts,
+        bonus_counters,
+        installation,
+        solar,
+        demand,
+        lock,
+        setup_catalogue,
+        live,
+        savings_mutation_lock,
+        strategy,
+        installation_basis,
+        satellite_factory,
+        weather_store.documents,
     )
     snapshot_handler = create_snapshot_handler(
         lock=lock,
@@ -1315,7 +1576,7 @@ def create_app(
         settlement_request=settlement_request,
         savings_runtime=savings_runtime,
         live=live,
-        current_prices=lambda: prices,
+        current_prices=current_prices,
         contract_api=contract_api,
         bonus_counters=bonus_counters,
         forecast_history_request=forecast_history_request,
