@@ -246,7 +246,7 @@ def test_failed_app_pause_withdraws_then_restores_existing_commands(monkeypatch)
     asyncio.run(scenario())
 
 
-@pytest.mark.parametrize("result", ["lost-reply", "pause"])
+@pytest.mark.parametrize("result", ["lost-reply", "pause", "missing-receipt"])
 def test_candidate_requires_current_authority_after_acknowledgement(monkeypatch, result):
     """Recover a recorded acknowledgement or reject commands withdrawn while its reply was in flight."""
     from unittest.mock import AsyncMock
@@ -266,6 +266,7 @@ def test_candidate_requires_current_authority_after_acknowledgement(monkeypatch,
                     await asyncio.sleep(0.01)
             candidate_id = (await coordinator.client.plan_status())["plan_id"]
             acknowledge = coordinator.client.acknowledge
+            read_status = coordinator.client.plan_status
             entered, release = asyncio.Event(), asyncio.Event()
 
             async def gated_acknowledgement(plan_id):
@@ -277,6 +278,10 @@ def test_candidate_requires_current_authority_after_acknowledgement(monkeypatch,
                     raise TimeoutError
                 return receipt
 
+            async def status_without_receipt():
+                """Simulate a newer status that no longer confirms the candidate's acknowledgement."""
+                return {**await read_status(), "acknowledged_plan": None}
+
             gated = AsyncMock(side_effect=gated_acknowledgement)
             monkeypatch.setattr(coordinator.client, "acknowledge", gated)
             loading = asyncio.create_task(coordinator.sync_plan())
@@ -287,6 +292,8 @@ def test_candidate_requires_current_authority_after_acknowledgement(monkeypatch,
                 assert coordinator.schedule.plan is previous
                 if result == "pause":
                     await coordinator.client.enabled(False, "pause-after-acknowledgement")
+                elif result == "missing-receipt":
+                    monkeypatch.setattr(coordinator.client, "plan_status", status_without_receipt)
             finally:
                 release.set()
                 assert not await loading
@@ -295,6 +302,7 @@ def test_candidate_requires_current_authority_after_acknowledgement(monkeypatch,
                 assert find(hass, "battery_power_target").state == "unavailable"
             else:
                 assert coordinator.schedule.plan is previous
+                monkeypatch.setattr(coordinator.client, "plan_status", read_status)
                 assert await coordinator.sync_plan()
                 assert coordinator.schedule.plan.plan_id == candidate_id
                 assert coordinator.projection.command is not None

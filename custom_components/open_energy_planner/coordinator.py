@@ -461,45 +461,14 @@ class PlanCoordinator:
                             return False
                         self.schedule.suspended = False
                         return self.schedule.plan is not None
-                    reply = await self.client.plan(plan_id)
-                    if (
-                        not self._same_intent(generation)
-                        or observation_generation != self.observation_generation
-                    ):
-                        return False
-                    plan = reply["plan"]
-                    if plan.get("plan_id") != plan_id:
-                        raise ValueError("Command plan identity mismatch")
-                    self._validate_command_plan(
-                        plan, reply.get("devices"), reply.get("ev_points", [])
+                    return await self._install_received_plan(
+                        status,
+                        revision,
+                        measurements_required,
+                        plan_id,
+                        generation,
+                        observation_generation,
                     )
-                    candidate = self.schedule.validate_candidate(plan, dt_util.utcnow())
-                    if (
-                        self.schedule.resume_after
-                        and candidate.generated_at <= self.schedule.resume_after
-                    ):
-                        return False
-                    if status.get("acknowledged_plan") != plan_id:
-                        await self.client.acknowledge(plan_id)
-                    if not self._same_intent(generation):
-                        return False
-                    latest = await self.client.plan_status()
-                    if (
-                        not self._same_intent(generation)
-                        or observation_generation != self.observation_generation
-                    ):
-                        return False
-                    authorization = await self._apply_plan_status(latest)
-                    if (
-                        authorization != (True, revision, measurements_required, plan_id)
-                        or latest.get("acknowledged_plan") != plan_id
-                    ):
-                        return False
-                    if measurements_required and not self._capture_required_sources():
-                        self.revoke_observation_authority()
-                        return False
-                    self.schedule.install_candidate(candidate, plan, dt_util.utcnow())
-                    self.schedule.suspended = False
                 except RevokedPlan:
                     return False
                 except ClientResponseError as error:
@@ -507,7 +476,6 @@ class PlanCoordinator:
                         raise
                     self.schedule.invalidate()
                     return False
-                return True
             except SupersededInstallationExchangeError:
                 return False
             except (
@@ -527,6 +495,46 @@ class PlanCoordinator:
             finally:
                 self.refresh()
             return False
+
+    async def _install_received_plan(
+        self, status, revision, measurements_required, plan_id, generation, observation_generation
+    ):
+        """Confirm the candidate and current command authority before replacing the installed plan."""
+        reply = await self.client.plan(plan_id)
+        if (
+            not self._same_intent(generation)
+            or observation_generation != self.observation_generation
+        ):
+            return False
+        plan = reply["plan"]
+        if plan.get("plan_id") != plan_id:
+            raise ValueError("Command plan identity mismatch")
+        self._validate_command_plan(plan, reply.get("devices"), reply.get("ev_points", []))
+        candidate = self.schedule.validate_candidate(plan, dt_util.utcnow())
+        if self.schedule.resume_after and candidate.generated_at <= self.schedule.resume_after:
+            return False
+        if status.get("acknowledged_plan") != plan_id:
+            await self.client.acknowledge(plan_id)
+        if not self._same_intent(generation):
+            return False
+        latest = await self.client.plan_status()
+        if (
+            not self._same_intent(generation)
+            or observation_generation != self.observation_generation
+        ):
+            return False
+        authorization = await self._apply_plan_status(latest)
+        if (
+            authorization != (True, revision, measurements_required, plan_id)
+            or latest.get("acknowledged_plan") != plan_id
+        ):
+            return False
+        if measurements_required and not self._capture_required_sources():
+            self.revoke_observation_authority()
+            return False
+        self.schedule.install_candidate(candidate, plan, dt_util.utcnow())
+        self.schedule.suspended = False
+        return True
 
     async def _apply_plan_status(self, status):
         """Apply durable enable intent and fail closed independently of publication acceptance."""
@@ -898,6 +906,46 @@ class PlanCoordinator:
                 except (ClientError, TimeoutError, ValueError, TypeError, KeyError):
                     _LOGGER.debug("Optional history transfer did not complete", exc_info=True)
 
+    async def _sync_thermal_projection(self, projection, intent_at_request, ev_intent_at_request):
+        """Apply optional heating state and reject observation replies after authority changes."""
+        from .thermal import capture as capture_thermal
+        from .thermal import receive as receive_thermal
+
+        try:
+            self.thermal = receive_thermal(projection)
+            self.refresh()
+            if self.thermal["devices"] or self.thermal.get("climate_bindings"):
+                try:
+                    thermal_reply = await self.client.request(
+                        "POST",
+                        "/v1/thermal/observations",
+                        capture_thermal(self, self.thermal, dt_util.utcnow()),
+                    )
+                except (
+                    AuthenticationError,
+                    InstallationMismatchError,
+                    ReleaseMismatchError,
+                ):
+                    raise
+                except (ClientError, TimeoutError):
+                    # A transport outage retains only locally fresh, guarded permissions.
+                    _LOGGER.debug("Thermal observations transfer failed", exc_info=True)
+                else:
+                    if (
+                        self.closed
+                        or self.schedule.resume_after != intent_at_request
+                        or self.ev_intent_generation != ev_intent_at_request
+                    ):
+                        return False
+                    self.thermal = receive_thermal(thermal_reply)
+        except (AuthenticationError, InstallationMismatchError, ReleaseMismatchError):
+            raise
+        except (ValueError, TypeError, KeyError, AttributeError, OverflowError):
+            # Preserve registry membership while revoking the execution identity.
+            self.thermal = {**self.thermal, "revision": None}
+            _LOGGER.warning("Invalid thermal projection. Heating commands withdrawn")
+        return True
+
     async def sync_services(self, _now=None):
         """Service setup, optional virtual projections and Recorder away from plan reconciliation."""
         if self.closed or self.services_lock.locked():
@@ -1002,42 +1050,10 @@ class PlanCoordinator:
                 except (ValueError, TypeError, KeyError, AttributeError, OverflowError):
                     self.appliances = {}
                     _LOGGER.warning("Invalid optional appliance projection. Commands withdrawn")
-                from .thermal import capture as capture_thermal
-                from .thermal import receive as receive_thermal
-
-                try:
-                    self.thermal = receive_thermal(data.get("thermal"))
-                    self.refresh()
-                    if self.thermal["devices"] or self.thermal.get("climate_bindings"):
-                        try:
-                            thermal_reply = await self.client.request(
-                                "POST",
-                                "/v1/thermal/observations",
-                                capture_thermal(self, self.thermal, dt_util.utcnow()),
-                            )
-                        except (
-                            AuthenticationError,
-                            InstallationMismatchError,
-                            ReleaseMismatchError,
-                        ):
-                            raise
-                        except (ClientError, TimeoutError):
-                            # A transport outage retains only locally fresh, guarded permissions.
-                            _LOGGER.debug("Thermal observations transfer failed", exc_info=True)
-                        else:
-                            if (
-                                self.closed
-                                or self.schedule.resume_after != intent_at_request
-                                or self.ev_intent_generation != ev_intent_at_request
-                            ):
-                                return
-                            self.thermal = receive_thermal(thermal_reply)
-                except (AuthenticationError, InstallationMismatchError, ReleaseMismatchError):
-                    raise
-                except (ValueError, TypeError, KeyError, AttributeError, OverflowError):
-                    # Preserve registry membership while revoking the execution identity.
-                    self.thermal = {**self.thermal, "revision": None}
-                    _LOGGER.warning("Invalid thermal projection. Heating commands withdrawn")
+                if not await self._sync_thermal_projection(
+                    data.get("thermal"), intent_at_request, ev_intent_at_request
+                ):
+                    return
                 physical = data.get("installation", {}).get("configuration")
                 if physical is not None and not isinstance(physical, dict):
                     raise ValueError("Invalid grid configuration")
