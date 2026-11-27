@@ -178,20 +178,11 @@ function renderTooltip({chart: instance, tooltip}, node, balance = false, balanc
     node.hidden = !tooltip.opacity || Boolean(instance.canvas.closest("[hidden]"));
     if (node.hidden) return;
     node.replaceChildren();
-    let items = [...tooltip.dataPoints];
-    if (balance && Number.isFinite(balanceTime)) {
-        // Narrow screens can select a nearby SoC endpoint instead of the subpixel-width bar.
-        const time = balanceTime;
-        const bars = instance.data.datasets.flatMap((dataset, index) => {
-            if (dataset.type !== "bar" || !instance.isDatasetVisible(index)) return [];
-            const point = dataset.data.find(point => point.start <= time && time < point.end && point.y != null);
-            return point ? [{dataset, raw: point, parsed: point}] : [];
-        });
-        if (bars.length) items = bars;
-    }
-    const interval = balance && items.find(item => item.raw.start != null);
+    const {items: pointItems, interval} = balance
+        ? balanceTooltipData(instance, tooltip, balanceTime) : {items: tooltip.dataPoints, interval: null};
+    let items = [...pointItems];
     const title = document.createElement("p"); title.className = "chart-tooltip-title";
-    title.textContent = interval ? `From ${when(interval.raw.start)} to ${when(interval.raw.end)}` : tooltip.title.join(" - "); node.append(title);
+    title.textContent = interval ? `From ${when(interval.start)} to ${when(interval.end)}` : tooltip.title.join(" - "); node.append(title);
     if (tooltip.periodLabel) {
         const period = document.createElement("p");
         period.className = "chart-tooltip-period";
@@ -202,22 +193,22 @@ function renderTooltip({chart: instance, tooltip}, node, balance = false, balanc
         // Flow bars use midpoints. Attach only recorded start states, never interpolate a missing SoC.
         instance.data.datasets.forEach((dataset, index) => {
             if (dataset.tooltipGroup !== "Battery state" || !instance.isDatasetVisible(index)) return;
-            const point = dataset.data.find(point => point.x === (interval.raw.coveredStart ?? interval.raw.start) && point.y != null);
+            const point = dataset.data.find(point => point.x === (interval.coveredStart ?? interval.start) && point.y != null);
             if (point && !items.some(item => item.dataset === dataset)) items.push({dataset: {...dataset, label: `${dataset.label} at start`}, parsed: point});
         });
     }
     if (batteryPlan) items = items.filter(item => item.dataset.type !== "bar" || Math.abs(item.parsed.y) >= BATTERY_FLOW_DISPLAY_MIN);
     // Totals retain original flows even when the legend or display threshold hides a series.
     const totalItems = interval && !batteryPlan ? instance.data.datasets.filter(dataset => dataset.type === "bar").map(dataset => {
-        const point = dataset.data.find(point => point.start === interval.raw.start && point.end === interval.raw.end);
+        const point = dataset.data.find(point => point.start === interval.start && point.end === interval.end);
         return {dataset, parsed: {y: point?.y}};
     }) : tooltip.balanceItems || [];
     const groupedBalance = balance && !batteryPlan;
     node.classList.toggle("chart-tooltip-balance", groupedBalance);
     const sections = tooltipSections(items, totalItems, groupedBalance, tooltip.balanceItems);
-    if (isLinkedChart(instance.canvas.id) && linkedInterval) node.append(linkedCostText(linkedInterval));
+    if (instance.canvas.id === "price-chart" && linkedInterval) node.append(linkedCostTable(linkedInterval));
     node.append(sections);
-    const notes = [...(interval ? balanceNotes(interval.raw, instance.canvas.id, when) : tooltip.afterBody)];
+    const notes = [...(interval ? balanceNotes(interval, instance.canvas.id, when) : tooltip.afterBody)];
     if (totalItems.length) notes.push("Totals include all flows, including hidden series. Supply is positive. Use is negative.");
     if (notes.length) {
         const explanation = document.createElement("p"); explanation.className = "chart-tooltip-explanation";
@@ -225,26 +216,53 @@ function renderTooltip({chart: instance, tooltip}, node, balance = false, balanc
     }
     positionChartTooltip(node, instance.canvas, tooltip.caretX, tooltip.caretY);
 }
+/** Distinguish a selected balance interval from inspection of a single SoC point. */
+function balanceTooltipData(chart, {dataPoints, interval: pinnedInterval}, time) {
+    const pointReadout = {items: dataPoints, interval: dataPoints.find(item => item.raw.start != null)?.raw};
+    if (!Number.isFinite(time)) return pointReadout;
+    const bars = chart.data.datasets.flatMap((dataset, index) => {
+        if (dataset.type !== "bar" || !chart.isDatasetVisible(index)) return [];
+        const point = dataset.data.find(point => point.start <= time && time < point.end && point.y != null);
+        return point ? [{dataset, raw: point, parsed: point}] : [];
+    });
+    const interval = bars[0]?.raw ?? optimizerQuarter(chart, time) ?? pinnedInterval;
+    return interval ? {items: bars, interval} : pointReadout;
+}
 /** Show plan cash flows before bonus and battery valuation. Missing evidence remains unknown. */
-function linkedCostText({gridImport, gridExport, buyRate, sellRate, currency}) {
-    const exchange = (label, energy, rate, amountLabel) => {
-        const quantity = knownQuantity(energy, number, "kWh");
+function linkedCostTable({gridImport, gridExport, buyRate, sellRate, currency}) {
+    const table = document.createElement("table");
+    table.className = "chart-linked-cost";
+    for (const [label, energy, rate, amountLabel] of [
+        ["Grid import", gridImport, buyRate, "Cost"],
+        ["Grid export", gridExport, sellRate, "Revenue before bonus"],
+    ]) {
+        const group = table.createTBody();
+        const heading = document.createElement("th");
+        heading.scope = "rowgroup";
+        heading.colSpan = 3;
+        heading.textContent = label;
+        group.insertRow().append(heading);
         const amount = Number.isFinite(energy) && Number.isFinite(rate) ? energy * rate : null;
-        const tariff = knownQuantity(rate, money, `${currency}/kWh`, "an unavailable rate");
-        return `${label}: ${quantity}. ${amountLabel}: ${knownQuantity(amount, money, currency)} at ${tariff}.`;
-    };
-    const text = document.createElement("p");
-    text.className = "chart-linked-cost";
-    text.textContent = [
-        exchange("Grid import", gridImport, buyRate, "Cost"),
-        exchange("Grid export", gridExport, sellRate, "Revenue before bonus")
-    ].join(" ");
-    return text;
+        appendCostRow(group, "Energy", energy, number, "kWh");
+        appendCostRow(group, "Rate", rate, money, `${currency}/kWh`);
+        appendCostRow(group, amountLabel, amount, money, currency);
+    }
+    return table;
 }
 
-/** Format finite quantities while preserving the distinction between missing and zero. */
-function knownQuantity(value, format, unit, unavailable = "Unavailable") {
-    return Number.isFinite(value) ? `${format(value)} ${unit}` : unavailable;
+/** Use the same numeric and unit columns as the energy table. */
+function appendCostRow(group, name, amount, format, symbol) {
+    const row = group.insertRow();
+    const label = document.createElement("th");
+    label.scope = "row";
+    label.textContent = name;
+    row.append(label);
+    const value = row.insertCell(), unit = row.insertCell();
+    value.className = "chart-tooltip-value";
+    unit.className = "chart-tooltip-unit";
+    const known = Number.isFinite(amount);
+    value.textContent = known ? format(amount) : "Unavailable";
+    unit.textContent = known ? symbol : "";
 }
 
 /** Redraw one timestamp across both plots without changing their scales or datasets. */
@@ -267,37 +285,54 @@ function clearLinkedInspection() {
     $("linked-chart-reading").textContent = "";
 }
 
-/** Use the plan's real interval boundaries, including partial opening quarters. */
-function linkedChartInteraction(canvas, tooltip, hideTooltip, signal) {
-    const intervalAt = (chart, pixel) => {
-        const time = chart.scales.x.getValueForPixel(pixel);
-        return inspectSteps.find(interval => interval.start <= time && time < interval.end) ?? null;
-    };
-    const midpoint = interval => (interval.start + interval.end) / 2;
-    const inspectInterval = (chart, interval, y) => {
-        selectLinkedInterval(interval);
-        hideTooltip();
-        if (!interval) return;
-        const peerTooltip = $(`${LINKED_CHART_IDS.find(id => id !== canvas.id)}-tooltip`);
-        if (peerTooltip && !peerTooltip.classList.contains("chart-tooltip-day")) peerTooltip.hidden = true;
+/** Find the Optimizer's plotted coverage even when all flow series are hidden. */
+function optimizerQuarter(chart, time) {
+    if (chart.canvas.id !== "plan-chart") return null;
+    return chart.data.datasets.find(dataset => dataset.type === "bar")
+        ?.data.find(point => point.start <= time && time < point.end);
+}
+
+/** Render the selected quarter for the chart that received the input. */
+function renderLinkedTooltip(chart, tooltip, interval, y) {
+    const {start, end} = interval;
+    const time = (start + end) / 2;
+    const x = chart.scales.x.getPixelForValue(time);
+    if (chart.canvas.id === "plan-chart") {
+        const selectedRange = {start, end, coveredStart: start, coveredEnd: end};
+        renderTooltip({chart, tooltip: {opacity: 1, dataPoints: [], interval: selectedRange, caretX: x, caretY: y}}, tooltip, true, time);
+    } else {
         const title = document.createElement("p");
         title.className = "chart-tooltip-title";
-        title.textContent = `From ${when(interval.start)} to ${when(interval.end)}`;
-        const cost = linkedCostText(interval);
-        const rankings = planRankNotes(midpoint(interval));
-        tooltip.classList.remove("chart-tooltip-balance", "chart-tooltip-day");
-        tooltip.classList.add("chart-tooltip-linked");
-        tooltip.style.maxHeight = "";
-        tooltip.replaceChildren(title, cost);
-        for (const ranking of rankings) {
+        title.textContent = `From ${when(start)} to ${when(end)}`;
+        tooltip.replaceChildren(title, linkedCostTable(interval));
+        for (const ranking of planRankNotes(time)) {
             const note = document.createElement("p");
             note.className = "chart-tooltip-explanation";
             note.textContent = ranking;
             tooltip.append(note);
         }
         tooltip.hidden = false;
-        positionChartTooltip(tooltip, canvas, chart.scales.x.getPixelForValue(midpoint(interval)), y);
-        $("linked-chart-reading").textContent = [`${title.textContent}.`, cost.textContent, ...rankings].join(" ");
+        positionChartTooltip(tooltip, chart.canvas, x, y);
+    }
+    tooltip.classList.add("chart-tooltip-linked");
+}
+
+/** Use the plan's real interval boundaries, including partial opening quarters. */
+function linkedChartInteraction(canvas, tooltip, hideTooltip, signal) {
+    const intervalAt = (chart, pixel) => {
+        const time = chart.scales.x.getValueForPixel(pixel);
+        return inspectSteps.find(interval => interval.start <= time && time < interval.end) ?? null;
+    };
+    const inspectInterval = (chart, interval, y) => {
+        selectLinkedInterval(interval);
+        hideTooltip();
+        if (!interval) return;
+        const peerTooltip = $(`${LINKED_CHART_IDS.find(id => id !== canvas.id)}-tooltip`);
+        if (peerTooltip && !peerTooltip.classList.contains("chart-tooltip-day")) peerTooltip.hidden = true;
+        tooltip.classList.remove("chart-tooltip-balance", "chart-tooltip-day");
+        tooltip.style.maxHeight = "";
+        renderLinkedTooltip(chart, tooltip, interval, y);
+        $("linked-chart-reading").textContent = tooltip.innerText.replace(/\s+/g, " ").trim();
         $("inspect-time").value = inspectSteps.indexOf(interval);
         inspect();
     };
@@ -849,7 +884,7 @@ function chart(id, series, {utcDays = false, calendarDates = false, unit = "", m
                         ? null : instance.scales.x.getValueForPixel(event.x);
                 }
             },
-            plugins: {calendarDays: {utc: utcDays, onHeading: planningLegend ? (instance, heading, day) => { hideTooltip(); planningDayHeading(instance, series, tooltip, daySummary, heading, day); } : null}, valueAxisHeadroom: {group: null}, legend: {display: false}, tooltip: {enabled: false, external: (context) => {
+            plugins: {calendarDays: {utc: utcDays, showHeadings: showPlanningDayHeadings(id), onHeading: planningLegend ? (instance, heading, day) => { hideTooltip(); planningDayHeading(instance, series, tooltip, daySummary, heading, day); } : null}, valueAxisHeadroom: {group: null}, legend: {display: false}, tooltip: {enabled: false, external: (context) => {
                 if (!context.tooltip.opacity && tooltip.classList.contains("chart-tooltip-linked")) return;
                 hideTooltip();
                 const time = balanceTime; balanceTime = null;
@@ -877,6 +912,11 @@ function chart(id, series, {utcDays = false, calendarDates = false, unit = "", m
     renderLegend(result);
     if (!deferRange) applyRange();
     if (id === "price-chart") loadDailyPrices(result);
+}
+
+/** Keep day labels in the stand-alone price preview and above the Optimizer. */
+function showPlanningDayHeadings(id) {
+    return id !== "price-chart" || !priceInputPlanId;
 }
 /**
  * Set shared axes without changing frozen data: the latest plan starts at the

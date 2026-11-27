@@ -47,19 +47,21 @@ export const calendarDays = {
     id: "calendarDays",
     descriptors: {_scriptable: false},
     /** Own the heading container before the canvas and snapshot the original layout padding. */
-    beforeInit(chart) {
+    beforeInit(chart, _arguments, options) {
         const headings = document.createElement("div");
         headings.className = "chart-day-headings";
         headings.setAttribute("role", "list");
         headings.setAttribute("aria-label", "Chart calendar days");
+        headings.hidden = options.showHeadings === false;
         chart.canvas.before(headings);
         const padding = chart.options.layout.padding;
         bands.set(chart, {headings, padding: typeof padding === "number" ? {top: padding, right: padding, bottom: padding, left: padding} : {...padding}});
     },
     /** Replace padding from the snapshot on each layout pass, reserving headings only for real timestamps. */
     beforeLayout(chart) {
-        const {padding} = bands.get(chart);
-        chart.options.layout.padding = {...padding, top: (padding.top || 0) + (hasTimestamps(chart) ? HEADER_HEIGHT : 0)};
+        const {headings, padding} = bands.get(chart);
+        const headerHeight = !headings.hidden && hasTimestamps(chart) ? HEADER_HEIGHT : 0;
+        chart.options.layout.padding = {...padding, top: (padding.top || 0) + headerHeight};
     },
     /** Rebuild headings and paint day bands and boundaries using UTC dates when options.utc is true, otherwise installation dates. */
     beforeDraw(chart, _arguments, options) {
@@ -71,7 +73,7 @@ export const calendarDays = {
         const today = dateAt(Date.now()), tomorrow = nextDate(today);
         // Canvas hover redraws must preserve the heading owning keyboard focus or a tooltip.
         const layout = JSON.stringify([x.min, x.max, chartArea.left, chartArea.right, chartArea.top, today, dateAt(x.min), dayEnd(Infinity, dateAt(x.min), options.utc), options.utc]);
-        const rebuild = state.layout !== layout;
+        const rebuild = headingsNeedUpdate(state, layout);
         if (rebuild) { headings.replaceChildren(); state.layout = layout; }
         headings.style.top = `${chartArea.top - HEADER_HEIGHT}px`;
         ctx.save();
@@ -111,3 +113,8 @@ export const calendarDays = {
     /** Remove the owned heading container and release the chart's stored layout state. */
     afterDestroy(chart) { bands.get(chart)?.headings.remove(); bands.delete(chart); }
 };
+
+/** Keep background bands independent of their optional labelled overlay. */
+function headingsNeedUpdate(state, layout) {
+    return !state.headings.hidden && state.layout !== layout;
+}
