@@ -225,6 +225,79 @@ def test_unrepresentable_ledger_deadline_is_unreadable(tracker, timestamp_key):
     assert restored.document(battery, NOW) == {"status": "unavailable"}
 
 
+@pytest.mark.parametrize(
+    "body",
+    [
+        {"schema": 1, "batteries": {}, "extra": True},
+        {"schema": True, "batteries": {}},
+        {"schema": 1, "batteries": []},
+        {"schema": 1, "batteries": {"battery": {"definition": []}}},
+    ],
+    ids=["extra-envelope-field", "boolean-schema", "non-mapping-batteries", "incomplete-row"],
+)
+def test_restore_rejects_incompatible_calibration_ledger_shapes(tracker, body):
+    """An incompatible stored envelope or row cannot install partial progress."""
+    tracker.documents.write("battery-calibration.json", body)
+    restored = BatteryCalibration(tracker.documents)
+    assert restored.issue == "battery_calibration_unreadable"
+    assert restored.state == restored.persisted == {}
+
+
+@pytest.mark.parametrize(
+    ("position", "value"),
+    [(0, None), (2, 1), (3, 0), (4, 181)],
+    ids=["meter-binding", "direction-type", "capacity", "interval-days"],
+)
+def test_restore_rejects_invalid_calibration_policy_fields(tracker, position, value):
+    """Saved policy fields must still denote a valid battery definition on restart."""
+    settings, _battery = configured(tracker)
+    rows = tracker.configured(settings, NOW)
+    rows["battery"]["definition"][position] = value
+    tracker.write(rows)
+
+    restored = BatteryCalibration(tracker.documents)
+    assert restored.issue == "battery_calibration_unreadable"
+    assert restored.state == restored.persisted == {}
+
+
+@pytest.mark.parametrize(
+    "changes",
+    [
+        {"definition": ["sensor.soc", "sensor.power", False, 2, 14, 25]},
+        {"completed_at": "2026-10-31T23:59:59+00:00", "observed_at": "2026-11-01T00:00:00+00:00"},
+        {
+            "hold_started_at": "2026-11-01T00:00:01+00:00",
+            "observed_at": "2026-11-01T00:00:00+00:00",
+        },
+        {"completed_at": "2026-11-01T00:00:00+00:00"},
+    ],
+    ids=["invalid-policy", "before-enabling", "after-observation", "no-observation"],
+)
+def test_restore_rejects_invalid_policy_or_unproven_progress(tracker, changes):
+    """Invalid policy and impossible evidence both block restored progress."""
+    settings, battery = configured(tracker)
+    rows = tracker.configured(settings, NOW)
+    rows["battery"].update(changes)
+    tracker.write(rows)
+
+    restored = BatteryCalibration(tracker.documents)
+    assert restored.document(battery, NOW) == {"status": "unavailable"}
+    assert restored.issue == "battery_calibration_unreadable"
+    assert restored.state == restored.persisted == {}
+
+
+def test_unreadable_ledger_blocks_observations_only_when_calibration_is_enabled(tracker):
+    """Report unavailable progress without blocking observations for disabled calibration."""
+    settings, battery = configured(tracker)
+    tracker.documents.write("battery-calibration.json", {"schema": 2, "batteries": {}})
+    restored = BatteryCalibration(tracker.documents)
+    disabled = replace(settings, batteries=(replace(battery, calibration_enabled=False),))
+    restored.observe(disabled, observation(NOW))
+    with pytest.raises(OSError, match="^Battery calibration progress unavailable$"):
+        restored.observe(settings, observation(NOW))
+    assert restored.state == restored.persisted == {}
+
+
 @pytest.mark.planner_scenario
 def test_natural_full_charge_enforces_hold_before_charging_window(tracker):
     """A natural full capture prevents costly discharge immediately, thirteen days before scheduled charging."""
@@ -360,9 +433,46 @@ def test_restart_gap_does_not_invent_unobserved_completion(tracker):
     assert restored.state["battery"]["hold_started_at"] is None
 
 
-def test_reordered_capture_cannot_erase_progress(tracker):
-    """An older report cannot restart or complete a newer observed hold."""
+@pytest.mark.parametrize("seconds", [300, 301], ids=["continuous", "interrupted"])
+def test_a_full_capture_after_a_gap_starts_a_new_hold_only_when_required(tracker, seconds):
+    """At 300 seconds a hold continues. A full capture at 301 seconds starts it anew."""
+    settings, battery = configured(tracker, calibration_hold_hours=0.25)
+    tracker.observe(settings, observation(NOW))
+    captured = NOW + timedelta(seconds=seconds)
+    tracker.observe(settings, observation(captured))
+
+    restored = BatteryCalibration(tracker.documents)
+    start = NOW if seconds == 300 else captured
+    assert restored.directive(battery, captured, 4000) == (False, start + timedelta(minutes=15))
+    assert restored.state["battery"]["completed_at"] is None
+
+
+@pytest.mark.parametrize(
+    ("reading_index", "field", "value"),
+    [(0, "entity_id", "sensor.other_soc"), (1, "unit", "kW")],
+    ids=["unbound-meter", "unexpected-unit"],
+)
+def test_a_mismatched_capture_interrupts_and_persists_the_active_hold(
+    tracker, reading_index, field, value
+):
+    """A meter mismatch clears an active hold ahead of the normal minute checkpoint."""
     settings, _battery = configured(tracker)
+    tracker.observe(settings, observation(NOW))
+    report = observation(NOW + timedelta(seconds=15))
+    setattr(report.readings[reading_index], field, value)
+    tracker.observe(settings, report)
+
+    restored = BatteryCalibration(tracker.documents)
+    assert restored.state["battery"]["observed_at"] == report.captured_at.isoformat()
+    assert restored.state["battery"]["hold_started_at"] is None
+    assert restored.state["battery"]["completed_at"] is None
+
+
+def test_reordered_capture_cannot_erase_progress(tracker):
+    """A capture before enabling or before newer evidence cannot change progress."""
+    settings, _battery = configured(tracker)
+    tracker.observe(settings, observation(NOW - timedelta(seconds=1)))
+    assert tracker.state["battery"]["observed_at"] is None
     tracker.observe(settings, observation(NOW + timedelta(minutes=5)))
     original = tracker.state.copy()
     tracker.observe(settings, observation(NOW, soc=10, power=4000))
@@ -652,11 +762,16 @@ def test_holding_never_emits_grid_following_and_archived_context_restores_deadli
     assert physical_context(document).batteries[0].calibration_hold_until == deadline
 
 
-def test_one_battery_completion_does_not_complete_another(tracker):
+@pytest.mark.parametrize("enabled", [False, True], ids=["disabled", "enabled"])
+def test_one_battery_completion_does_not_complete_another(tracker, enabled):
     """Each battery needs its own real full/hold evidence, even when both share an inverter."""
     settings, battery = configured(tracker, calibration_hold_hours=0.25)
     other = replace(
-        battery, device_id="other", soc_entity="sensor.other_soc", power_entity="sensor.other_power"
+        battery,
+        device_id="other",
+        soc_entity="sensor.other_soc",
+        power_entity="sensor.other_power",
+        calibration_enabled=enabled,
     )
     settings = replace(settings, batteries=(battery, other))
     rows = tracker.configured(settings, NOW)
@@ -664,7 +779,10 @@ def test_one_battery_completion_does_not_complete_another(tracker):
     tracker.install(rows)
     continuous_hold(tracker, settings, NOW, duration_minutes=15)
     assert tracker.state["battery"]["completed_at"] == (NOW + timedelta(minutes=15)).isoformat()
-    assert tracker.state["other"]["completed_at"] is None
+    if enabled:
+        assert tracker.state["other"]["completed_at"] is None
+    else:
+        assert "other" not in tracker.state
 
 
 def test_unreadable_calibration_has_actionable_recovery_advice():
