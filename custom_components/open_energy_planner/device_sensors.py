@@ -77,19 +77,13 @@ class DeviceTarget(PlannerEntity, SensorEntity):
     def extra_state_attributes(self):
         """Publish command interpretation without retriggering unchanged targets for a new plan ID."""
         command = self.command()
+        is_battery = self.kind == "battery"
+        command_mode = command.mode if command else None
         return {
-            "mode": command.mode
-            if self.kind == "battery" and command
-            else "on_off"
-            if self.kind == "solar"
-            else None,
-            "applicable": bool(command and (self.key != "power" or command.mode == "fixed_power")),
-            "grid_device": "grid"
-            if self.kind == "battery" and command and command.mode == "follow_grid_target"
-            else None,
-            "measurement_side": "battery_terminal_dc"
-            if self.kind == "battery"
-            else "solar_production",
+            "mode": command_mode if is_battery else "on_off" if self.kind == "solar" else None,
+            "applicable": bool(command and (self.key != "power" or command_mode == "fixed_power")),
+            "grid_device": "grid" if is_battery and command_mode == "follow_grid_target" else None,
+            "measurement_side": "battery_terminal_dc" if is_battery else "solar_production",
         }
 
 
@@ -151,6 +145,33 @@ class DeviceConfiguration(PlannerEntity, SensorEntity):
         return {"energy_entity": device.get("energy_entity")}
 
 
+def _capability_keys(device: dict) -> list[str]:
+    """List available diagnostics and the confirmed device's command capabilities."""
+    keys = ["config_" + key for key in property_values(device)]
+    kind = device["kind"]
+    if kind == "grid":
+        return keys
+
+    keys.append("setup_status")
+    configured = device.get("configured", True)
+    if kind == "battery":
+        keys.append("reserve_status")
+        if configured:
+            keys.extend(("power", "mode"))
+    elif configured and device.get("can_curtail", True):
+        keys.append("enabled")
+    return keys
+
+
+def _device_sensor(coordinator, device: dict, key: str) -> PlannerEntity:
+    """Use the sensor class that owns the requested capability's state and attributes."""
+    if key in ("setup_status", "reserve_status"):
+        return DeviceConfiguration(coordinator, device, key)
+    if key.startswith("config_"):
+        return DeviceProperty(coordinator, device, key.removeprefix("config_"))
+    return DeviceTarget(coordinator, device, key)
+
+
 async def register_devices(hass, entry, async_add_entities):
     """Add/remove entity capabilities as the app-owned catalogue changes, using stable IDs and subscriptions."""
     coordinator = entry.runtime_data
@@ -185,9 +206,8 @@ async def register_devices(hass, entry, async_add_entities):
             pending.discard(identity)
             retire_empty_groups(coordinator)
 
-    @callback
-    def update():
-        """Reconcile only capability identities. Unchanged targets do not recreate entities."""
+    def named_definitions():
+        """Use Energy source names and include the grid's separate diagnostic definition."""
         definitions = [
             {
                 **device,
@@ -206,43 +226,45 @@ async def register_devices(hass, entry, async_add_entities):
                     "configuration": coordinator.grid_configuration,
                 }
             )
+        return definitions
+
+    def configured_capabilities():
+        """Resolve current capability identities and refresh existing virtual device names."""
         configured = {}
-        for device in definitions:
-            device_identity = "grid" if device["kind"] == "grid" else "unit_" + device["id"]
-            registered = dr.async_get(hass).async_get_device_by_identifier(
-                ("open_energy_planner", f"{projection_id(entry)}_{device_identity}"), entry.entry_id
+        for device in named_definitions():
+            identity = "grid" if device["kind"] == "grid" else "unit_" + device["id"]
+            devices = dr.async_get(hass)
+            registered = devices.async_get_device_by_identifier(
+                ("open_energy_planner", f"{projection_id(entry)}_{identity}"), entry.entry_id
             )
             if registered and registered.name != device["name"]:
-                dr.async_get(hass).async_update_device(registered.id, name=device["name"])
-            keys = ["config_" + key for key in property_values(device)]
-            if device["kind"] != "grid":
-                keys.append("setup_status")
-                if device["kind"] == "battery":
-                    keys.append("reserve_status")
-                if device.get("configured", True):
-                    keys.extend(
-                        ("power", "mode")
-                        if device["kind"] == "battery"
-                        else ("enabled",)
-                        if device.get("can_curtail", True)
-                        else ()
-                    )
-            identity = "grid" if device["kind"] == "grid" else "unit_" + device["id"]
-            configured.update({(identity, key): device for key in keys})
-        if coordinator.devices is not None:
-            registry = er.async_get(hass)
-            for key in ("mode", "power"):
-                legacy = registry.async_get_entity_id(
-                    "sensor", "open_energy_planner", f"{entry.entry_id}_battery_{key}"
-                )
-                if legacy:
-                    registry.async_remove(legacy)
-            devices = dr.async_get(hass)
-            legacy_device = devices.async_get_device_by_identifier(
-                ("open_energy_planner", f"{entry.entry_id}_battery"), entry.entry_id
+                devices.async_update_device(registered.id, name=device["name"])
+            configured.update({(identity, key): device for key in _capability_keys(device)})
+        return configured
+
+    def remove_legacy_battery():
+        """Retire the old shared battery identities once the device catalogue is known."""
+        if coordinator.devices is None:
+            return
+        registry = er.async_get(hass)
+        for key in ("mode", "power"):
+            legacy = registry.async_get_entity_id(
+                "sensor", "open_energy_planner", f"{entry.entry_id}_battery_{key}"
             )
-            if legacy_device and not er.async_entries_for_device(registry, legacy_device.id):
-                devices.async_remove_device(legacy_device.id)
+            if legacy:
+                registry.async_remove(legacy)
+        devices = dr.async_get(hass)
+        legacy_device = devices.async_get_device_by_identifier(
+            ("open_energy_planner", f"{entry.entry_id}_battery"), entry.entry_id
+        )
+        if legacy_device and not er.async_entries_for_device(registry, legacy_device.id):
+            devices.async_remove_device(legacy_device.id)
+
+    @callback
+    def update():
+        """Reconcile only capability identities. Unchanged targets do not recreate entities."""
+        configured = configured_capabilities()
+        remove_legacy_battery()
         for identity, entity in list(entities.items()):
             if identity not in configured or configured[identity]["kind"] != entity.kind:
                 entities.pop(identity)
@@ -252,16 +274,11 @@ async def register_devices(hass, entry, async_add_entities):
                 )
         added = []
         for identity, device in configured.items():
-            if identity not in entities and identity not in pending:
-                entity = (
-                    DeviceConfiguration(coordinator, device, identity[1])
-                    if identity[1] in ("setup_status", "reserve_status")
-                    else DeviceProperty(coordinator, device, identity[1].removeprefix("config_"))
-                    if identity[1].startswith("config_")
-                    else DeviceTarget(coordinator, device, identity[1])
-                )
-                entities[identity] = entity
-                added.append(entity)
+            if identity in entities or identity in pending:
+                continue
+            entity = _device_sensor(coordinator, device, identity[1])
+            entities[identity] = entity
+            added.append(entity)
         if added:
             add_grouped_entities(coordinator, async_add_entities, added)
 
