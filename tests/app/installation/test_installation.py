@@ -65,6 +65,73 @@ def solve(inputs):
     return result
 
 
+@pytest.mark.parametrize(
+    ("earlier", "later", "error_type", "message"),
+    [
+        (
+            {"intervals": ()},
+            {"export_bonuses": []},
+            ValueError,
+            "At least one immutable interval is required",
+        ),
+        (
+            {"export_bonuses": []},
+            {"grid_import_limit_w": -1},
+            ValueError,
+            "At most eight immutable export bonus rules are supported",
+        ),
+        (
+            {"grid_import_limit_w": -1},
+            {"thermal_work": (None,)},
+            ValueError,
+            "grid_import_limit_w must be finite and non-negative",
+        ),
+        (
+            {"thermal_work": (None,)},
+            {"reserve_checkpoints": (None,)},
+            ValueError,
+            "Invalid thermal storage work",
+        ),
+        (
+            {"reserve_checkpoints": (None,)},
+            {"ev_work": (None,)},
+            ValueError,
+            "Invalid original reserve checkpoints",
+        ),
+        (
+            {"ev_work": (None,)},
+            {"appliances": (None,)},
+            ValueError,
+            "Invalid or multiply connected EV work",
+        ),
+        (
+            {"appliances": (None,)},
+            {"inverters": []},
+            ValueError,
+            "Invalid or overlapping appliance work",
+        ),
+        (
+            {"inverters": []},
+            {"terminal_valuations": [None]},
+            TypeError,
+            "Physical collections must be immutable",
+        ),
+        (
+            {"terminal_valuations": [None]},
+            {"pv_sources": (PVUnit("battery", "inverter", False),)},
+            TypeError,
+            "Immutable terminal valuations required",
+        ),
+    ],
+)
+def test_installation_problem_preserves_validation_precedence(earlier, later, error_type, message):
+    """Report the same first issue when independent parts of an installation are invalid."""
+    with pytest.raises(error_type) as error:
+        replace(problem(), **earlier, **later)
+
+    assert str(error.value) == message
+
+
 @pytest.mark.planner_scenario
 def test_installation_charges_cheap_and_discharges_expensive_without_aggregating_state():
     """Buying 1 kWh at 1 and using it against price 3 costs exactly 1, with whole -1000/+1000 W commands."""
