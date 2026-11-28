@@ -15,7 +15,7 @@ from open_energy_planner.contracts.calculation.condition import (
 from open_energy_planner.contracts.calculation.formula import Formula
 from open_energy_planner.contracts.storage import ContractStore
 from open_energy_planner.contracts.windows import ClockWindow
-from open_energy_planner.contracts.wire import parse_contract
+from open_energy_planner.contracts.wire import counter_document, parse_contract, parse_counters
 from open_energy_planner.home_assistant.observation_wire import parse_configuration, parse_report
 from open_energy_planner.home_assistant.observations import InputsUnavailable, SnapshotAssembler
 from open_energy_planner.installation.location import SiteLocation
@@ -439,6 +439,83 @@ def test_invalid_bonus_configuration_is_rejected(change):
     ]
     with pytest.raises((ValueError, TypeError)):
         parse_contract(body, NOW)
+
+
+@pytest.mark.parametrize(
+    ("changes", "message"),
+    [
+        ({"rule_id": "", "rate_formula": None}, "Invalid bonus rule identity"),
+        ({"reset_month": True, "window": "script"}, "Invalid annual boundary"),
+    ],
+)
+def test_bonus_rule_reports_the_first_invalid_term(changes, message):
+    """Reject the identity before formulas and the annual boundary before the payment window."""
+    with pytest.raises(ValueError, match=f"^{message}$"):
+        replace(rule(), **changes)
+
+
+@pytest.mark.parametrize(
+    ("changes", "message"),
+    [
+        (
+            {"used_kwh": -1, "component_meters": "invalid"},
+            "Expected a bounded nonnegative number",
+        ),
+        (
+            {"used_kwh": 100.6, "component_meters": (("sensor.export", 49),)},
+            "Component meters do not match aggregate",
+        ),
+        (
+            {"observed_at": datetime(2025, 12, 30, tzinfo=UTC)},
+            "Counter seed predates its period",
+        ),
+    ],
+)
+def test_counter_seed_reports_the_first_inconsistent_input(changes, message):
+    """Validate quantities, physical members and chronology before checking statistics."""
+    seed = measured_inputs()[2].seeds[0]
+    with pytest.raises(ValueError, match=f"^{message}$"):
+        replace(seed, **changes)
+
+
+@pytest.mark.parametrize(
+    ("changes", "message"),
+    [
+        ({"observed_at": NOW}, "Counter statistics period mismatch"),
+        ({"used_kwh": 100.6}, "Counter volume differs from statistics"),
+        (
+            {"component_meters": (("sensor.other", 50),)},
+            "Physical statistics members do not match",
+        ),
+    ],
+)
+def test_counter_seed_rejects_disagreement_with_its_statistics(changes, message):
+    """Reject retained statistics with a mismatched timestamp, volume or physical member."""
+    seed = measured_inputs()[2].seeds[0]
+    with pytest.raises(ValueError, match=f"^{message}$"):
+        replace(seed, **changes)
+
+
+@pytest.mark.parametrize(
+    ("changes", "message"),
+    [
+        ({"rule_id": ""}, "Invalid counter rule identity"),
+        ({"entity_id": "number.export"}, "Counter seed requires its cumulative export entity"),
+        ({"component_meters": {"sensor.export": 50}}, "Invalid component meters"),
+        ({"component_meters": [["number.export", 50]]}, "Invalid component meter"),
+        (
+            {"component_meters": [["sensor.export", 25], ["sensor.export", 25]]},
+            "Component meters do not match aggregate",
+        ),
+    ],
+)
+def test_retained_counter_requires_valid_provenance_and_unique_meter_members(changes, message):
+    """Reject malformed archived identities and duplicate meters even with a matching sum."""
+    book = measured_inputs()[2]
+    seed = counter_document(book)["seeds"][0]
+    seed.update(changes)
+    with pytest.raises(ValueError, match=f"^{message}$"):
+        parse_counters({"seeds": [seed]}, book.recorded_at)
 
 
 @pytest.mark.parametrize(

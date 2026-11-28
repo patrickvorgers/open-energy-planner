@@ -32,6 +32,11 @@ def nonnegative(value):
     return float(value)
 
 
+def _valid_rule_id(rule_id):
+    """Check the bounded identity shared by a bonus rule and its carried counter."""
+    return isinstance(rule_id, str) and 1 <= len(rule_id) <= MAX_BONUS_ID_LENGTH
+
+
 @dataclass(frozen=True)
 class BonusRule:
     """One dated version of an export bonus with optional battery-export protection.
@@ -57,7 +62,7 @@ class BonusRule:
     prevent_battery_export: bool = False
 
     def __post_init__(self):
-        """Validate bounded rule identity, annual boundary, formulas and exactly relevant window fields."""
+        """Normalize rule dates and validate the identity before checking its payment terms."""
         object.__setattr__(self, "effective_from", aware(self.effective_from))
         if self.contract_start is not None:
             object.__setattr__(self, "contract_start", aware(self.contract_start))
@@ -65,8 +70,12 @@ class BonusRule:
                 raise ValueError("Bonus cannot precede its contract")
         if type(self.prevent_battery_export) is not bool:
             raise ValueError("Battery export protection must be boolean")
-        if not isinstance(self.rule_id, str) or not 1 <= len(self.rule_id) <= MAX_BONUS_ID_LENGTH:
+        if not _valid_rule_id(self.rule_id):
             raise ValueError("Invalid bonus rule identity")
+        self._validate_payment_terms()
+
+    def _validate_payment_terms(self):
+        """Validate the formulas, volume, annual boundary and payment window in order."""
         if not isinstance(self.rate_formula, Formula) or (
             self.price_condition is not None
             and not isinstance(self.price_condition, ComparisonCondition)
@@ -159,12 +168,22 @@ class CounterSeed:
         """Reject ambiguous counter provenance and malformed numeric/time values."""
         object.__setattr__(self, "period_start", aware(self.period_start))
         object.__setattr__(self, "observed_at", aware(self.observed_at))
-        if not isinstance(self.rule_id, str) or not 1 <= len(self.rule_id) <= MAX_BONUS_ID_LENGTH:
+        if not _valid_rule_id(self.rule_id):
             raise ValueError("Invalid counter rule identity")
         if not isinstance(self.entity_id, str) or not self.entity_id.startswith("sensor."):
             raise ValueError("Counter seed requires its cumulative export entity")
         if self.statistics is not None and not isinstance(self.statistics, StatisticsBasis):
             raise ValueError("Invalid counter statistics")
+        self._validate_amount_availability()
+        components = self._validated_component_meters()
+        object.__setattr__(self, "component_meters", components)
+        if self.observed_at < self.period_start:
+            raise ValueError("Counter seed predates its period")
+        if self.statistics is not None:
+            self._validate_statistics(self.statistics)
+
+    def _validate_amount_availability(self):
+        """Check whether annual usage and physical endpoints are available or must be null."""
         if self.statistics is None or self.statistics.prefix_kwh is not None:
             nonnegative(self.used_kwh)
         elif self.used_kwh is not None:
@@ -173,56 +192,55 @@ class CounterSeed:
             nonnegative(self.meter_kwh)
         elif self.meter_kwh is not None or self.component_meters:
             raise ValueError("Unavailable physical endpoint must be null")
+
+    def _validated_component_meters(self):
+        """Normalize physical members after checking their identities and aggregate volume."""
         if (
             not isinstance(self.component_meters, (tuple, list))
             or len(self.component_meters) > MAX_COUNTER_SEEDS
         ):
             raise ValueError("Invalid component meters")
         components = []
-        for item in self.component_meters:
+        for component in self.component_meters:
             if (
-                not isinstance(item, (tuple, list))
-                or len(item) != 2
-                or not isinstance(item[0], str)
-                or not item[0].startswith("sensor.")
+                not isinstance(component, (tuple, list))
+                or len(component) != 2
+                or not isinstance(component[0], str)
+                or not component[0].startswith("sensor.")
             ):
                 raise ValueError("Invalid component meter")
-            nonnegative(item[1])
-            components.append(tuple(item))
-        if len({entity for entity, _value in components}) != len(components) or (
+            nonnegative(component[1])
+            components.append(tuple(component))
+        if len({entity_id for entity_id, _ in components}) != len(components) or (
             components
-            and abs(sum(value for _entity, value in components) - self.meter_kwh)
+            and abs(sum(value for _, value in components) - self.meter_kwh)
             > COMPONENT_METER_TOLERANCE_KWH
         ):
             raise ValueError("Component meters do not match aggregate")
-        object.__setattr__(self, "component_meters", tuple(components))
-        if self.observed_at < self.period_start:
-            raise ValueError("Counter seed predates its period")
-        if self.statistics is not None:
-            from .export_meter import export_identity
+        return tuple(components)
 
-            if (
-                self.statistics.reference_at < self.period_start
-                or self.statistics.latest_at != self.observed_at
-                or export_identity(item.statistic_id for item in self.statistics.series)
-                != self.entity_id
-            ):
-                raise ValueError("Counter statistics period mismatch")
-            expected = (
-                self.statistics.prefix_kwh
-                + sum(item.exported_kwh for item in self.statistics.series)
-                if self.statistics.prefix_kwh is not None
-                else None
-            )
-            if (
-                expected is not None
-                and abs(self.used_kwh - expected) > COMPONENT_METER_TOLERANCE_KWH
-            ):
-                raise ValueError("Counter volume differs from statistics")
-            if self.statistics.physical_available and {entity for entity, _value in components} != {
-                item.statistic_id for item in self.statistics.series
-            }:
-                raise ValueError("Physical statistics members do not match")
+    def _validate_statistics(self, statistics):
+        """Match the source period, accumulated volume and physical members to the seed."""
+        from .export_meter import export_identity
+
+        if (
+            statistics.reference_at < self.period_start
+            or statistics.latest_at != self.observed_at
+            or export_identity(series.statistic_id for series in statistics.series)
+            != self.entity_id
+        ):
+            raise ValueError("Counter statistics period mismatch")
+        expected = (
+            statistics.prefix_kwh + sum(series.exported_kwh for series in statistics.series)
+            if statistics.prefix_kwh is not None
+            else None
+        )
+        if expected is not None and abs(self.used_kwh - expected) > COMPONENT_METER_TOLERANCE_KWH:
+            raise ValueError("Counter volume differs from statistics")
+        if statistics.physical_available and {
+            entity_id for entity_id, _ in self.component_meters
+        } != {series.statistic_id for series in statistics.series}:
+            raise ValueError("Physical statistics members do not match")
 
 
 @dataclass(frozen=True)
