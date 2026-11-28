@@ -10,6 +10,17 @@ const MINIMUM_AVERAGE_INTERVAL_DAYS = 1;
 const BYTES_PER_MIB = 1024 ** 2;
 const BACKENDS = {sqlite: "SQLite", postgresql: "PostgreSQL", mysql: "MySQL", mariadb: "MariaDB"};
 
+/** Keep the entire requested calendar axis, including dates without a measurement. */
+function historyPoints(samples, start, end) {
+    const byDay = new Map(samples.map(row => [row.day, row]));
+    const points = [];
+    for (let day = start; day <= end; day = nextDate(day)) {
+        const row = byDay.get(day);
+        points.push({x: Date.parse(day + "T00:00:00Z"), y: row?.database_bytes == null ? null : row.database_bytes / BYTES_PER_MIB, row});
+    }
+    return points;
+}
+
 /** Own request ordering, keyboard inspection and chart teardown for this read-only page. */
 export function bindStorageHistory(readToken, bytes, showDatabase) {
     const find = id => document.getElementById(id);
@@ -23,43 +34,39 @@ export function bindStorageHistory(readToken, bytes, showDatabase) {
         const row = samples[index];
         find("storage-history-selected").textContent = row ? `${row.current ? "Current: " : ""}${when(row.observed_at)}: ${bytes(row.database_bytes)}${row.database_estimated ? " (estimated)" : ""}: ${BACKENDS[row.backend] || "Unknown backend"}` : "";
     }
-    /** Replace old evidence immediately so failed or reordered reads cannot show a stale period. */
-    function renderHistory(start, end) {
-        const known = samples.filter(row => Number.isFinite(row.database_bytes));
+    /** Compare only known sizes with a common database backend. */
+    function historySummary(known, start, end) {
+        if (!samples.length) return "No database size measurements in this period.";
+        if (!known.length) return "Database size is unavailable for the observations in this period. Missing sizes remain gaps.";
+        if (known.length === 1) return "";
         const first = known[0], last = known.at(-1);
-        let summary = samples.length ? "Database size is unavailable for the observations in this period. Missing sizes remain gaps." : "No database size measurements in this period.";
-        if (known.length === 1) summary = "";
-        if (known.length > 1) {
-            const change = last.database_bytes - first.database_bytes;
-            const sameBackend = samples.every(row => row.backend === first.backend);
-            const elapsedDays = (Date.parse(last.observed_at) - Date.parse(first.observed_at)) / MILLISECONDS_PER_DAY;
-            summary = `${dateLabel(start)} – ${dateLabel(end)}: Measurements: ${known.length}: `;
-            if (!sameBackend) {
-                summary += "Growth is not compared across different database backends.";
-            } else {
-                const estimated = known.some(row => row.database_estimated) ? " (estimated)" : "";
-                summary += `${change < 0 ? "Decrease" : "Increase"}: ${bytes(Math.abs(change))}`;
-                summary += elapsedDays >= MINIMUM_AVERAGE_INTERVAL_DAYS
-                    ? `: Average: ${change < 0 ? "−" : "+"}${bytes(Math.abs(change) / elapsedDays)} per day${estimated}`
-                    : `${estimated}: Daily average requires ${MINIMUM_AVERAGE_INTERVAL_DAYS * HOURS_PER_DAY} hours between measurements.`;
-            }
+        const change = last.database_bytes - first.database_bytes;
+        const sameBackend = samples.every(row => row.backend === first.backend);
+        const elapsedDays = (Date.parse(last.observed_at) - Date.parse(first.observed_at)) / MILLISECONDS_PER_DAY;
+        const prefix = `${dateLabel(start)} – ${dateLabel(end)}: Measurements: ${known.length}: `;
+        if (!sameBackend) {
+            return prefix + "Growth is not compared across different database backends.";
         }
-        find("storage-history-summary").textContent = summary;
-        if (!known.length) {
-            if (samples.length) {
-                find("storage-observation").replaceChildren(...samples.map((row, index) => new Option(when(row.observed_at), String(index))));
-                find("storage-observation-field").hidden = false;
-                find("storage-observation").value = String(samples.length - 1);
-                inspect(samples.length - 1);
-            }
-            return;
-        }
-        const byDay = new Map(samples.map(row => [row.day, row]));
-        const points = [];
-        for (let day = start; day <= end; day = nextDate(day)) {
-            const row = byDay.get(day);
-            points.push({x: Date.parse(day + "T00:00:00Z"), y: row?.database_bytes == null ? null : row.database_bytes / BYTES_PER_MIB, row});
-        }
+        const estimated = known.some(row => row.database_estimated) ? " (estimated)" : "";
+        const sizeChange = `${change < 0 ? "Decrease" : "Increase"}: ${bytes(Math.abs(change))}`;
+        const average = elapsedDays >= MINIMUM_AVERAGE_INTERVAL_DAYS
+            ? `: Average: ${change < 0 ? "−" : "+"}${bytes(Math.abs(change) / elapsedDays)} per day${estimated}`
+            : `${estimated}: Daily average requires ${MINIMUM_AVERAGE_INTERVAL_DAYS * HOURS_PER_DAY} hours between measurements.`;
+        return prefix + sizeChange + average;
+    }
+
+    /** Expose observations through a selector when all chart values are missing. */
+    function renderObservationPicker() {
+        if (!samples.length) return;
+        const observation = find("storage-observation");
+        observation.replaceChildren(...samples.map((row, index) => new Option(when(row.observed_at), String(index))));
+        find("storage-observation-field").hidden = false;
+        observation.value = String(samples.length - 1);
+        inspect(samples.length - 1);
+    }
+
+    /** Draw a gap-aware timeline and share the observation details with its tooltips. */
+    function renderChart(points) {
         find("storage-history-plot").hidden = false;
         chart = new Chart(find("storage-history-chart"), {
             type: "line",
@@ -91,22 +98,67 @@ export function bindStorageHistory(readToken, bytes, showDatabase) {
                 }}},
             },
         });
+    }
+
+    /** Render the summary and one inspection view for the admitted observations. */
+    function renderHistory(start, end) {
+        const known = samples.filter(row => Number.isFinite(row.database_bytes));
+        find("storage-history-summary").textContent = historySummary(known, start, end);
+        if (!known.length) return renderObservationPicker();
+        renderChart(historyPoints(samples, start, end));
         inspect(samples.length - 1);
     }
 
-    async function load(usage, current = false) {
-        if (usage) {
-            currentUsage = usage;
-            live = current;
-            measurement = current ? {...usage, current: true} : null;
-            showDatabase(measurement || {...usage, database_bytes: null});
-        }
-        const version = ++requestVersion;
+    /** Remove prior-period evidence before a read or after its current request fails. */
+    function clearHistory() {
         chart?.destroy(); chart = null; samples = [];
         find("storage-history-plot").hidden = true;
         find("storage-observation-field").hidden = true;
-        find("storage-observation").replaceChildren();
         find("storage-history-selected").textContent = "";
+    }
+
+    /** Use a live measurement only when the page explicitly requested a refresh. */
+    function applyUsage(usage, current) {
+        currentUsage = usage;
+        live = current;
+        measurement = current ? {...usage, current: true} : null;
+        showDatabase(measurement || {...usage, database_bytes: null});
+    }
+
+    /** Align the selector to the installation calendar and signal a clamped explicit period. */
+    function acceptPeriod(history) {
+        useHomeAssistantTimezone(history.timezone);
+        if (!history.timezone) return true;
+        period.set({start: history.start, end: history.end, min: history.calendar?.min_day, max: history.calendar?.max_day || localDate()});
+        return !explicitPeriod || (period.value.start === history.start && period.value.end === history.end);
+    }
+
+    /** Use the card's measurement in the chart, including a live refresh across local midnight. */
+    function renderResponse(history) {
+        samples = history.samples;
+        if (!live) {
+            measurement = history.latest;
+            showDatabase(measurement || {...currentUsage, database_bytes: null});
+        }
+        if (!history.timezone) {
+            find("storage-history-summary").textContent = "Waiting for the Home Assistant installation timezone. Refresh after the connection is restored.";
+            return;
+        }
+        const measurementDay = measurement && (measurement.day || localDate(measurement.observed_at));
+        const start = live && history.period === "all" && measurementDay < history.start ? measurementDay : period.value.start;
+        if (measurement) samples = samples.filter(row => row.day < measurementDay);
+        if (measurementDay >= start && measurementDay <= history.end) {
+            samples.push({...measurement, day: measurementDay});
+        }
+        renderHistory(start, history.end);
+    }
+
+    /** Replace the period only after confirming the asynchronous result still owns the view. */
+    async function load(usage, current = false) {
+        if (usage) applyUsage(usage, current);
+        const version = ++requestVersion;
+        clearHistory();
+        find("storage-observation").replaceChildren();
         find("storage-history-summary").textContent = "Loading database history…";
         try {
             const selected = period.value;
@@ -115,36 +167,12 @@ export function bindStorageHistory(readToken, bytes, showDatabase) {
             if (!response.ok) throw new Error();
             const history = await response.json();
             if (version !== requestVersion) return;
-            useHomeAssistantTimezone(history.timezone);
-            if (history.timezone) {
-                period.set({start: history.start, end: history.end, min: history.calendar?.min_day, max: history.calendar?.max_day || localDate()});
-                if (explicitPeriod && (period.value.start !== history.start || period.value.end !== history.end)) return load();
-            }
-            samples = history.samples;
-            if (!live) {
-                measurement = history.latest;
-                showDatabase(measurement || {...currentUsage, database_bytes: null});
-            }
-            if (!history.timezone) {
-                find("storage-history-summary").textContent = "Waiting for the Home Assistant installation timezone. Refresh after the connection is restored.";
-                return;
-            }
-            const measurementDay = measurement && (measurement.day || localDate(measurement.observed_at));
-            const start = live && history.period === "all" && measurementDay < history.start ? measurementDay : period.value.start;
-            if (measurement) samples = samples.filter(row => row.day < measurementDay);
-            if (measurementDay >= start && measurementDay <= history.end) {
-                // Keep the view aligned with the displayed snapshot, including across local midnight.
-                samples.push({...measurement, day: measurementDay});
-            }
-            renderHistory(start, history.end);
+            if (!acceptPeriod(history)) return load();
+            renderResponse(history);
         } catch {
-            if (version === requestVersion) {
-                chart?.destroy(); chart = null; samples = [];
-                find("storage-history-plot").hidden = true;
-                find("storage-observation-field").hidden = true;
-                find("storage-history-selected").textContent = "";
-                find("storage-history-summary").textContent = "Database history unavailable. Check the connection and choose Refresh to try again.";
-            }
+            if (version !== requestVersion) return;
+            clearHistory();
+            find("storage-history-summary").textContent = "Database history unavailable. Check the connection and choose Refresh to try again.";
         }
     }
     find("storage-observation").addEventListener("change", event => inspect(Number(event.target.value)));
