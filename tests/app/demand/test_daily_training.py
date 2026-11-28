@@ -7,6 +7,7 @@ from unittest.mock import patch
 
 import pytest
 
+from open_energy_planner.appliances import forecasting
 from open_energy_planner.appliances.forecasting import component
 from open_energy_planner.appliances.weather_model import WeatherDemandModel
 from open_energy_planner.demand.calculation.forecasting import (
@@ -128,6 +129,25 @@ def test_new_device_measurement_refreshes_recent_input_without_refitting(
     assert [learner.call_count for learner in fit_counts] == original_calls
     original_steps = {step.start: step.kwh for step in original.steps}
     assert updated.steps[0].kwh != pytest.approx(original_steps[updated.steps[0].start])
+
+
+def test_component_uses_baseline_when_a_fitted_candidate_cannot_predict(configuration):
+    """A learned prediction failure omits that model and retains the measured forecast."""
+    samples = samples_before(NOW)
+
+    def predict_without_ridge(configuration, samples, now, model, **options):
+        """Fail only the fitted ridge prediction and let the real baseline predict."""
+        if isinstance(model, RidgeDemandModel):
+            raise OSError("Synthetic native prediction failure")
+        return predict(configuration, samples, now, model, **options)
+
+    with patch.object(forecasting, "predict", side_effect=predict_without_ridge) as prediction:
+        model, forecast, selection, baseline = component(configuration, samples, (), NOW, False)
+
+    assert any(isinstance(call.args[3], RidgeDemandModel) for call in prediction.call_args_list)
+    assert isinstance(model, WeekdayProfile)
+    assert selection["selected"] == "baseline"
+    assert forecast == baseline
 
 
 def test_restart_restores_all_three_native_free_model_archives(
