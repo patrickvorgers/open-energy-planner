@@ -3,6 +3,7 @@
 import asyncio
 import logging
 from datetime import UTC, datetime
+from functools import partial
 from time import monotonic
 
 from aiohttp import web
@@ -94,6 +95,299 @@ PUBLIC_VALIDATION_MESSAGES = (
 )
 
 
+def _configuration_action(operation, body, service, ev, thermal):
+    """Decode settings edits and enforce exclusive ownership of shiftable sources."""
+    if operation == "device" and set(body) in (
+        {"entity_id", "shiftable"},
+        {"entity_id", "shiftable", "expected_version"},
+    ):
+        if body["shiftable"] and body["entity_id"] in (
+            {row["energy_entity"] for row in ev.state["points"]} | thermal.meters
+        ):
+            raise ValueError(SOURCE_ALREADY_ASSIGNED)
+        return partial(
+            service.configure,
+            body["entity_id"],
+            body["shiftable"],
+            expected_version=body.get("expected_version"),
+        )
+    if operation == "profile_options" and set(body) == {
+        "entity_id",
+        "learn_additional_profile",
+        "expected_version",
+    }:
+        return partial(
+            service.configure_additional_profile,
+            body["entity_id"],
+            body["learn_additional_profile"],
+            body["expected_version"],
+        )
+    if operation == "manual_profile" and set(body) == {
+        "entity_id",
+        "duration_minutes",
+        "energy_kwh",
+        "expected_version",
+    }:
+        return partial(
+            service.set_manual_profile,
+            body["entity_id"],
+            body["duration_minutes"],
+            body["energy_kwh"],
+            body["expected_version"],
+        )
+    return None
+
+
+def _learning_action(operation, body, service, now, processing_started):
+    """Decode current or explicit completed-cycle evidence at its original timing."""
+    if operation == "raw_history" and set(body) - {"observer_session"} == {
+        "entity_id",
+        "power_entity",
+        "start",
+        "end",
+        "energy_states",
+        "power_states",
+        "energy_reported_at",
+        "power_reported_at",
+        "limited",
+        "synthetic",
+    }:
+        return partial(service.learn_raw_history, body, now, processing_started=processing_started)
+    if operation == "history" and set(body) - {"resolution"} == {
+        "entity_id",
+        "power_entity",
+        "rows",
+        "synthetic",
+    }:
+        return partial(
+            service.learn_history,
+            body["entity_id"],
+            body["power_entity"],
+            body["rows"],
+            body["synthetic"],
+            now,
+            sample_seconds={"hour": HOURLY_SAMPLE_SECONDS, "5minute": SAMPLE_SECONDS}[
+                body.get("resolution", "5minute")
+            ],
+            processing_started=processing_started,
+        )
+    if operation == "cycles" and set(body) == {
+        "entity_id",
+        "cycle_id",
+        "started_at",
+        "completed_at",
+        "points",
+        "synthetic",
+    }:
+        if type(body["synthetic"]) is not bool or instant(body["completed_at"]) > now:
+            raise ValueError("Cycle evidence must describe a completed measured run")
+        return partial(
+            service.record_cycle,
+            body["entity_id"],
+            body["cycle_id"],
+            instant(body["started_at"]),
+            instant(body["completed_at"]),
+            body["points"],
+            synthetic=body["synthetic"],
+        )
+    return None
+
+
+def _scan_action(operation, body, service, now):
+    """Decode resumable Recorder scan and historical batch operations."""
+    if operation == "history_scan" and set(body) - {"resolution"} == {
+        "entity_id",
+        "power_entity",
+        "phase",
+        "start",
+        "end",
+    }:
+        return partial(
+            historical.scan,
+            service,
+            body["entity_id"],
+            body["power_entity"],
+            body["phase"],
+            body["start"],
+            body["end"],
+            now=now,
+            resolution=body.get("resolution", "hour"),
+        )
+    if operation in ("hourly_history", "fine_history") and set(body) == {
+        "entity_id",
+        "power_entity",
+        "rows",
+        "synthetic",
+        "start",
+        "end",
+        "read_start",
+        "read_end",
+    }:
+        return partial(
+            historical.batch,
+            service,
+            body["entity_id"],
+            body["power_entity"],
+            body["rows"],
+            body["synthetic"],
+            body["start"],
+            body["end"],
+            body["read_start"],
+            body["read_end"],
+            now=now,
+            resolution="5minute" if operation == "fine_history" else "hour",
+        )
+    return None
+
+
+def _task_action(operation, body, service, now, repository):
+    """Decode readiness, deadline and execution events with their original authority."""
+    if operation == "deadline" and set(body) == {"entity_id", "deadline"}:
+        return partial(service.set_deadline, body["entity_id"], instant(body["deadline"]), now)
+    if operation == "deadline_field" and set(body) == {
+        "entity_id",
+        "field",
+        "value",
+        "time_zone",
+    }:
+        return partial(
+            service.set_deadline_field,
+            body["entity_id"],
+            body["field"],
+            body["value"],
+            body["time_zone"],
+            now,
+        )
+    if operation == "tasks" and set(body) - {"program"} == {
+        "entity_id",
+        "request_id",
+        "ready_at",
+        "deadline",
+    }:
+        return partial(
+            service.submit,
+            body["entity_id"],
+            body["request_id"],
+            instant(body["ready_at"]),
+            instant(body["deadline"]),
+            now,
+            program=body.get("program"),
+        )
+    if operation == "cancel" and set(body) == {"entity_id", "task_id"}:
+        return partial(service.cancel_task, body["entity_id"], body["task_id"])
+    if operation == "claim" and set(body) == {"entity_id", "task_id", "attempt_id"}:
+
+        def claim_current():
+            """Check expiry when the operation runs, after lock and worker queue waits."""
+            return service.claim(
+                body["entity_id"],
+                body["task_id"],
+                body["attempt_id"],
+                datetime.now(UTC),
+                repository.state["enabled"],
+                repository.state["plan"],
+            )
+
+        return claim_current
+    if operation == "feedback" and set(body) == {
+        "entity_id",
+        "task_id",
+        "attempt_id",
+        "event",
+        "at",
+        "cancelled",
+    }:
+        return partial(
+            service.feedback,
+            body["entity_id"],
+            body["task_id"],
+            body["attempt_id"],
+            body["event"],
+            instant(body["at"]),
+            now,
+            cancelled=body["cancelled"],
+        )
+    return None
+
+
+async def _write_action(app, service, operation, body, apply):
+    """Complete the durable write and record bounded learning activity when applicable."""
+    from open_energy_planner.activities.api import EVENTS
+    from open_energy_planner.activities.events import Outcome
+
+    events = app.get(EVENTS)
+    if not events or operation not in ("history", "hourly_history", "fine_history", "cycles"):
+        return await complete_write(apply)
+
+    entity_id = body["entity_id"]
+    async with events.attempt(
+        "appliances",
+        "history",
+        "Learn appliance cycles",
+        context={
+            "label": next(
+                (
+                    option["name"]
+                    for option in service.consumers.options
+                    if option["entity_id"] == entity_id
+                ),
+                "Appliance",
+            )
+        },
+        failure="Cycle learning failed. Previously accepted profiles are retained.",
+    ) as activity:
+        progress_field = "fine_import" if operation == "fine_history" else "history_import"
+        previous = service.state["devices"].get(entity_id, {}).get(progress_field, {})
+        previous_checkpoint = _history_frontier(previous)
+        cancellation = await complete_write(apply)
+        accepted, usable = _learning_outcome(
+            service, body, operation, progress_field, previous_checkpoint
+        )
+        await events.finish(
+            activity,
+            Outcome.COMPLETED if usable else Outcome.SKIPPED,
+            "Appliance history was processed. Detected cycles and usable profiles are shown in Appliance settings."
+            if usable
+            else "Appliance history was processed with no usable paired measurements. Retained profiles remain available."
+            if accepted
+            else "This appliance history batch was already processed.",
+            usable=usable,
+        )
+        return cancellation
+
+
+def _history_frontier(progress):
+    """Read both directions of the resumable scan's progress."""
+    return tuple(progress.get(frontier) for frontier in ("cursor", "forward_cursor"))
+
+
+def _learning_outcome(service, body, operation, progress_field, previous_checkpoint):
+    """Separate replayed or empty history batches from usable learning evidence."""
+    if operation == "cycles":
+        return True, True
+    settings = service.state["devices"][body["entity_id"]]
+    if operation == "history":
+        summary = settings[
+            "hourly_history" if body.get("resolution", "5minute") == "hour" else "learning_history"
+        ]
+        return True, summary["usable_intervals"] > 0
+    progress = settings[progress_field]
+    accepted = previous_checkpoint != _history_frontier(progress)
+    summary = progress["last_batch"]
+    return accepted, accepted and summary["usable_intervals"] > 0
+
+
+def _start_authority_is_current(repository, lock, view, plan, first_expiry):
+    """Recheck mutable command authority after the response leaves the worker thread."""
+    if lock.locked() or not repository.state["enabled"]:
+        return False
+    if repository.state["plan"] is not plan or repository.pending_invalidation:
+        return False
+    return view.same_inputs(lock.settings.appliances) and datetime.now(UTC) < min(
+        first_expiry, instant(plan["valid_until"])
+    )
+
+
 def register(app, service, repository, live, lock, ev, thermal, *, mark_command_free):
     """Serialize readiness, measurements and execution events with plan admission."""
 
@@ -131,13 +425,8 @@ def register(app, service, repository, live, lock, ev, thermal, *, mark_command_
             return web.json_response(document), first_expiry
 
         response, first_expiry = await asyncio.to_thread(respond, plan)
-        if first_expiry is not None and (
-            lock.locked()
-            or not repository.state["enabled"]
-            or repository.state["plan"] is not plan
-            or repository.pending_invalidation
-            or not view.same_inputs(lock.settings.appliances)
-            or datetime.now(UTC) >= min(first_expiry, instant(plan["valid_until"]))
+        if first_expiry is not None and not _start_authority_is_current(
+            repository, lock, view, plan, first_expiry
         ):
             response, first_expiry = await asyncio.to_thread(respond, None)
         if first_expiry is None:
@@ -160,301 +449,22 @@ def register(app, service, repository, live, lock, ev, thermal, *, mark_command_
                 now = datetime.now(UTC)
                 processing_started = monotonic()
                 previous_revision = service.revision
-                if operation == "device" and set(body) in (
-                    {"entity_id", "shiftable"},
-                    {"entity_id", "shiftable", "expected_version"},
-                ):
-                    if body["shiftable"] and body["entity_id"] in (
-                        {row["energy_entity"] for row in ev.state["points"]} | thermal.meters
-                    ):
-                        raise ValueError(SOURCE_ALREADY_ASSIGNED)
-                    function, arguments, keywords = (
-                        service.configure,
-                        (body["entity_id"], body["shiftable"]),
-                        {"expected_version": body.get("expected_version")},
-                    )
-                elif operation == "profile_options" and set(body) == {
-                    "entity_id",
-                    "learn_additional_profile",
-                    "expected_version",
-                }:
-                    function, arguments, keywords = (
-                        service.configure_additional_profile,
-                        (
-                            body["entity_id"],
-                            body["learn_additional_profile"],
-                            body["expected_version"],
-                        ),
-                        {},
-                    )
-                elif operation == "manual_profile" and set(body) == {
-                    "entity_id",
-                    "duration_minutes",
-                    "energy_kwh",
-                    "expected_version",
-                }:
-                    function, arguments, keywords = (
-                        service.set_manual_profile,
-                        (
-                            body["entity_id"],
-                            body["duration_minutes"],
-                            body["energy_kwh"],
-                            body["expected_version"],
-                        ),
-                        {},
-                    )
-                elif operation == "raw_history" and set(body) - {"observer_session"} == {
-                    "entity_id",
-                    "power_entity",
-                    "start",
-                    "end",
-                    "energy_states",
-                    "power_states",
-                    "energy_reported_at",
-                    "power_reported_at",
-                    "limited",
-                    "synthetic",
-                }:
-                    function, arguments, keywords = service.learn_raw_history, (body, now), {}
-                elif operation == "history_scan" and set(body) - {"resolution"} == {
-                    "entity_id",
-                    "power_entity",
-                    "phase",
-                    "start",
-                    "end",
-                }:
-                    function, arguments, keywords = (
-                        historical.scan,
-                        (
-                            service,
-                            body["entity_id"],
-                            body["power_entity"],
-                            body["phase"],
-                            body["start"],
-                            body["end"],
-                        ),
-                        {"now": now, "resolution": body.get("resolution", "hour")},
-                    )
-                elif operation in ("hourly_history", "fine_history") and set(body) == {
-                    "entity_id",
-                    "power_entity",
-                    "rows",
-                    "synthetic",
-                    "start",
-                    "end",
-                    "read_start",
-                    "read_end",
-                }:
-                    function, arguments, keywords = (
-                        historical.batch,
-                        (
-                            service,
-                            body["entity_id"],
-                            body["power_entity"],
-                            body["rows"],
-                            body["synthetic"],
-                            body["start"],
-                            body["end"],
-                            body["read_start"],
-                            body["read_end"],
-                        ),
-                        {
-                            "now": now,
-                            "resolution": "5minute" if operation == "fine_history" else "hour",
-                        },
-                    )
-                elif operation == "history" and set(body) - {"resolution"} == {
-                    "entity_id",
-                    "power_entity",
-                    "rows",
-                    "synthetic",
-                }:
-                    function, arguments, keywords = (
-                        service.learn_history,
-                        (
-                            body["entity_id"],
-                            body["power_entity"],
-                            body["rows"],
-                            body["synthetic"],
-                            now,
-                        ),
-                        {
-                            "sample_seconds": {
-                                "hour": HOURLY_SAMPLE_SECONDS,
-                                "5minute": SAMPLE_SECONDS,
-                            }[body.get("resolution", "5minute")]
-                        },
-                    )
-                elif operation == "deadline" and set(body) == {"entity_id", "deadline"}:
-                    function, arguments, keywords = (
-                        service.set_deadline,
-                        (body["entity_id"], instant(body["deadline"]), now),
-                        {},
-                    )
-                elif operation == "deadline_field" and set(body) == {
-                    "entity_id",
-                    "field",
-                    "value",
-                    "time_zone",
-                }:
-                    function, arguments, keywords = (
-                        service.set_deadline_field,
-                        (body["entity_id"], body["field"], body["value"], body["time_zone"], now),
-                        {},
-                    )
-                elif operation == "cycles" and set(body) == {
-                    "entity_id",
-                    "cycle_id",
-                    "started_at",
-                    "completed_at",
-                    "points",
-                    "synthetic",
-                }:
-                    if type(body["synthetic"]) is not bool or instant(body["completed_at"]) > now:
-                        raise ValueError("Cycle evidence must describe a completed measured run")
-                    function, arguments, keywords = (
-                        service.record_cycle,
-                        (
-                            body["entity_id"],
-                            body["cycle_id"],
-                            instant(body["started_at"]),
-                            instant(body["completed_at"]),
-                            body["points"],
-                        ),
-                        {"synthetic": body["synthetic"]},
-                    )
-                elif operation == "tasks" and set(body) - {"program"} == {
-                    "entity_id",
-                    "request_id",
-                    "ready_at",
-                    "deadline",
-                }:
-                    function, arguments, keywords = (
-                        service.submit,
-                        (
-                            body["entity_id"],
-                            body["request_id"],
-                            instant(body["ready_at"]),
-                            instant(body["deadline"]),
-                            now,
-                        ),
-                        {"program": body.get("program")},
-                    )
-                elif operation == "cancel" and set(body) == {"entity_id", "task_id"}:
-                    function, arguments, keywords = (
-                        service.cancel_task,
-                        (body["entity_id"], body["task_id"]),
-                        {},
-                    )
-                elif operation == "claim" and set(body) == {"entity_id", "task_id", "attempt_id"}:
-
-                    def claim_current():
-                        """Check expiry when the operation runs, after lock and worker queue waits."""
-                        return service.claim(
-                            body["entity_id"],
-                            body["task_id"],
-                            body["attempt_id"],
-                            datetime.now(UTC),
-                            repository.state["enabled"],
-                            repository.state["plan"],
-                        )
-
-                    function, arguments, keywords = claim_current, (), {}
-                elif operation == "feedback" and set(body) == {
-                    "entity_id",
-                    "task_id",
-                    "attempt_id",
-                    "event",
-                    "at",
-                    "cancelled",
-                }:
-                    function, arguments, keywords = (
-                        service.feedback,
-                        (
-                            body["entity_id"],
-                            body["task_id"],
-                            body["attempt_id"],
-                            body["event"],
-                            instant(body["at"]),
-                            now,
-                        ),
-                        {"cancelled": body["cancelled"]},
-                    )
-                else:
+                action = _configuration_action(operation, body, service, ev, thermal)
+                if action is None:
+                    action = _learning_action(operation, body, service, now, processing_started)
+                if action is None:
+                    action = _scan_action(operation, body, service, now)
+                if action is None:
+                    action = _task_action(operation, body, service, now, repository)
+                if action is None:
                     raise ValueError("Unsupported appliance operation or fields")
-                if operation in ("history", "raw_history"):
-                    keywords["processing_started"] = processing_started
                 result = []
 
                 def apply():
                     """Capture the durable operation result without retrying an ambiguous write."""
-                    result.append(function(*arguments, **keywords))
+                    result.append(action())
 
-                from open_energy_planner.activities.api import EVENTS
-                from open_energy_planner.activities.events import Outcome
-
-                events = app.get(EVENTS)
-                if events and operation in ("history", "hourly_history", "fine_history", "cycles"):
-                    async with events.attempt(
-                        "appliances",
-                        "history",
-                        "Learn appliance cycles",
-                        context={
-                            "label": next(
-                                (
-                                    option["name"]
-                                    for option in service.consumers.options
-                                    if option["entity_id"] == body["entity_id"]
-                                ),
-                                "Appliance",
-                            )
-                        },
-                        failure="Cycle learning failed. Previously accepted profiles are retained.",
-                    ) as activity:
-                        progress_field = (
-                            "fine_import" if operation == "fine_history" else "history_import"
-                        )
-                        previous_checkpoint = tuple(
-                            service.state["devices"]
-                            .get(body["entity_id"], {})
-                            .get(progress_field, {})
-                            .get(frontier)
-                            for frontier in ("cursor", "forward_cursor")
-                        )
-                        cancellation = await complete_write(apply)
-                        accepted = operation not in (
-                            "hourly_history",
-                            "fine_history",
-                        ) or previous_checkpoint != tuple(
-                            service.state["devices"][body["entity_id"]][progress_field].get(
-                                frontier
-                            )
-                            for frontier in ("cursor", "forward_cursor")
-                        )
-                        usable = operation == "cycles"
-                        if operation != "cycles":
-                            settings = service.state["devices"][body["entity_id"]]
-                            if operation == "history":
-                                summary = settings[
-                                    "hourly_history"
-                                    if body.get("resolution", "5minute") == "hour"
-                                    else "learning_history"
-                                ]
-                            else:
-                                summary = settings[progress_field]["last_batch"]
-                            usable = accepted and summary["usable_intervals"] > 0
-                        await events.finish(
-                            activity,
-                            Outcome.COMPLETED if usable else Outcome.SKIPPED,
-                            "Appliance history was processed. Detected cycles and usable profiles are shown in Appliance settings."
-                            if usable
-                            else "Appliance history was processed with no usable paired measurements. Retained profiles remain available."
-                            if accepted
-                            else "This appliance history batch was already processed.",
-                            usable=usable,
-                        )
-                else:
-                    cancellation = await complete_write(apply)
+                cancellation = await _write_action(app, service, operation, body, apply)
                 if (
                     live
                     and service.revision != previous_revision
