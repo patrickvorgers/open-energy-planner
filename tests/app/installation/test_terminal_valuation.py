@@ -288,7 +288,7 @@ def test_expired_extension_is_not_used_as_future_price_evidence(tmp_path):
 
 
 def test_value_shape_and_battery_association_are_validated():
-    """Non-finite values, missing identities and mismatched reserves cannot enter frozen solver input."""
+    """Non-finite values, missing identities and incompatible battery bounds cannot enter solver input."""
     inputs = valued(problem())
     (curve,) = inputs.terminal_valuations
     for changes in (
@@ -303,6 +303,8 @@ def test_value_shape_and_battery_association_are_validated():
         replace(inputs, terminal_valuations=(replace(curve, device_id="missing"),))
     with pytest.raises(ValueError, match="match all batteries"):
         replace(inputs, terminal_valuations=(replace(curve, reserve_kwh=0.5),))
+    with pytest.raises(ValueError, match="match all batteries"):
+        replace(inputs, terminal_valuations=(replace(curve, usable_kwh=1.01),))
 
 
 def test_no_battery_creates_no_inventory_credit():
