@@ -231,6 +231,7 @@ def test_invalid_energy_battery_fields_are_visible_missing_settings(capacity):
                     {
                         "type": "grid",
                         "stat_energy_from": "sensor.import",
+                        "stat_energy_to": "sensor.export",
                         "stat_rate": "sensor.grid",
                     },
                     {
@@ -247,10 +248,21 @@ def test_invalid_energy_battery_fields_are_visible_missing_settings(capacity):
                 AsyncMock(return_value=SimpleNamespace(data=metadata)),
             ):
                 body = await setup_catalogue(hass)
-            battery = body["suggestions"]["batteries"][0]
-            assert battery["capacity_kwh"] is None
-            assert battery["soc_entity"] is None
-            assert battery["charge_energy_entity"] is None
+            suggestions = body["suggestions"]
+            assert suggestions["energy_status"] == "incomplete"
+            assert suggestions["terms"] == []
+            assert suggestions["settlement"] == {"imports": [], "exports": []}
+            assert suggestions["grid_export"] == "sensor.export"
+            assert suggestions["grid_power"] == "sensor.grid"
+            assert suggestions["batteries"] == [
+                {
+                    "energy_entity": "sensor.discharge",
+                    "charge_energy_entity": None,
+                    "capacity_kwh": None,
+                    "soc_entity": None,
+                    "power_entity": None,
+                }
+            ]
             HACatalogue().receive(body, dt_util.utcnow())
 
     asyncio.run(scenario())

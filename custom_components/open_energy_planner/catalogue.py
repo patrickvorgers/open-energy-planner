@@ -18,12 +18,36 @@ MAX_ENTITY_ID_LENGTH = 127
 MAX_BATTERY_CAPACITY_KWH = 1000000.0
 
 
-def _grid_suggestions(source, term, configured_power):
+def _sensor_id(entity):
+    """Keep bounded sensor identities without requiring state or Recorder history."""
+    if (
+        isinstance(entity, str)
+        and entity.startswith("sensor.")
+        and len(entity) <= MAX_ENTITY_ID_LENGTH
+    ):
+        return entity
+    return None
+
+
+def _add_energy_term(terms, entity, sign):
+    """Keep configured Energy channels regardless of their current units or state."""
+    if _sensor_id(entity) is None:
+        return False
+    terms.append({"entity_id": entity, "sign": sign})
+    return True
+
+
+def _configured_power(source):
+    """Reuse HA's normalized signed-power entity, including generated invert/combine sensors."""
+    return _sensor_id(source.get("stat_rate") or source.get("power_config", {}).get("stat_rate"))
+
+
+def _grid_suggestions(source, terms):
     """Read the signed power channels and admit each configured import/export term once."""
     connection_power = {
         power
         for power_source in (source, *source.get("power", []))
-        if (power := configured_power(power_source))
+        if (power := _configured_power(power_source))
     }
     # Current HA stores one import/export pair per source. Older configurations
     # group routes. Prefer the current shape without counting either channel twice.
@@ -45,19 +69,131 @@ def _grid_suggestions(source, term, configured_power):
     ):
         for route in routes:
             entity = route.get(field)
-            valid = term(entity, sign)
+            valid = _add_energy_term(terms, entity, sign)
             complete &= valid
             if valid:
                 collected.append(entity)
     return complete, imports, exports, connection_power
 
 
-async def energy_suggestions(hass):
-    """Read Energy sources independently of current measurements and Recorder history.
+def _consumer_suggestions(preferences):
+    """List each configured consumption meter once and retain its upstream and power links."""
+    consumers = []
+    seen = set()
+    for source in preferences.get("device_consumption", []):
+        entity = _sensor_id(source.get("stat_consumption"))
+        if not entity or entity in seen:
+            continue
+        seen.add(entity)
+        consumer = {
+            "entity_id": entity,
+            "upstream": _sensor_id(source.get("included_in_stat")),
+        }
+        if power := _configured_power(source):
+            consumer["power_entity"] = power
+        consumers.append(consumer)
+    return consumers
 
-    Count original provider associations before normalizing geometry. An invalid
-    group must not make another meter's shared forecast appear uniquely assigned.
-    """
+
+def _add_solar_suggestion(hass, source, result, selected_forecasts):
+    """Record raw provider ownership before evaluating the meter and normalized geometry."""
+    result["solar"] = True
+    entity = _sensor_id(source.get("stat_energy_from"))
+    if entity is None:
+        return False
+    selected_entry_ids = source.get("config_entry_solar_forecast")
+    if isinstance(selected_entry_ids, list):
+        selected_forecasts.setdefault(entity, set()).update(
+            entry_id for entry_id in selected_entry_ids if isinstance(entry_id, str)
+        )
+    if entity in result["solar_sources"]:
+        matching = next(row for row in result["solar_configurations"] if row["entity_id"] == entity)
+        matching.update(providers=[], issue="solar_configuration_incomplete")
+        return False
+    _add_energy_term(result["terms"], entity, 1)
+    result["solar_sources"].append(entity)
+    result["solar_configurations"].append(solar_configuration_suggestion(hass, source))
+    return True
+
+
+def _invalidate_shared_solar_providers(suggestions, selected_forecasts):
+    """Mark every meter with a shared provider as ambiguous, even if another geometry is invalid."""
+    assignments = Counter(
+        entry_id
+        for selected_entry_ids in selected_forecasts.values()
+        for entry_id in selected_entry_ids
+    )
+    for suggestion in suggestions:
+        if any(
+            assignments[entry_id] > 1
+            for entry_id in selected_forecasts.get(suggestion["entity_id"], ())
+        ):
+            suggestion.update(providers=[], issue="solar_configuration_ambiguous")
+
+
+def _battery_capacity(capacity):
+    """Return the declared finite battery capacity in kWh if this setting can be used."""
+    if (
+        type(capacity) not in (int, float)
+        or not isfinite(capacity)
+        or not 0 < capacity <= MAX_BATTERY_CAPACITY_KWH
+    ):
+        return None
+    return capacity
+
+
+def _add_battery_suggestion(source, result):
+    """Keep readable battery setup metadata even when one Energy meter is unusable."""
+    discharge = source.get("stat_energy_from")
+    charge = source.get("stat_energy_to")
+    valid_discharge = _add_energy_term(result["terms"], discharge, 1)
+    valid_charge = _add_energy_term(result["terms"], charge, -1)
+    if isinstance(discharge, str) and len(discharge) <= MAX_ENTITY_ID_LENGTH:
+        soc = _sensor_id(source.get("stat_soc"))
+        capacity = _battery_capacity(source.get("capacity"))
+        if soc:
+            result["soc"].append(soc)
+        result["batteries"].append(
+            {
+                "energy_entity": discharge,
+                "charge_energy_entity": _sensor_id(charge),
+                "capacity_kwh": capacity,
+                "soc_entity": soc,
+                "power_entity": _configured_power(source),
+            }
+        )
+    return valid_discharge and valid_charge
+
+
+def _complete_energy_balance(result, complete, requires_export):
+    """Require every signed channel and disallow counting one meter in multiple roles."""
+    grid = result["settlement"]
+    if not complete or not grid["imports"]:
+        return False
+    if requires_export and not grid["exports"]:
+        return False
+    terms = result["terms"]
+    return len({term["entity_id"] for term in terms}) == len(terms)
+
+
+def _finish_energy_suggestions(result, complete, grid_power, storage):
+    """Publish balance terms only for complete Energy metadata, retaining setup hints."""
+    grid = result["settlement"]
+    result["grid_power_entities"] = sorted(grid_power)
+    result["grid_power"] = next(iter(grid_power)) if len(grid_power) == 1 else None
+    result["grid_export"] = grid["exports"][0] if grid["exports"] else None
+    if _complete_energy_balance(result, complete, result["solar"] or storage):
+        result["energy_status"] = "ready"
+    else:
+        result["terms"] = []
+    if not result["terms"]:
+        result["settlement"] = {"imports": [], "exports": []}
+
+
+async def energy_suggestions(hass):
+    """Read Energy sources independently of current measurements and Recorder history."""
+    from homeassistant.components.energy.data import async_get_manager
+
     result = {
         "terms": [],
         "soc": [],
@@ -72,149 +208,34 @@ async def energy_suggestions(hass):
         "grid_export": None,
         "settlement": {"imports": [], "exports": []},
     }
-    from homeassistant.components.energy.data import async_get_manager
-
     manager = await async_get_manager(hass)
-    if not (manager.data or {}).get("energy_sources"):
+    preferences = manager.data or {}
+    sources = preferences.get("energy_sources")
+    if not sources:
         return result
     result["energy_status"] = "incomplete"
-
-    def sensor_id(entity):
-        """Keep bounded sensor identities. Unusable Energy links remain explicitly missing in setup."""
-        return (
-            entity
-            if isinstance(entity, str)
-            and entity.startswith("sensor.")
-            and len(entity) <= MAX_ENTITY_ID_LENGTH
-            else None
-        )
-
-    def term(entity, sign):
-        """Retain every configured sensor channel. Unit validation belongs to setup preview and measurements."""
-        if (
-            isinstance(entity, str)
-            and entity.startswith("sensor.")
-            and len(entity) <= MAX_ENTITY_ID_LENGTH
-        ):
-            result["terms"].append({"entity_id": entity, "sign": sign})
-            return True
-        return False
-
-    def configured_power(source):
-        """Reuse HA's normalized signed-power entity, including its generated invert/combine sensor."""
-        entity = source.get("stat_rate") or source.get("power_config", {}).get("stat_rate")
-        return (
-            entity
-            if isinstance(entity, str)
-            and entity.startswith("sensor.")
-            and len(entity) <= MAX_ENTITY_ID_LENGTH
-            else None
-        )
+    result["consumers"] = _consumer_suggestions(preferences)
 
     complete = True
-    consumer_entities = set()
-    for consumer in (manager.data or {}).get("device_consumption", []):
-        entity = sensor_id(consumer.get("stat_consumption"))
-        if entity and entity not in consumer_entities:
-            consumer_entities.add(entity)
-            result["consumers"].append(
-                {
-                    "entity_id": entity,
-                    "upstream": sensor_id(consumer.get("included_in_stat")),
-                    **({"power_entity": power} if (power := configured_power(consumer)) else {}),
-                }
-            )
+    storage = False
     grid = result["settlement"]
     selected_forecasts = {}
-    explicit_power_channels = set()
-    storage = False
-    for source in (manager.data or {}).get("energy_sources", []):
+    grid_power = set()
+    for source in sources:
         kind = source.get("type")
         if kind == "grid":
-            valid, imports, exports, connection_power = _grid_suggestions(
-                source, term, configured_power
-            )
+            valid, imports, exports, connection_power = _grid_suggestions(source, result["terms"])
             complete &= valid
-            explicit_power_channels.update(connection_power)
+            grid_power.update(connection_power)
             grid["imports"].extend(imports)
             grid["exports"].extend(exports)
         elif kind == "solar":
-            result["solar"] = True
-            entity = sensor_id(source.get("stat_energy_from"))
-            selected_entry_ids = source.get("config_entry_solar_forecast")
-            if entity and isinstance(selected_entry_ids, list):
-                selected_forecasts.setdefault(entity, set()).update(
-                    entry_id for entry_id in selected_entry_ids if isinstance(entry_id, str)
-                )
-            if source.get("stat_energy_from") in result["solar_sources"]:
-                complete = False
-                matching = next(
-                    row
-                    for row in result["solar_configurations"]
-                    if row["entity_id"] == source["stat_energy_from"]
-                )
-                matching.update(providers=[], issue="solar_configuration_incomplete")
-                continue
-            valid = term(source.get("stat_energy_from"), 1)
-            complete &= valid
-            if valid:
-                result["solar_sources"].append(source["stat_energy_from"])
-                result["solar_configurations"].append(solar_configuration_suggestion(hass, source))
+            complete &= _add_solar_suggestion(hass, source, result, selected_forecasts)
         elif kind == "battery":
             storage = True
-            complete &= term(source.get("stat_energy_from"), 1)
-            complete &= term(source.get("stat_energy_to"), -1)
-            if (
-                isinstance(source.get("stat_energy_from"), str)
-                and len(source["stat_energy_from"]) <= MAX_ENTITY_ID_LENGTH
-            ):
-                soc = sensor_id(source.get("stat_soc"))
-                capacity = source.get("capacity")
-                if (
-                    type(capacity) not in (int, float)
-                    or not isfinite(capacity)
-                    or not 0 < capacity <= MAX_BATTERY_CAPACITY_KWH
-                ):
-                    capacity = None
-                if soc:
-                    result["soc"].append(soc)
-                result["batteries"].append(
-                    {
-                        "energy_entity": source["stat_energy_from"],
-                        "charge_energy_entity": sensor_id(source.get("stat_energy_to")),
-                        "capacity_kwh": capacity,
-                        "soc_entity": soc,
-                        "power_entity": configured_power(source),
-                    }
-                )
-    assignments = Counter(
-        entry_id
-        for selected_entry_ids in selected_forecasts.values()
-        for entry_id in selected_entry_ids
-    )
-    for suggestion in result["solar_configurations"]:
-        if any(
-            assignments[entry_id] > 1
-            for entry_id in selected_forecasts.get(suggestion["entity_id"], ())
-        ):
-            suggestion["providers"] = []
-            suggestion["issue"] = "solar_configuration_ambiguous"
-    selected_power = explicit_power_channels
-    result["grid_power_entities"] = sorted(selected_power)
-    result["grid_power"] = next(iter(selected_power)) if len(selected_power) == 1 else None
-    result["grid_export"] = grid["exports"][0] if grid["exports"] else None
-    if (
-        not complete
-        or not grid["imports"]
-        or ((result["solar"] or storage) and not grid["exports"])
-        or len({energy_term["entity_id"] for energy_term in result["terms"]})
-        != len(result["terms"])
-    ):
-        result["terms"] = []
-    else:
-        result["energy_status"] = "ready"
-    if not result["terms"]:
-        result["settlement"] = {"imports": [], "exports": []}
+            complete &= _add_battery_suggestion(source, result)
+    _invalidate_shared_solar_providers(result["solar_configurations"], selected_forecasts)
+    _finish_energy_suggestions(result, complete, grid_power, storage)
     return result
 
 
