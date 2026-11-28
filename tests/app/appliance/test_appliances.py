@@ -184,9 +184,11 @@ def test_claim_checks_expiry_after_lock_and_worker_waits(tasks, monkeypatch, wai
     asyncio.run(scenario())
 
 
-@pytest.mark.parametrize("claim", [False, True])
-def test_published_appliance_read_rechecks_changes_to_start_authority(tasks, monkeypatch, claim):
-    """Completing unrelated state work preserves a request. Claiming that request withdraws it."""
+@pytest.mark.parametrize(
+    "change", ["unrelated_write", "claim", "invalidation", "disable", "replace_plan", "expiry"]
+)
+def test_published_appliance_read_rechecks_changes_to_start_authority(tasks, monkeypatch, change):
+    """Only unchanged, unexpired start authority survives concurrent response encoding."""
     import asyncio
     import threading
     from types import SimpleNamespace
@@ -201,17 +203,18 @@ def test_published_appliance_read_rechecks_changes_to_start_authority(tasks, mon
     async def scenario():
         """Project a real start request, hold encoding, then let another owner finish an operation."""
         scheduled_task, plan, before = scheduled(tasks)
+        current_time = before
         attempt = scheduled_task["attempt"]
         original_document = ApplianceView.document
         entered, release = threading.Event(), threading.Event()
 
         class Clock:
-            """Keep the plan and attempt before their real deadlines throughout the test."""
+            """Expose the initial request time and the selected expiry transition."""
 
             @staticmethod
             def now(_zone):
-                """Return the exact time the service issued its legitimate request."""
-                return before
+                """Return the current instant selected by the scenario."""
+                return current_time
 
         def hold_after_projection(view, *arguments, **keywords):
             """Hold only the first response after it contains authorized start evidence."""
@@ -240,7 +243,7 @@ def test_published_appliance_read_rechecks_changes_to_start_authority(tasks, mon
             pending = asyncio.create_task(client.get("/v1/appliances"))
             try:
                 assert await asyncio.to_thread(entered.wait, 5)
-                if claim:
+                if change == "claim":
                     response = await client.post(
                         "/v1/appliances/claim",
                         json={
@@ -250,23 +253,31 @@ def test_published_appliance_read_rechecks_changes_to_start_authority(tasks, mon
                         },
                     )
                     assert response.status == 200
-                else:
+                elif change == "unrelated_write":
                     async with lock:
                         pass
+                elif change == "invalidation":
+                    repository.pending_invalidation = True
+                elif change == "disable":
+                    repository.state["enabled"] = False
+                elif change == "replace_plan":
+                    repository.state["plan"] = dict(plan)
+                else:
+                    current_time = datetime.fromisoformat(attempt["expires_at"])
                 assert not pending.done()
             finally:
                 release.set()
                 read = await pending
             assert read.status == 200
             request = (await read.json())["devices"][0]["request"]
-            if claim:
-                assert request is None
-            else:
+            if change == "unrelated_write":
                 assert request == {
                     "task_id": scheduled_task["id"],
                     "attempt_id": attempt["id"],
                     "expires_at": attempt["expires_at"],
                 }
+            else:
+                assert request is None
 
     asyncio.run(scenario())
 
