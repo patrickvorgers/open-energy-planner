@@ -848,7 +848,12 @@ def test_actual_ha_reconciles_per_device_capabilities_and_expires_targets():
                     == measurement_unit
                 )
             assert hass.states.get(battery_id).state == "-500"
-            assert hass.states.get(solar_id).state == "off"
+            solar = hass.states.get(solar_id)
+            assert solar.state == "off"
+            assert solar.attributes["mode"] == "on_off"
+            assert solar.attributes["applicable"] is True
+            assert solar.attributes["grid_device"] is None
+            assert solar.attributes["measurement_side"] == "solar_production"
             coordinator.refresh(now + timedelta(hours=2))
             assert hass.states.get(battery_id).state == "unavailable"
             assert hass.states.get(details_id).state == "configured"
@@ -1314,6 +1319,11 @@ def test_multi_device_zero_grid_modes_keep_power_enabled_but_inapplicable():
             }
             assert hass.states.get(ids["power"]).state == "0"
             assert hass.states.get(ids["power"]).attributes["applicable"] is True
+            assert hass.states.get(ids["power"]).attributes["grid_device"] is None
+            assert (
+                hass.states.get(ids["power"]).attributes["measurement_side"]
+                == "battery_terminal_dc"
+            )
             assert hass.states.get(ids["mode"]).state == "fixed_power"
             assert hass.states.get(ids["mode"]).attributes["device_class"] == "enum"
             assert find(hass, "grid_control_mode").state == "inactive"
@@ -1323,6 +1333,7 @@ def test_multi_device_zero_grid_modes_keep_power_enabled_but_inapplicable():
             assert find(hass, "grid_power_target").state == "0"
             assert hass.states.get(ids["power"]).state == "unknown"
             assert hass.states.get(ids["power"]).attributes["applicable"] is False
+            assert hass.states.get(ids["power"]).attributes["grid_device"] == "grid"
             assert hass.states.get(ids["mode"]).state == "follow_grid_target"
             assert registry.async_get(ids["power"]).disabled_by is None
             fixed_id = registry.async_get_entity_id(
