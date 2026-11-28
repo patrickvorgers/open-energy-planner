@@ -75,8 +75,8 @@ def request_document(request):
     }
 
 
-def save_request(state, body, now, timezone):
-    """Create or atomically edit one request. Retried creation never revives a terminal request."""
+def _creation_digest(body):
+    """Validate the request envelope and identify a creation independently of its edit version."""
     allowed = {
         "request_id",
         "vehicle_id",
@@ -92,9 +92,43 @@ def save_request(state, body, now, timezone):
     ):
         raise ValueError("Invalid charging request fields")
     identity(body["request_id"])
-    creation_digest = digest(
-        {key: value for key, value in body.items() if key != "expected_version"}
+    return digest({key: value for key, value in body.items() if key != "expected_version"})
+
+
+def _requested_schedule(body, vehicle, now, timezone):
+    """Validate the target, bounded departure and normalized repeat weekdays in order."""
+    target = number(body.get("target_soc", vehicle["target_soc"]), 0, FULL_SOC_PERCENT)
+    deadline = (
+        instant(body["departure"]) if body.get("departure") else departure(vehicle, now, timezone)
     )
+    if not now < deadline <= now + timedelta(days=MAX_REQUEST_DAYS):
+        raise ValueError("Charging departure must be in the next thirty days")
+    weekdays = body.get("repeat_weekdays", [])
+    valid_days = isinstance(weekdays, list) and all(
+        type(day) is int and 0 <= day < DAYS_PER_WEEK for day in weekdays
+    )
+    if not valid_days or len(set(weekdays)) != len(weekdays):
+        raise ValueError("Choose distinct repeat weekdays between zero and six")
+    return target, deadline, sorted(weekdays)
+
+
+def _request_edit_needed(existing, expected, vehicle_id, schedule):
+    """Require the current planned revision before treating an edit as a no-op."""
+    if existing["vehicle_id"] != vehicle_id or existing["status"] != RequestStatus.PLANNED:
+        raise ValueError("Only a planned charging request can be edited")
+    if expected != digest(existing):
+        raise ValueError("Charging request changed. Refresh before saving")
+    target, deadline, weekdays = schedule
+    return not (
+        existing["target_soc"] == target
+        and instant(existing["departure"]) == deadline
+        and existing["repeat_weekdays"] == weekdays
+    )
+
+
+def save_request(state, body, now, timezone):
+    """Create or atomically edit one request. Retried creation never revives a terminal request."""
+    creation_digest = _creation_digest(body)
     existing = state.get("requests", {}).get(body["request_id"])
     expected = body.get("expected_version")
     if existing and expected is None:
@@ -104,35 +138,15 @@ def save_request(state, body, now, timezone):
     vehicle = next((car for car in state["vehicles"] if car["id"] == body["vehicle_id"]), None)
     if vehicle is None:
         raise ValueError("Unknown vehicle")
-    target = number(body.get("target_soc", vehicle["target_soc"]), 0, FULL_SOC_PERCENT)
-    deadline = (
-        instant(body["departure"]) if body.get("departure") else departure(vehicle, now, timezone)
-    )
-    if not now < deadline <= now + timedelta(days=MAX_REQUEST_DAYS):
-        raise ValueError("Charging departure must be in the next thirty days")
-    weekdays = body.get("repeat_weekdays", [])
-    if (
-        not isinstance(weekdays, list)
-        or any(type(day) is not int or not 0 <= day < DAYS_PER_WEEK for day in weekdays)
-        or len(set(weekdays)) != len(weekdays)
-    ):
-        raise ValueError("Choose distinct repeat weekdays between zero and six")
-    weekdays = sorted(weekdays)
+    schedule = _requested_schedule(body, vehicle, now, timezone)
     if existing:
-        if existing["vehicle_id"] != vehicle["id"] or existing["status"] != RequestStatus.PLANNED:
-            raise ValueError("Only a planned charging request can be edited")
-        if expected != digest(existing):
-            raise ValueError("Charging request changed. Refresh before saving")
-        if (
-            existing["target_soc"] == target
-            and instant(existing["departure"]) == deadline
-            and existing["repeat_weekdays"] == weekdays
-        ):
+        if not _request_edit_needed(existing, expected, vehicle["id"], schedule):
             return state
     elif expected is not None:
         raise ValueError("Charging request no longer exists")
     elif active_request(state, vehicle["id"]):
         raise ValueError("This vehicle already has a planned charging request")
+    target, deadline, weekdays = schedule
     ready_at = max(now, instant(existing["ready_at"])) if existing else now
     if deadline <= ready_at:
         raise ValueError("Charging departure must be after this request's readiness")
@@ -175,6 +189,49 @@ def cancel_request(state, request_id, expected_version, now):
     return updated
 
 
+def _assigned_at_capture(state, points, vehicle_id):
+    """Admit completion evidence only for the exact connected session assigned to the car."""
+    return any(
+        point["connected"] is True
+        and state["assignments"].get(point["id"], {}).get("vehicle_id") == vehicle_id
+        and state["assignments"].get(point["id"], {}).get("session_id") == point["session_id"]
+        for point in points
+    )
+
+
+def _next_repeat_request(request, request_id, deadline, now, timezone):
+    """Build the first future occurrence with a stable ID and its independent readiness boundary."""
+    zone = timezone or request["timezone"]
+    ready_at = max(now, deadline)
+    following = departure(
+        {"departure_time": request["repeat_time"]},
+        ready_at,
+        zone,
+        request["repeat_weekdays"],
+    )
+    following_id = str(uuid5(UUID(request_id), following.isoformat()))
+    return {
+        **{
+            key: request[key]
+            for key in (
+                "vehicle_id",
+                "target_soc",
+                "repeat_weekdays",
+                "repeat_time",
+                "creation_digest",
+            )
+        },
+        "id": following_id,
+        "departure": following.isoformat(),
+        "ready_at": ready_at.isoformat(),
+        "timezone": zone,
+        "status": RequestStatus.PLANNED,
+        "created_at": now.isoformat(),
+        "updated_at": now.isoformat(),
+        "previous_request_id": request_id,
+    }
+
+
 def advance_requests(state, report, now, timezone=None):
     """Complete only from fresh identified evidence and create at most one next repeat occurrence."""
     if not state.get("active_requests"):
@@ -185,12 +242,7 @@ def advance_requests(state, report, now, timezone=None):
     for vehicle_id, request_id in tuple(state.get("active_requests", {}).items()):
         request = state["requests"][request_id]
         deadline = instant(request["departure"])
-        assigned = any(
-            point["connected"] is True
-            and state["assignments"].get(point["id"], {}).get("vehicle_id") == vehicle_id
-            and state["assignments"].get(point["id"], {}).get("session_id") == point["session_id"]
-            for point in report["points"]
-        )
+        assigned = _assigned_at_capture(state, report["points"], vehicle_id)
         measured_soc = readings.get(vehicle_id, {}).get("soc")
         completed = (
             assigned
@@ -213,36 +265,9 @@ def advance_requests(state, report, now, timezone=None):
             )
         updated["active_requests"].pop(vehicle_id, None)
         if request["repeat_weekdays"]:
-            zone = timezone or request["timezone"]
-            ready_at = max(now, deadline)
-            following = departure(
-                {"departure_time": request["repeat_time"]},
-                ready_at,
-                zone,
-                request["repeat_weekdays"],
-            )
-            following_id = str(uuid5(UUID(request_id), following.isoformat()))
-            next_request = {
-                **{
-                    key: request[key]
-                    for key in (
-                        "vehicle_id",
-                        "target_soc",
-                        "repeat_weekdays",
-                        "repeat_time",
-                        "creation_digest",
-                    )
-                },
-                "id": following_id,
-                "departure": following.isoformat(),
-                "ready_at": ready_at.isoformat(),
-                "timezone": zone,
-                "status": RequestStatus.PLANNED,
-                "created_at": now.isoformat(),
-                "updated_at": now.isoformat(),
-                "previous_request_id": request_id,
-            }
-            request["continued_by"] = following_id
-            updated["requests"][following_id] = next_request
-            updated["active_requests"][vehicle_id] = following_id
+            next_request = _next_repeat_request(request, request_id, deadline, now, timezone)
+            next_id = next_request["id"]
+            request["continued_by"] = next_id
+            updated["requests"][next_id] = next_request
+            updated["active_requests"][vehicle_id] = next_id
     return updated if updated is not None else state
