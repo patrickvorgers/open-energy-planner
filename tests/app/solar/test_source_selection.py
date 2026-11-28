@@ -677,6 +677,48 @@ def test_normalized_ha_boundary_rejects_changed_associations_and_credentials():
         parse_ha_predictions(body, suggestions, START)
 
 
+@pytest.mark.parametrize(
+    ("invalid_fields", "error_type", "message"),
+    [
+        ({"unexpected": True}, ValueError, "Invalid HA solar forecasts"),
+        ({"groups": {}}, TypeError, "Invalid HA solar groups"),
+        ({"groups": [{"entity_id": "sensor.pv0"}]}, ValueError, "Invalid HA solar group"),
+    ],
+)
+def test_ha_intake_rejects_invalid_envelopes(invalid_fields, error_type, message):
+    """Reject unexpected top-level fields and malformed group containers before reading providers."""
+    body, suggestions, _raw = _ha_intake_payload(provider())
+    body.update(invalid_fields)
+    with pytest.raises(error_type, match=f"^{message}$"):
+        parse_ha_predictions(body, suggestions, START)
+
+
+def test_ha_intake_requires_a_current_observation():
+    """The exact five-minute receipt boundary is valid, while stale or future observations fail."""
+    oldest = START - timedelta(minutes=5)
+    value = provider(oldest)
+    body, suggestions, _raw = _ha_intake_payload(value)
+    assert parse_ha_predictions(body, suggestions, START) == {"sensor.pv0": (value,)}
+
+    for observed in (oldest - timedelta(seconds=1), START + timedelta(seconds=1)):
+        body["observed_at"] = observed.isoformat()
+        with pytest.raises(ValueError, match="^Invalid HA solar observation time$"):
+            parse_ha_predictions(body, suggestions, START)
+
+
+@pytest.mark.parametrize("duplicate", [False, True], ids=["unusable-association", "duplicate"])
+def test_ha_intake_requires_one_group_per_current_usable_energy_association(duplicate):
+    """An unavailable association or a repeated report cannot enter the payload result."""
+    body, suggestions, _raw = _ha_intake_payload(provider())
+    if duplicate:
+        body["groups"].append(body["groups"][0])
+    else:
+        suggestions[0]["issue"] = "Energy association is unavailable"
+
+    with pytest.raises(ValueError, match="^HA solar association changed$"):
+        parse_ha_predictions(body, suggestions, START)
+
+
 def test_ha_intake_keeps_native_intervals_and_equal_utc_knowledge_times():
     """The inclusive intake limits accept native quarters and an offset timestamp."""
     body, suggestions, raw = _ha_intake_payload(provider())
