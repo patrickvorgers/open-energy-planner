@@ -358,12 +358,42 @@ def test_price_and_contract_boundary_inside_current_quarter_blocks_approximation
         effective_until=None,
         import_formula=Formula("market + 0.1"),
     )
-    source = input_source(tmp_path, rules=replace(rules, periods=(first, second)))
+    future = Future(
+        (
+            Interval(NOW, 0.25, 999, 999, load_kwh=0.30, pv_kwh=0.15, control_group="initial"),
+            Interval(NOW + timedelta(minutes=15), 0.25, 999, 999),
+        )
+    )
+    source = input_source(tmp_path, rules=replace(rules, periods=(first, second)), future=future)
     result = source.current(configuration(), NOW)
     steps = result.problem.intervals
     assert [step.buy_price for step in steps] == pytest.approx([0.1, 0.2, 0.5])
     assert [step.duration_h for step in steps] == pytest.approx([7 / 60, 8 / 60, 0.25])
-    assert steps[0].control_group == steps[1].control_group != steps[2].control_group
+    assert steps[0].control_group == steps[1].control_group == "initial"
+    assert steps[2].control_group != "initial"
+    assert [step.load_kwh for step in steps] == pytest.approx([0.14, 0.16, 0])
+    assert [step.pv_kwh for step in steps] == pytest.approx([0.07, 0.08, 0])
+    assert [step.pv_sources[0][0] for step in steps] == ["pv", "pv", "pv"]
+    assert [step.pv_sources[0][1] for step in steps] == pytest.approx([0.07, 0.08, 0])
+
+
+def test_invalid_later_tariff_stops_terminal_evidence_without_blocking_commands(tmp_path):
+    """After an invalid later tariff, retain the valid extension prefix and all command tariffs."""
+    source = input_source(
+        tmp_path,
+        future=Future(battery=Battery(1, 0)),
+        series=price_series((0.1, 0.1, 0.2, 0.4, 0.3)),
+        rules=contract(buy="1 / (0.4 - market)", sell="market"),
+    )
+
+    basis = source.current(configuration(), NOW)
+
+    assert [row.market_price for row in basis.tariff_evidence] == [0.1, 0.1]
+    (curve,) = basis.problem.terminal_valuations
+    assert curve.price_basis == "post_horizon_prices"
+    assert curve.window_start == NOW + timedelta(minutes=30)
+    assert curve.window_end == NOW + timedelta(minutes=45)
+    assert [row.market_price for row in curve.tariff_evidence] == [0.2]
 
 
 @pytest.mark.parametrize(
@@ -373,6 +403,8 @@ def test_price_and_contract_boundary_inside_current_quarter_blocks_approximation
         ("prices", "market_prices_unavailable"),
         ("forecasts", "forecasts_not_configured"),
         ("expired", "tariff_coverage_gap"),
+        ("forecast_starts_late", "tariff_coverage_gap"),
+        ("forecast_too_long", "unsupported_forecast_horizon"),
         ("formula", "contract_or_market_prices_invalid"),
     ],
 )
@@ -385,6 +417,10 @@ def test_missing_or_unusable_components_block_planning_without_defaults(tmp_path
         source.prices = lambda: None
     elif fault == "forecasts":
         source.future = None
+    elif fault == "forecast_starts_late":
+        source.future = Future((Interval(NOW + timedelta(minutes=5), 0.25, 999, 999),))
+    elif fault == "forecast_too_long":
+        source.future = Future((Interval(NOW, 49, 999, 999),))
     elif fault == "formula":
         source.contract = lambda: contract(buy="1 / (market - 0.4)")
     else:
