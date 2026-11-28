@@ -143,6 +143,40 @@ def test_invalid_report_is_atomic_and_old_ack_cannot_satisfy_correction():
     asyncio.run(scenario())
 
 
+def test_valid_first_day_is_not_queued_when_second_day_has_an_internal_gap():
+    """A paired response commits neither day until both have continuous market coverage."""
+
+    async def scenario():
+        """Keep both request IDs until the whole report passes validation."""
+        now = datetime(2026, 11, 1, 8, tzinfo=UTC)
+        today, tomorrow = now.date(), now.date() + timedelta(days=1)
+        direct = AsyncMock()
+        source = AutomaticPublishedPrices("NL", direct)
+        for day in (today, tomorrow):
+            with pytest.raises(PricesUnavailable, match="home_assistant_prices_pending"):
+                await source.fetch_day(day, now)
+        pending = source.request(now)
+        body = report(source, now)
+        body["responses"] = [response(source, today, now), response(source, tomorrow, now)]
+        invalid = deepcopy(body)
+        del invalid["responses"][1]["data"]["NL"][3]
+
+        with pytest.raises(ValueError, match="Incomplete HA price day"):
+            source.receive(invalid, now)
+        assert source.reported_at is None
+        assert source.responses == {}
+        assert source.request(now) == pending
+
+        changed, admitted = source.receive(body, now)
+        assert changed and [day for day, _ in admitted] == [today, tomorrow]
+        assert source.request(now)["days"] == []
+        for day in (today, tomorrow):
+            assert (await source.fetch_day(day, now)).points[0].value == -0.05
+        direct.fetch_day.assert_not_awaited()
+
+    asyncio.run(scenario())
+
+
 def test_late_ha_response_during_direct_fetch_cannot_satisfy_later_correction():
     """A successful direct fallback retires both pending work and an HA reply received mid-fetch."""
 
