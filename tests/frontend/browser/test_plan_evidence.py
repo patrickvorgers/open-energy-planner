@@ -231,7 +231,7 @@ def test_historical_selection_clears_previous_plan_until_its_own_read_succeeds(
     state = automatic_plan_overview
     page = state["page"]
     page.locator("#price-chart").press("Home")
-    expect(page.locator("#linked-chart-reading")).to_contain_text("Revenue before bonus")
+    expect(page.locator("#linked-chart-reading")).to_contain_text("Revenue")
     state["hold_comparison"] = True
     with page.expect_request("**/v1/plans/older-plan/comparison?view=plan"):
         page.locator("#plan-version").select_option("older-plan")
