@@ -70,6 +70,55 @@ def current_status(row, field, now):
     return status["value"]
 
 
+def _candidate_signals(vehicle_ids, cars, readings, point_reading, now):
+    """Keep possible cars and the subset supported by current plug or charging evidence."""
+    candidates, positive = [], []
+    for vehicle_id in vehicle_ids:
+        vehicle = cars[vehicle_id]
+        reading = readings[vehicle_id]
+        plugged = current_status(reading, "connected", now)
+        charging = current_status(reading, "charging", now)
+        home = current_status(reading, "home", now)
+        maximum = vehicle["maximum_w"]
+        excess = max(POWER_MARGIN_W, maximum * POWER_MARGIN_FRACTION)
+        if plugged is False or home is False or (point_reading["power_w"] or 0) > maximum + excess:
+            continue
+        candidates.append(vehicle_id)
+        if plugged is True or charging is True:
+            positive.append(vehicle_id)
+    return candidates, positive
+
+
+def _session_owner(state, point, reading, candidates, positive, now):
+    """Prefer a positive signal, then compatible session continuity and planned intent."""
+    previous = state["assignments"].get(point["id"], {})
+    retained = (
+        previous.get("vehicle_id")
+        if previous.get("session_id") == reading["session_id"]
+        and previous.get("vehicle_id") in candidates
+        else None
+    )
+    planned = [
+        vehicle_id
+        for vehicle_id in candidates
+        if (request := active_request(state, vehicle_id)) and instant(request["departure"]) > now
+    ]
+    if len(positive) == 1:
+        return positive[0], RecognitionReason.SIGNAL
+    if retained and not positive:
+        return retained, previous.get("origin", RecognitionReason.MANUAL)
+    if len(candidates) == 1:
+        reason = (
+            RecognitionReason.SINGLE
+            if len(point["vehicle_ids"]) == 1
+            else RecognitionReason.ELIMINATION
+        )
+        return candidates[0], reason
+    if not positive and len(planned) == 1:
+        return planned[0], RecognitionReason.PLANNED
+    return None, RecognitionReason.AMBIGUOUS if candidates else RecognitionReason.CONFLICT
+
+
 def recognize(state, report, now):
     """Prefer positive evidence over planned expectation and reject duplicate concurrent ownership.
 
@@ -86,48 +135,8 @@ def recognize(state, report, now):
         actual = points[point["id"]]
         if actual["connected"] is not True:
             continue
-        candidates, positive = [], []
-        for vehicle_id in point["vehicle_ids"]:
-            vehicle = cars[vehicle_id]
-            reading = readings[vehicle_id]
-            plugged = current_status(reading, "connected", now)
-            charging = current_status(reading, "charging", now)
-            home = current_status(reading, "home", now)
-            maximum = vehicle["maximum_w"]
-            excess = max(POWER_MARGIN_W, maximum * POWER_MARGIN_FRACTION)
-            if plugged is False or home is False or (actual["power_w"] or 0) > maximum + excess:
-                continue
-            candidates.append(vehicle_id)
-            if plugged is True or charging is True:
-                positive.append(vehicle_id)
-        previous = state["assignments"].get(point["id"], {})
-        retained = (
-            previous.get("vehicle_id")
-            if previous.get("session_id") == actual["session_id"]
-            and previous.get("vehicle_id") in candidates
-            else None
-        )
-        planned = [
-            vehicle_id
-            for vehicle_id in candidates
-            if (request := active_request(state, vehicle_id))
-            and instant(request["departure"]) > now
-        ]
-        vehicle_id = None
-        reason = RecognitionReason.AMBIGUOUS if candidates else RecognitionReason.CONFLICT
-        if len(positive) == 1:
-            vehicle_id, reason = positive[0], RecognitionReason.SIGNAL
-        elif retained and not positive:
-            vehicle_id, reason = retained, previous.get("origin", RecognitionReason.MANUAL)
-        elif len(candidates) == 1:
-            vehicle_id = candidates[0]
-            reason = (
-                RecognitionReason.SINGLE
-                if len(point["vehicle_ids"]) == 1
-                else RecognitionReason.ELIMINATION
-            )
-        elif not positive and len(planned) == 1:
-            vehicle_id, reason = planned[0], RecognitionReason.PLANNED
+        candidates, positive = _candidate_signals(point["vehicle_ids"], cars, readings, actual, now)
+        vehicle_id, reason = _session_owner(state, point, actual, candidates, positive, now)
         recognized[point["id"]] = {
             "session_id": actual["session_id"],
             "vehicle_id": vehicle_id,
