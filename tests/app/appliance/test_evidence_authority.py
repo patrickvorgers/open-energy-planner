@@ -70,3 +70,32 @@ def test_observed_authority_precedes_dense_or_bridging_legacy_ranges(observed_ru
     assert [
         {key: value for key, value in record.items() if key != "_profile"} for record in records
     ] == original
+
+
+def test_touching_hourly_cycles_keep_their_energy_and_original_resolution():
+    """Coarse cycles bordering a fine run count once each, while the overlapping view stays archived."""
+    fine = raw_record("fine", NOW, 1, 1000)
+    before = raw_record("before", NOW - timedelta(hours=1), 1, 1000, intervals=1)
+    overlapping = raw_record("same-range", NOW, 1, 5000, intervals=1)
+    after = raw_record("after", NOW + timedelta(hours=1), 1, 1000, intervals=1)
+    for record in (before, overlapping, after):
+        record["quality"] = "hourly_estimate"
+    records = [after, overlapping, fine, before]
+    original = deepcopy(records)
+    settings = {}
+
+    refine(settings, records)
+
+    combined = restore_profile(settings["profile"])
+    assert combined.samples == 3
+    assert combined.energy_kwh == pytest.approx(1)
+    assert settings["profile_sources"] == {"hourly_cycles": 2, "fine_cycles": 1}
+    assert restore_profile(settings["hourly_profile"]).samples == 3
+    assert [(row["id"], row["resolution"]) for row in settings["recent_cycles"]] == [
+        ("before", "hour"),
+        ("fine", "state_events"),
+        ("after", "hour"),
+    ]
+    assert [
+        {key: value for key, value in record.items() if key != "_profile"} for record in records
+    ] == original
