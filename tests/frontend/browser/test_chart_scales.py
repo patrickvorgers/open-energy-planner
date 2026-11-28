@@ -211,6 +211,34 @@ def test_independent_scales_follow_windows_partial_bars_hidden_series_and_line_e
 
 
 @pytest.mark.parametrize("width", [390, 1280])
+def test_interval_lines_break_on_missing_values_and_keep_an_explicit_axis_cap(browser, width):
+    """Only the partially overlapping interval contributes below a fixed cap, even across zoom."""
+    with browser.new_context(viewport={"width": width, "height": 900}) as context:
+        page = context.new_page()
+        page.set_content('<canvas id="plot"></canvas>')
+        page.add_script_tag(path=str(WEB / "chart.umd.min.js"))
+        page.add_script_tag(path=str(WEB / "chart_theme.js"), type="module")
+        page.wait_for_function("Chart.registry.plugins.get('valueAxisHeadroom')")
+        bounds = page.evaluate("""() => {
+            const chart = new Chart(document.getElementById('plot'), {
+                type: 'line', data: {datasets: [{
+                    data: [{x:4,y:3}, {x:5.5,y:null}, {x:8,y:100}],
+                    intervalBounds: [{start:4,end:5.5}, {start:5.5,end:6}, {start:6,end:9}],
+                }]},
+                options: {responsive:false, animation:false, parsing:false,
+                    scales:{x:{type:'linear',min:5,max:6},y:{max:12}}},
+            });
+            const readBounds = () => [chart.scales.y.min, chart.scales.y.max];
+            const overlapping = readBounds();
+            chart.options.scales.x.min = 5.5;
+            chart.update('none');
+            return {overlapping, touchingOnly: readBounds()};
+        }""")
+    assert bounds["overlapping"] == pytest.approx([2, 12])
+    assert bounds["touchingOnly"] == pytest.approx([-12 / 9, 12])
+
+
+@pytest.mark.parametrize("width", [390, 1280])
 def test_physical_nonnegative_axes_keep_zero_and_only_upper_headroom(browser, width):
     """A six-unit nonnegative peak ends at 6/0.9 with exactly zero below. Empty/zero series stay finite and signed prices retain negative clearance."""
     with browser.new_context(viewport={"width": width, "height": 900}) as context:
