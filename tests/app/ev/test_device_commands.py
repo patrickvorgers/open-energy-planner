@@ -73,3 +73,28 @@ def test_billing_splits_preserve_control_boundaries_and_group_following(
     assert len(document["expected_flows"]) == 2
     assert [flow["grid_import"] for flow in document["expected_flows"]] == list(imports)
     assert document["independent_costs"]["cash_cost"] == sum(imports)
+
+
+def test_publication_rejects_fractional_battery_power():
+    """A forged half-watt battery flow cannot serialize as a rounded executable command."""
+    snapshot = capture(NOW, initial_kwh=0.5)
+    interval = snapshot.problem.intervals[0]
+    problem = replace(snapshot.problem, intervals=(interval,))
+    costs = Costs(0, 0, 0, 0, 0, 0, 0)
+    discharge_kwh = 0.5 / 1000 * interval.duration_h
+    plan = InstallationPlan(
+        (
+            InstallationFlow(
+                0,
+                0,
+                (BatteryFlow("battery", 0, discharge_kwh, 0.5 - discharge_kwh),),
+                (InverterFlow("battery", 0, 0, False),),
+                (),
+            ),
+        ),
+        costs,
+    )
+    result = SolveResult(Status.FEASIBLE, plan, "independent_fixture", 0, 0, None)
+
+    with pytest.raises(ValueError, match="Fractional device command"):
+        plan_document(replace(snapshot, problem=problem), result, costs, NOW)
