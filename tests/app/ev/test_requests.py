@@ -14,7 +14,7 @@ from open_energy_planner.appliances.ev.requests import (
     request_document,
     save_request,
 )
-from tests.app.ev.support.devices import CAR, NOW, POINT, SESSION, settings
+from tests.app.ev.support.devices import CAR, NOW, OTHER_CAR, POINT, SESSION, settings
 
 
 def initial():
@@ -79,6 +79,18 @@ def test_cancel_and_repeated_create_never_revive_a_request():
         == cancelled
     )
     assert cancel_request(cancelled, request["id"], "old-version", NOW) == cancelled
+    with pytest.raises(ValueError, match="Only a planned charging request can be edited"):
+        save_request(
+            cancelled,
+            {
+                **body,
+                "expected_version": request_document(cancelled["requests"][request["id"]])[
+                    "version"
+                ],
+            },
+            NOW,
+            "Europe/Amsterdam",
+        )
     assert (
         advance_requests(cancelled, report(NOW + timedelta(days=1)), NOW + timedelta(days=1))
         == cancelled
@@ -191,6 +203,82 @@ def test_stale_noop_edit_must_still_validate_the_saved_version():
         save_request(state, {**body, "expected_version": "stale-editor"}, NOW, "Europe/Amsterdam")
     assert state == before
     assert save_request(state, body, NOW, "Europe/Amsterdam") == state
+    current = request_document(active_request(state, CAR))
+    assert (
+        save_request(
+            state, {**body, "expected_version": current["version"]}, NOW, "Europe/Amsterdam"
+        )
+        is state
+    )
+
+
+def test_creation_id_conflict_takes_precedence_over_vehicle_and_schedule_validation():
+    """Reusing a request ID cannot change a saved creation, even with invalid replacement inputs."""
+    state, body = create()
+    before = deepcopy(state)
+
+    with pytest.raises(ValueError, match="ID was already used"):
+        save_request(
+            state,
+            {**body, "vehicle_id": "unknown", "target_soc": 120, "repeat_weekdays": [7]},
+            NOW,
+            "Europe/Amsterdam",
+        )
+
+    assert state == before
+
+
+@pytest.mark.parametrize(
+    ("capture_offset", "session", "status"),
+    [
+        (-1, SESSION, "completed"),
+        (0, SESSION, "expired"),
+        (-1, "another-connection", "expired"),
+    ],
+)
+def test_late_receipt_uses_original_completion_window_and_connection(
+    capture_offset, session, status
+):
+    """Only matching-session evidence strictly before departure proves late-delivered completion."""
+    deadline = NOW + timedelta(hours=2)
+    state, body = create(deadline=deadline)
+    before = deepcopy(state)
+    received = deadline + timedelta(minutes=1)
+    captured = deadline + timedelta(seconds=capture_offset)
+    observation = report(captured)
+    observation["points"][0]["session_id"] = session
+    observation["vehicles"][0]["soc_basis"] = "estimated"
+
+    advanced = advance_requests(state, observation, received)
+
+    terminal = advanced["requests"][body["request_id"]]
+    assert terminal["status"] == status
+    if status == "completed":
+        assert terminal["updated_at"] == captured.isoformat()
+        assert terminal["completion_soc_basis"] == "estimated"
+    else:
+        assert terminal["updated_at"] == received.isoformat()
+        assert "completion_soc_basis" not in terminal
+    assert active_request(advanced, CAR) is None
+    assert state == before
+
+
+def test_one_sync_keeps_all_expired_request_transitions():
+    """One update expires both due requests and retains the original state until publication."""
+    deadline = NOW + timedelta(hours=2)
+    state, first = create(deadline=deadline)
+    second = {**first, "request_id": str(uuid4()), "vehicle_id": OTHER_CAR}
+    state = save_request(state, second, NOW, "Europe/Amsterdam")
+    before = deepcopy(state)
+
+    advanced = advance_requests(state, report(deadline, soc=None), deadline)
+
+    assert advanced["active_requests"] == {}
+    assert {request["status"] for request in advanced["requests"].values()} == {"expired"}
+    assert {request["updated_at"] for request in advanced["requests"].values()} == {
+        deadline.isoformat()
+    }
+    assert state == before
 
 
 def test_editing_a_future_repeat_preserves_its_readiness_boundary():
