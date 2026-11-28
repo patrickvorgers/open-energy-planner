@@ -10,6 +10,8 @@ CATALOGUE_TRANSFER_BYTES = 32 * 1024 * 1024
 CATALOGUE_TRANSFER_TIMEOUT_SECONDS = 300
 CATALOGUE_CLOCK_SKEW_SECONDS = 30
 CATALOGUE_REQUEST_BYTES = 1024 * 1024
+TRANSFER_IDENTITY_FIELDS = ("id", "revision", "captured_at")
+TRANSFER_FIELDS = {*TRANSFER_IDENTITY_FIELDS, "index", "complete"}
 COLLECTION_PATHS = {
     ("entities",),
     ("areas",),
@@ -29,6 +31,61 @@ COLLECTION_PATHS = {
     ("suggestions", "settlement", "imports"),
     ("suggestions", "settlement", "exports"),
 }
+
+
+def _transfer_capture_time(transfer, now):
+    """Validate the page identity and return its bounded, aware capture time."""
+    if not isinstance(transfer, dict) or set(transfer) != TRANSFER_FIELDS:
+        raise ValueError("Invalid transfer identity")
+    if not all(
+        isinstance(transfer[field], str) and re.fullmatch(pattern, transfer[field])
+        for field, pattern in (("id", r"[A-Za-z0-9_-]{1,64}"), ("revision", r"[0-9a-f]{64}"))
+    ):
+        raise ValueError("Invalid transfer fields")
+    if (
+        not isinstance(transfer["captured_at"], str)
+        or type(transfer["index"]) is not int
+        or transfer["index"] < 0
+        or type(transfer["complete"]) is not bool
+    ):
+        raise ValueError("Invalid transfer fields")
+    captured = datetime.fromisoformat(transfer["captured_at"])
+    if captured.tzinfo is None or not (
+        -timedelta(seconds=CATALOGUE_CLOCK_SKEW_SECONDS)
+        <= now - captured
+        <= timedelta(seconds=CATALOGUE_TRANSFER_TIMEOUT_SECONDS)
+    ):
+        raise ValueError("Expired discovery snapshot")
+    return captured
+
+
+def _verified_snapshot(body, completed, revision):
+    """Recognize a completion page only when the assembled payload matches its digest."""
+    if set(body) != {"transfer"}:
+        raise ValueError("Invalid discovery completion")
+    digest = hashlib.sha256(
+        json.dumps(completed, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()
+    ).hexdigest()
+    if digest != revision:
+        raise ValueError("Discovery content mismatch")
+    return completed
+
+
+def _append_fragment(body, snapshot):
+    """Append one validated collection fragment to the pending snapshot."""
+    if set(body) != {"transfer", "path", "items"} or not isinstance(body["path"], list):
+        raise ValueError("Invalid discovery fragment")
+    path, items = body["path"], body["items"]
+    if not all(isinstance(field, str) for field in path) or tuple(path) not in COLLECTION_PATHS:
+        raise ValueError("Invalid discovery collection")
+    if not isinstance(items, list) or not items:
+        raise ValueError("Empty discovery fragment")
+    target = snapshot
+    for field in path:
+        target = target[field]
+    if not isinstance(target, list):
+        raise TypeError("Invalid discovery collection type")
+    target.extend(deepcopy(items))
 
 
 class CatalogueTransfer:
@@ -69,7 +126,7 @@ class CatalogueTransfer:
             raise ValueError("Invalid catalogue transfer") from None
 
     def _receive(self, body, now):
-        """Check byte budgets, capture order, whitelisted paths, sequence and the final content digest."""
+        """Admit the request envelope and route the page by its sequence position."""
         if not isinstance(body, dict):
             raise TypeError("Expected discovery object")
         size = len(json.dumps(body, allow_nan=False).encode())
@@ -80,49 +137,31 @@ class CatalogueTransfer:
             self.latest_capture = now
             return body
         transfer = body["transfer"]
-        if not isinstance(transfer, dict) or set(transfer) != {
-            "id",
-            "revision",
-            "captured_at",
-            "index",
-            "complete",
-        }:
-            raise ValueError("Invalid transfer identity")
-        if (
-            not isinstance(transfer["id"], str)
-            or not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", transfer["id"])
-            or not isinstance(transfer["revision"], str)
-            or not re.fullmatch(r"[0-9a-f]{64}", transfer["revision"])
-            or not isinstance(transfer["captured_at"], str)
-            or type(transfer["index"]) is not int
-            or transfer["index"] < 0
-            or type(transfer["complete"]) is not bool
-        ):
-            raise ValueError("Invalid transfer fields")
-        captured = datetime.fromisoformat(transfer["captured_at"])
-        if captured.tzinfo is None or not (
-            -timedelta(seconds=CATALOGUE_CLOCK_SKEW_SECONDS)
-            <= now - captured
-            <= timedelta(seconds=CATALOGUE_TRANSFER_TIMEOUT_SECONDS)
-        ):
-            raise ValueError("Expired discovery snapshot")
-        identity = {field: transfer[field] for field in ("id", "revision", "captured_at")}
+        captured = _transfer_capture_time(transfer, now)
+        identity = {field: transfer[field] for field in TRANSFER_IDENTITY_FIELDS}
         if transfer["index"] == 0:
-            if (
-                set(body) != {"transfer", "header"}
-                or transfer["complete"]
-                or not isinstance(body["header"], dict)
-                or (self.latest_capture is not None and captured <= self.latest_capture)
-            ):
-                raise ValueError("Invalid discovery start")
-            self.latest_capture = captured
-            self.pending = {
-                "identity": identity,
-                "next": 1,
-                "body": deepcopy(body["header"]),
-                "bytes": size,
-            }
+            self._start(body, identity, captured, size)
             return None
+        return self._advance(body, transfer, identity, size)
+
+    def _start(self, body, identity, captured, size):
+        """Begin assembly only after accepting the header and its capture order."""
+        if set(body) != {"transfer", "header"} or not isinstance(body["header"], dict):
+            raise ValueError("Invalid discovery start")
+        if body["transfer"]["complete"] or (
+            self.latest_capture is not None and captured <= self.latest_capture
+        ):
+            raise ValueError("Invalid discovery start")
+        self.latest_capture = captured
+        self.pending = {
+            "identity": identity,
+            "next": 1,
+            "body": deepcopy(body["header"]),
+            "bytes": size,
+        }
+
+    def _advance(self, body, transfer, identity, size):
+        """Apply the expected page within the budget or return a verified snapshot."""
         pending = self.pending
         if (
             pending is None
@@ -134,32 +173,9 @@ class CatalogueTransfer:
         if pending["bytes"] > CATALOGUE_TRANSFER_BYTES:
             raise ValueError("Discovery transfer exceeds memory budget")
         if transfer["complete"]:
-            if set(body) != {"transfer"}:
-                raise ValueError("Invalid discovery completion")
-            completed = pending["body"]
-            digest = hashlib.sha256(
-                json.dumps(
-                    completed, sort_keys=True, separators=(",", ":"), allow_nan=False
-                ).encode()
-            ).hexdigest()
-            if digest != transfer["revision"]:
-                raise ValueError("Discovery content mismatch")
+            completed = _verified_snapshot(body, pending["body"], transfer["revision"])
             self.pending = None
             return completed
-        if set(body) != {"transfer", "path", "items"} or not isinstance(body["path"], list):
-            raise ValueError("Invalid discovery fragment")
-        if (
-            not all(isinstance(field, str) for field in body["path"])
-            or tuple(body["path"]) not in COLLECTION_PATHS
-        ):
-            raise ValueError("Invalid discovery collection")
-        if not isinstance(body["items"], list) or not body["items"]:
-            raise ValueError("Empty discovery fragment")
-        target = pending["body"]
-        for field in body["path"]:
-            target = target[field]
-        if not isinstance(target, list):
-            raise TypeError("Invalid discovery collection type")
-        target.extend(deepcopy(body["items"]))
+        _append_fragment(body, pending["body"])
         pending["next"] += 1
         return None
