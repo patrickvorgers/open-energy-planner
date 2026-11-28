@@ -83,59 +83,66 @@ def parse_ha_predictions(body, suggestions, now):
         entity = group["entity_id"]
         if entity in result or entity not in expected:
             raise ValueError("HA solar association changed")
-        providers = group["providers"]
-        if not isinstance(providers, list) or len(providers) != len(expected[entity]["providers"]):
-            raise ValueError("Incomplete HA solar group")
-        forecasts = []
-        for provider, metadata in zip(providers, expected[entity]["providers"], strict=True):
-            if not isinstance(provider, dict) or set(provider) != {
-                "adapter",
-                "entry_id",
-                "configuration",
-                "configuration_revision",
-                "steps",
-                "provider_issued_at",
-                "provider_refreshed_at",
-            }:
-                raise ValueError("Invalid HA solar provider")
-            if provider["configuration"] != metadata or (
-                provider["adapter"],
-                provider["entry_id"],
-            ) != (metadata["adapter"], metadata["entry_id"]):
-                raise ValueError("HA solar provider changed")
-            rows = provider["steps"]
-            if not isinstance(rows, list) or not 1 <= len(rows) <= MAX_HA_FORECAST_STEPS:
-                raise ValueError("Invalid HA solar steps")
-            steps = tuple(
-                ProductionInterval(**{**row, "start": aware(datetime.fromisoformat(row["start"]))})
-                for row in rows
-            )
-            previous_end = None
-            for step in steps:
-                if (
-                    not observed - timedelta(days=1) <= step.start
-                    or step.start + timedelta(hours=step.duration_h)
-                    > observed + timedelta(hours=MAX_HA_FORECAST_HOURS)
-                    or previous_end is not None
-                    and step.start < previous_end
-                ):
-                    raise ValueError("Invalid HA solar coverage")
-                previous_end = step.start + timedelta(hours=step.duration_h)
-            refreshed = provider["provider_refreshed_at"]
-            refreshed = aware(datetime.fromisoformat(refreshed)) if refreshed else None
-            issued = provider["provider_issued_at"]
-            issued = aware(datetime.fromisoformat(issued)) if issued else None
-            if any(value is not None and value > observed for value in (refreshed, issued)):
-                raise ValueError("Invalid HA solar knowledge time")
-            forecasts.append(
-                HAProductionForecast(
-                    parse_import(metadata),
-                    steps,
-                    observed,
-                    refreshed,
-                    provider["configuration_revision"],
-                    issued,
-                )
-            )
-        result[entity] = tuple(forecasts)
+        result[entity] = _parse_ha_group(group["providers"], expected[entity], observed)
     return result
+
+
+def _parse_ha_group(providers, suggestion, observed):
+    """Bind each provider to its matching Energy configuration in order."""
+    if not isinstance(providers, list) or len(providers) != len(suggestion["providers"]):
+        raise ValueError("Incomplete HA solar group")
+    return tuple(
+        _parse_ha_provider(provider, metadata, observed)
+        for provider, metadata in zip(providers, suggestion["providers"], strict=True)
+    )
+
+
+def _parse_ha_provider(provider, metadata, observed):
+    """Require the configured source and retain its separately observed provider times."""
+    if not isinstance(provider, dict) or set(provider) != {
+        "adapter",
+        "entry_id",
+        "configuration",
+        "configuration_revision",
+        "steps",
+        "provider_issued_at",
+        "provider_refreshed_at",
+    }:
+        raise ValueError("Invalid HA solar provider")
+    if provider["configuration"] != metadata or (
+        provider["adapter"],
+        provider["entry_id"],
+    ) != (metadata["adapter"], metadata["entry_id"]):
+        raise ValueError("HA solar provider changed")
+    steps = _parse_production_intervals(provider["steps"], observed)
+    refreshed = provider["provider_refreshed_at"]
+    refreshed = aware(datetime.fromisoformat(refreshed)) if refreshed else None
+    issued = provider["provider_issued_at"]
+    issued = aware(datetime.fromisoformat(issued)) if issued else None
+    if any(value is not None and value > observed for value in (refreshed, issued)):
+        raise ValueError("Invalid HA solar knowledge time")
+    return HAProductionForecast(
+        parse_import(metadata),
+        steps,
+        observed,
+        refreshed,
+        provider["configuration_revision"],
+        issued,
+    )
+
+
+def _parse_production_intervals(rows, observed):
+    """Keep native AC kWh intervals in order with bounded coverage and gaps intact."""
+    if not isinstance(rows, list) or not 1 <= len(rows) <= MAX_HA_FORECAST_STEPS:
+        raise ValueError("Invalid HA solar steps")
+    steps = tuple(
+        ProductionInterval(**{**row, "start": aware(datetime.fromisoformat(row["start"]))})
+        for row in rows
+    )
+    previous_end = observed - timedelta(days=1)
+    for step in steps:
+        end = step.start + timedelta(hours=step.duration_h)
+        if step.start < previous_end or end > observed + timedelta(hours=MAX_HA_FORECAST_HOURS):
+            raise ValueError("Invalid HA solar coverage")
+        previous_end = end
+    return steps
