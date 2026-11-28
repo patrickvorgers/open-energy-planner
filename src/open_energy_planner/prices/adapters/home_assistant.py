@@ -11,6 +11,97 @@ DISCOVERY_MAX_AGE = timedelta(minutes=2)
 MAX_RESPONSE_DAYS = 2
 
 
+def _discovery_responses(body, market_area):
+    """Validate the peer discovery envelope before any request state changes."""
+    if not isinstance(body, dict) or set(body) != {
+        "market_area",
+        "currency",
+        "available",
+        "reason",
+        "responses",
+    }:
+        raise ValueError("Invalid HA price report")
+    if body["market_area"] != market_area or body["currency"] != "EUR":
+        raise ValueError("HA price area or currency changed")
+    if type(body["available"]) is not bool or body["reason"] not in {
+        "ready",
+        "not_configured",
+        "not_loaded",
+        "incompatible",
+        "ambiguous",
+        "waiting_for_publication",
+        "request_failed",
+    }:
+        raise ValueError("Invalid HA price discovery")
+    if body["available"] != (
+        body["reason"] in {"ready", "waiting_for_publication", "request_failed"}
+    ):
+        raise ValueError("Inconsistent HA price discovery")
+    rows = body["responses"]
+    if not isinstance(rows, list) or len(rows) > MAX_RESPONSE_DAYS:
+        raise ValueError("Invalid HA price responses")
+    return rows
+
+
+def _response_day(row):
+    """Validate one acknowledgement identity and decode its requested market date."""
+    if not isinstance(row, dict) or set(row) != {"date", "request_id", "data"}:
+        raise ValueError("Invalid HA price response")
+    if not isinstance(row["request_id"], str) or len(row["request_id"]) != 32:
+        raise ValueError("Invalid HA price request identity")
+    return date.fromisoformat(row["date"])
+
+
+def _market_point(point):
+    """Convert one peer EUR/MWh quote to EUR/kWh and retain its native duration."""
+    if type(point["price"]) not in (int, float):
+        raise ValueError("Invalid HA market price")
+    start, end = stamp(point["start"]), stamp(point["end"])
+    return PricePoint(
+        start,
+        end,
+        point["price"] / 1000,
+        PriceKind.PUBLISHED,
+        int((end - start).total_seconds() / 60),
+    )
+
+
+def _require_complete_day(candidate, day):
+    """Reject gaps or partial coverage against the requested Oslo calendar day."""
+    zone = ZoneInfo("Europe/Oslo")
+    left = datetime.combine(day, time(), zone).astimezone(UTC)
+    right = datetime.combine(day + timedelta(days=1), time(), zone).astimezone(UTC)
+    if (
+        candidate.points[0].start != left
+        or candidate.points[-1].end != right
+        or any(
+            first.end != second.start
+            for first, second in zip(candidate.points, candidate.points[1:])
+        )
+    ):
+        raise ValueError("Incomplete HA price day")
+
+
+def _published_day(payload, market_area, day, now):
+    """Normalize one response independently of whether its request is still pending."""
+    if not isinstance(payload, dict) or set(payload) != {market_area}:
+        raise ValueError("Unexpected HA price area")
+    points = payload[market_area]
+    if not isinstance(points, list) or not points or len(points) > MAX_PRICE_POINTS:
+        raise ValueError("Invalid HA price intervals")
+    candidate = PriceSeries(
+        "nord_pool",
+        market_area,
+        "EUR",
+        now,
+        None,
+        None,
+        tuple(_market_point(point) for point in points),
+    )
+    _require_complete_day(candidate, day)
+    return candidate
+
+
 class AutomaticPublishedPrices:
     """Own transient HA discovery and pending day requests, retaining durable prices elsewhere.
 
@@ -49,13 +140,11 @@ class AutomaticPublishedPrices:
             return self.responses.pop(day)
         if self.started_at is None:
             self.started_at = now
-        if (
-            selected is False
-            or self.reported_at
-            and selected is None
-            or self.reported_at is None
-            and now - self.started_at >= DISCOVERY_MAX_AGE
-        ):
+        if self.reported_at is None:
+            use_direct = now - self.started_at >= DISCOVERY_MAX_AGE
+        else:
+            use_direct = selected is not True
+        if use_direct:
             self.last_transport = "Direct"
             candidate = await self.direct.fetch_day(day, now)
             self.pending.pop(day, None)
@@ -101,79 +190,14 @@ class AutomaticPublishedPrices:
             KeyError: If required interval fields are missing.
             OverflowError: If a numeric or date value exceeds supported bounds.
         """
-        if not isinstance(body, dict) or set(body) != {
-            "market_area",
-            "currency",
-            "available",
-            "reason",
-            "responses",
-        }:
-            raise ValueError("Invalid HA price report")
-        if body["market_area"] != self.market_area or body["currency"] != "EUR":
-            raise ValueError("HA price area or currency changed")
-        if type(body["available"]) is not bool or body["reason"] not in {
-            "ready",
-            "not_configured",
-            "not_loaded",
-            "incompatible",
-            "ambiguous",
-            "waiting_for_publication",
-            "request_failed",
-        }:
-            raise ValueError("Invalid HA price discovery")
-        if body["available"] != (
-            body["reason"] in {"ready", "waiting_for_publication", "request_failed"}
-        ):
-            raise ValueError("Inconsistent HA price discovery")
-        rows = body["responses"]
-        if not isinstance(rows, list) or len(rows) > MAX_RESPONSE_DAYS:
-            raise ValueError("Invalid HA price responses")
         candidates = []
         seen = set()
-        for row in rows:
-            if not isinstance(row, dict) or set(row) != {"date", "request_id", "data"}:
-                raise ValueError("Invalid HA price response")
-            if not isinstance(row["request_id"], str) or len(row["request_id"]) != 32:
-                raise ValueError("Invalid HA price request identity")
-            day = date.fromisoformat(row["date"])
+        for row in _discovery_responses(body, self.market_area):
+            day = _response_day(row)
             if not body["available"] or day in seen:
                 raise ValueError("Unrequested HA price day")
             seen.add(day)
-            payload = row["data"]
-            if not isinstance(payload, dict) or set(payload) != {self.market_area}:
-                raise ValueError("Unexpected HA price area")
-            points = payload[self.market_area]
-            if not isinstance(points, list) or not points or len(points) > MAX_PRICE_POINTS:
-                raise ValueError("Invalid HA price intervals")
-            normalized = []
-            for point in points:
-                if type(point["price"]) not in (int, float):
-                    raise ValueError("Invalid HA market price")
-                start, end = stamp(point["start"]), stamp(point["end"])
-                normalized.append(
-                    PricePoint(
-                        start,
-                        end,
-                        point["price"] / 1000,
-                        PriceKind.PUBLISHED,
-                        int((end - start).total_seconds() / 60),
-                    )
-                )
-            candidate = PriceSeries(
-                "nord_pool", self.market_area, "EUR", now, None, None, tuple(normalized)
-            )
-            zone = ZoneInfo("Europe/Oslo")
-            left = datetime.combine(day, time(), zone).astimezone(UTC)
-            right = datetime.combine(day + timedelta(days=1), time(), zone).astimezone(UTC)
-            if (
-                candidate.points[0].start != left
-                or candidate.points[-1].end != right
-                or any(
-                    first.end != second.start
-                    for first, second in zip(candidate.points, candidate.points[1:])
-                )
-            ):
-                raise ValueError("Incomplete HA price day")
+            candidate = _published_day(row["data"], self.market_area, day, now)
             if day in self.pending and row["request_id"] == self.pending[day]:
                 candidates.append((day, candidate))
         changed = self.available != body["available"]

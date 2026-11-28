@@ -142,6 +142,26 @@ def test_jeroen_uses_utc_during_both_autumn_clock_folds():
     assert result.points[1].end < result.points[2].start
 
 
+def test_jeroen_clips_at_utc_quarter_edges_and_keeps_missing_median_unknown():
+    """The current and last quarters survive, while a missing median remains a gap."""
+    payload = forecast_payload()
+    payload["rows"] = [
+        [None, None, 0.05, 0.10, 0.20, "2026-10-27T07:45:00Z"],
+        [None, None, 0.10, 0.20, 0.30, "2026-10-27T08:00:00Z"],
+        [None, None, 0.10, None, 0.30, "2026-10-27T08:15:00Z"],
+        [None, None, 0.20, 0.30, 0.40, "2026-10-27T08:30:00Z"],
+        [None, None, 0.30, 0.40, 0.50, "2026-10-30T07:45:00Z"],
+        [None, None, 0.40, 0.50, 0.60, "2026-10-30T08:00:00Z"],
+    ]
+    result = asyncio.run(JeroenPrices(PublicMcp(payload), "NL").fetch(NOW + timedelta(minutes=7)))
+    assert [(point.start, point.value) for point in result.points] == [
+        (NOW, 0.20),
+        (NOW + timedelta(minutes=30), 0.30),
+        (datetime(2026, 10, 30, 7, 45, tzinfo=UTC), 0.40),
+    ]
+    assert result.points[-1].end == datetime(2026, 10, 30, 8, tzinfo=UTC)
+
+
 def test_new_receipt_never_refreshes_an_old_daily_model():
     """A later HTTP receipt cannot extend the original daily model's admitted lifetime."""
     adapter = JeroenPrices(PublicMcp(forecast_payload()), "NL")
