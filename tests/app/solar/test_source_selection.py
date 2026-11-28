@@ -1,7 +1,7 @@
 """Select solar sources only from independently specified forward forecasts and measured sums."""
 
 from dataclasses import replace
-from datetime import date, timedelta
+from datetime import date, timedelta, timezone
 from types import SimpleNamespace
 
 import pytest
@@ -649,24 +649,24 @@ def test_manual_source_is_explicit_and_unavailable_ml_falls_back(tmp_path):
             assert "unavailable" in statuses["pv0"]["issue"]
 
 
-def test_normalized_ha_boundary_rejects_changed_associations_and_credentials():
-    """Current Energy metadata, bounded steps and unknown issuance are validated before persistence."""
-    value = provider()
+def _ha_intake_payload(value):
+    """Build one provider payload and its independently configured Energy association."""
     metadata = document(value.configuration)
     suggestions = [{"entity_id": "sensor.pv0", "providers": [metadata], "issue": None}]
-    raw = {
-        "adapter": "forecast_solar",
-        "entry_id": "entry",
-        "configuration": metadata,
-        "steps": document(value)["steps"],
-        "provider_issued_at": None,
-        "provider_refreshed_at": START.isoformat(),
-        "configuration_revision": "configuration-a",
-    }
+    raw = document(value)
+    observed = raw.pop("observed_at")
+    raw.update(adapter=value.configuration.adapter, entry_id=value.configuration.entry_id)
     body = {
-        "observed_at": START.isoformat(),
+        "observed_at": observed,
         "groups": [{"entity_id": "sensor.pv0", "providers": [raw]}],
     }
+    return body, suggestions, raw
+
+
+def test_normalized_ha_boundary_rejects_changed_associations_and_credentials():
+    """Current Energy metadata and unknown issuance are validated before persistence."""
+    value = provider()
+    body, suggestions, raw = _ha_intake_payload(value)
     assert parse_ha_predictions(body, suggestions, START)["sensor.pv0"] == (value,)
     raw["api_key"] = "must-not-enter-archive"
     with pytest.raises(ValueError):
@@ -674,6 +674,115 @@ def test_normalized_ha_boundary_rejects_changed_associations_and_credentials():
     raw.pop("api_key")
     raw["entry_id"] = "another"
     with pytest.raises(ValueError):
+        parse_ha_predictions(body, suggestions, START)
+
+
+@pytest.mark.parametrize(
+    ("invalid_fields", "error_type", "message"),
+    [
+        ({"unexpected": True}, ValueError, "Invalid HA solar forecasts"),
+        ({"groups": {}}, TypeError, "Invalid HA solar groups"),
+        ({"groups": [{"entity_id": "sensor.pv0"}]}, ValueError, "Invalid HA solar group"),
+    ],
+)
+def test_ha_intake_rejects_invalid_envelopes(invalid_fields, error_type, message):
+    """Reject unexpected top-level fields and malformed group containers before reading providers."""
+    body, suggestions, _raw = _ha_intake_payload(provider())
+    body.update(invalid_fields)
+    with pytest.raises(error_type, match=f"^{message}$"):
+        parse_ha_predictions(body, suggestions, START)
+
+
+def test_ha_intake_requires_a_current_observation():
+    """The exact five-minute receipt boundary is valid, while stale or future observations fail."""
+    oldest = START - timedelta(minutes=5)
+    value = provider(oldest)
+    body, suggestions, _raw = _ha_intake_payload(value)
+    assert parse_ha_predictions(body, suggestions, START) == {"sensor.pv0": (value,)}
+
+    for observed in (oldest - timedelta(seconds=1), START + timedelta(seconds=1)):
+        body["observed_at"] = observed.isoformat()
+        with pytest.raises(ValueError, match="^Invalid HA solar observation time$"):
+            parse_ha_predictions(body, suggestions, START)
+
+
+@pytest.mark.parametrize("duplicate", [False, True], ids=["unusable-association", "duplicate"])
+def test_ha_intake_requires_one_group_per_current_usable_energy_association(duplicate):
+    """An unavailable association or a repeated report cannot enter the payload result."""
+    body, suggestions, _raw = _ha_intake_payload(provider())
+    if duplicate:
+        body["groups"].append(body["groups"][0])
+    else:
+        suggestions[0]["issue"] = "Energy association is unavailable"
+
+    with pytest.raises(ValueError, match="^HA solar association changed$"):
+        parse_ha_predictions(body, suggestions, START)
+
+
+def test_ha_intake_keeps_native_intervals_and_equal_utc_knowledge_times():
+    """The inclusive intake limits accept native quarters and an offset timestamp."""
+    body, suggestions, raw = _ha_intake_payload(provider())
+    horizon_edge = START + timedelta(days=8) - timedelta(minutes=15)
+    raw["steps"] = [
+        {"start": (START - timedelta(days=1)).isoformat(), "duration_h": 0.25, "kwh": 0.15},
+        {"start": horizon_edge.isoformat(), "duration_h": 0.25, "kwh": 0.4},
+    ]
+    offset = START.astimezone(timezone(timedelta(hours=5, minutes=30)))
+    raw["provider_issued_at"] = offset.isoformat()
+    (forecast,) = parse_ha_predictions(body, suggestions, START)["sensor.pv0"]
+    assert forecast.provider_issued_at == START
+    assert forecast.provider_refreshed_at == START
+    assert [(step.start, step.duration_h, step.kwh) for step in forecast.steps] == [
+        (START - timedelta(days=1), 0.25, 0.15),
+        (horizon_edge, 0.25, 0.4),
+    ]
+
+
+def test_ha_intake_requires_all_providers_in_energy_order():
+    """The Energy association's provider order is retained and both providers must arrive."""
+    first = provider()
+    second = replace(first, configuration=replace(first.configuration, entry_id="another"))
+    body, suggestions, _ = _ha_intake_payload(first)
+    _, second_suggestions, second_raw = _ha_intake_payload(second)
+    providers = body["groups"][0]["providers"]
+    providers.append(second_raw)
+    suggestions[0]["providers"].extend(second_suggestions[0]["providers"])
+    assert parse_ha_predictions(body, suggestions, START)["sensor.pv0"] == (first, second)
+
+    providers.reverse()
+    with pytest.raises(ValueError, match="HA solar provider changed"):
+        parse_ha_predictions(body, suggestions, START)
+    providers.pop()
+    with pytest.raises(ValueError, match="Incomplete HA solar group"):
+        parse_ha_predictions(body, suggestions, START)
+
+
+@pytest.mark.parametrize(
+    ("invalid_evidence", "error"),
+    [
+        ("early_step", "Invalid HA solar coverage"),
+        ("late_step", "Invalid HA solar coverage"),
+        ("overlap", "Invalid HA solar coverage"),
+        ("empty_steps", "Invalid HA solar steps"),
+        ("provider_issued_at", "Invalid HA solar knowledge time"),
+        ("provider_refreshed_at", "Invalid HA solar knowledge time"),
+    ],
+)
+def test_ha_intake_rejects_invalid_coverage_or_future_provider_evidence(invalid_evidence, error):
+    """A whole group fails when one native interval or knowledge timestamp is invalid."""
+    body, suggestions, raw = _ha_intake_payload(provider())
+    if invalid_evidence == "early_step":
+        raw["steps"][0]["start"] = (START - timedelta(days=1, seconds=1)).isoformat()
+    elif invalid_evidence == "late_step":
+        raw["steps"][-1]["start"] = (START + timedelta(days=8)).isoformat()
+    elif invalid_evidence == "overlap":
+        raw["steps"][1]["start"] = (START + timedelta(minutes=30)).isoformat()
+    elif invalid_evidence == "empty_steps":
+        raw["steps"].clear()
+    else:
+        raw[invalid_evidence] = (START + timedelta(seconds=1)).isoformat()
+
+    with pytest.raises(ValueError, match=error):
         parse_ha_predictions(body, suggestions, START)
 
 
