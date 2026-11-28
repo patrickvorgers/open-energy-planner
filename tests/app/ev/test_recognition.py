@@ -3,6 +3,8 @@
 from datetime import timedelta
 from types import SimpleNamespace
 
+import pytest
+
 from open_energy_planner.appliances.ev.recognition import recognize
 from tests.app.ev.support.devices import (
     CAR,
@@ -41,8 +43,31 @@ def test_low_power_is_ambiguous_but_excess_power_excludes_smaller_vehicle():
     state, report = example()
     report["points"][0]["power_w"] = 3500
     assert recognize(state, report, NOW)[POINT]["vehicle_id"] is None
+    report["points"][0]["power_w"] = 8140
+    assert recognize(state, report, NOW)[POINT]["vehicle_id"] is None
+    report["points"][0]["power_w"] = 8141
+    assert recognize(state, report, NOW)[POINT]["vehicle_id"] == CAR
     report["points"][0]["power_w"] = 10000
     assert recognize(state, report, NOW)[POINT]["vehicle_id"] == CAR
+
+
+@pytest.mark.parametrize("connected", [False, None])
+def test_unconfirmed_point_connection_cannot_retain_or_recognize_a_car(connected):
+    """A previous assignment and a positive vehicle signal both require a connected point."""
+    state, report = example()
+    state["assignments"][POINT] = {"vehicle_id": CAR, "session_id": SESSION}
+    report["vehicles"][0]["connected"] = signal(True)
+    report["points"][0]["connected"] = connected
+    assert recognize(state, report, NOW) == {}
+
+
+@pytest.mark.parametrize(("age_seconds", "expected"), [(300, OTHER_CAR), (301, None), (-1, None)])
+def test_vehicle_signal_uses_inclusive_original_five_minute_window(age_seconds, expected):
+    """Unknown power cannot exclude a car, and stale or future charging evidence stays unknown."""
+    state, report = example()
+    report["points"][0]["power_w"] = None
+    report["vehicles"][1]["charging"] = signal(True, NOW - timedelta(seconds=age_seconds))
+    assert recognize(state, report, NOW)[POINT]["vehicle_id"] == expected
 
 
 def test_fresh_plug_evidence_resolves_shared_charger_and_overrides_retained_identity():
