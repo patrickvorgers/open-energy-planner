@@ -7,6 +7,10 @@ const VALUE_LABEL_FONT_PX = 13;
 const CHART_LABEL_GAP_PX = 8;
 const TOOLTIP_VIEWPORT_MARGIN_PX = 12;
 
+function hasMissingComponents(cash) {
+    return cash?.coverage_seconds > 0 && (!cash.breakdown?.actual || !cash.breakdown?.without_battery);
+}
+
 /** Keep selection, loading and failed reads coherent across all amounts and the daily chart. */
 export function createSavingsView(host, api) {
     const find = id => host.querySelector(`#${id}`);
@@ -63,7 +67,7 @@ export function createSavingsView(host, api) {
     function renderBreakdown(cash, currency) {
         breakdownRows(find("savings-breakdown-values"), cash, currency);
         find("savings-breakdown-total").textContent = cash?.savings == null ? "Savings unavailable" : `Saving: ${money(cash.savings)} ${currency}`.trim();
-        find("savings-breakdown-status").textContent = cash?.coverage_seconds > 0 && (!cash.breakdown?.actual || !cash.breakdown?.without_battery) ? "Some component details are unavailable for the same comparable time. The net costs and saving still use only matching measurements." : "";
+        find("savings-breakdown-status").textContent = hasMissingComponents(cash) ? "Some component details are unavailable for the same comparable time. The net costs and saving still use only matching measurements." : "";
     }
     /** Initialize once in the confirmed HA timezone. Today is not a completed Savings day. */
     function initialize() {
@@ -71,6 +75,43 @@ export function createSavingsView(host, api) {
         if (!initialized || !period.value.start) period.set({start: shiftDay(yesterday, -6), end: yesterday, max: yesterday, selection: "seven"});
         else period.set({max: yesterday});
         initialized = true;
+    }
+    function showEmptyCalendar() {
+        period.set({start: null, end: null, enabled: false});
+        clear("Not available");
+        find("savings-status").textContent = "Savings become available after the first measured day has completed.";
+    }
+    function updateCalendar(calendar, start, end) {
+        if (!calendar) return false;
+        period.set({min: calendar.min_day, max: calendar.max_day});
+        return period.value.start !== start || period.value.end !== end;
+    }
+    function renderCosts(cash, currency, known) {
+        const amount = value => `${money(value)} ${currency}`.trim();
+        find("savings-total").textContent = known ? amount(Math.abs(cash.savings)) : "Not available";
+        const loss = known && cash.savings < 0;
+        find("savings-total").classList.toggle("savings-loss", loss);
+        if (loss) find("savings-outcome").textContent = "Estimated extra electricity cost";
+        find("savings-bonus-basis").hidden = !known;
+        if (!known) return;
+
+        const maximum = Math.max(Math.abs(cash.actual_cost), Math.abs(cash.without_battery_cost));
+        for (const [id, cost] of [["actual", cash.actual_cost], ["without", cash.without_battery_cost]]) {
+            find(`savings-${id}`).textContent = amount(cost);
+            find(`savings-${id}-bar`).style.width = `${maximum ? Math.abs(cost) / maximum * 100 : 0}%`;
+        }
+    }
+    function renderResults(data, start, end) {
+        const cash = data.cash, currency = cash?.currency || data.currency || "";
+        const known = cash?.savings != null && cash.coverage_seconds > 0;
+        renderCosts(cash, currency, known);
+        renderBreakdown(cash, currency);
+        const complete = known && cash.coverage_seconds === cash.expected_seconds;
+        const status = find("savings-status");
+        status.textContent = complete ? "All measured time in this period is included." : known ? "Partial period: Both costs include only the same available measured time. Missing intervals are excluded." : "No savings estimate is available for this period.";
+        if (known && cash.estimated_seconds > 0) status.textContent += " Includes reconstructed measurements.";
+        if (data.issue) status.textContent += " " + data.issue;
+        draw(cash?.chart || [], currency, start, end, cash?.aggregation);
     }
     /** Read only stored results. Date changes never start a simulation or reset a bonus counter. */
     async function read(signal) {
@@ -81,36 +122,12 @@ export function createSavingsView(host, api) {
             const query = new URLSearchParams({start: new Date(calendarDayStart(start)).toISOString(), end: new Date(calendarDayStart(shiftDay(end, 1))).toISOString()});
             const data = await api(`v1/savings?${query}`, signal);
             if (current !== request) return false;
-            if (data.calendar) {
-                if (data.calendar.has_completed_days === false) {
-                    period.set({start: null, end: null, enabled: false});
-                    clear("Not available");
-                    find("savings-status").textContent = "Savings become available after the first measured day has completed.";
-                    return true;
-                }
-                period.set({min: data.calendar.min_day, max: data.calendar.max_day});
-                if (period.value.start !== start || period.value.end !== end) return read(signal);
+            if (data.calendar?.has_completed_days === false) {
+                showEmptyCalendar();
+                return true;
             }
-            const cash = data.cash, currency = cash?.currency || data.currency || "";
-            const known = cash?.savings != null && cash.coverage_seconds > 0;
-            const amount = value => `${money(value)} ${currency}`.trim();
-            find("savings-total").textContent = known ? amount(Math.abs(cash.savings)) : "Not available";
-            find("savings-total").classList.toggle("savings-loss", known && cash.savings < 0);
-            if (known && cash.savings < 0) find("savings-outcome").textContent = "Estimated extra electricity cost";
-            find("savings-bonus-basis").hidden = !known;
-            if (known) {
-                find("savings-actual").textContent = amount(cash.actual_cost);
-                find("savings-without").textContent = amount(cash.without_battery_cost);
-                const maximum = Math.max(Math.abs(cash.actual_cost), Math.abs(cash.without_battery_cost));
-                find("savings-actual-bar").style.width = `${maximum ? Math.abs(cash.actual_cost) / maximum * 100 : 0}%`;
-                find("savings-without-bar").style.width = `${maximum ? Math.abs(cash.without_battery_cost) / maximum * 100 : 0}%`;
-            }
-            renderBreakdown(cash, currency);
-            const complete = known && cash.coverage_seconds === cash.expected_seconds;
-            find("savings-status").textContent = complete ? "All measured time in this period is included." : known ? "Partial period: Both costs include only the same available measured time. Missing intervals are excluded." : "No savings estimate is available for this period.";
-            if (known && cash.estimated_seconds > 0) find("savings-status").textContent += " Includes reconstructed measurements.";
-            if (data.issue) find("savings-status").textContent += " " + data.issue;
-            draw(cash?.chart || [], currency, start, end, cash?.aggregation);
+            if (updateCalendar(data.calendar, start, end)) return read(signal);
+            renderResults(data, start, end);
             return true;
         } catch {
             if (current !== request) return false;
@@ -132,12 +149,8 @@ export function createSavingsView(host, api) {
         canvas.setAttribute("aria-label", "Battery savings. Use Left and Right to inspect values.");
         const title = bin => `${dateLabel(localDate(bin.start))}${localDate(bin.start) === localDate(Date.parse(bin.end) - 1) ? "" : " – " + dateLabel(localDate(Date.parse(bin.end) - 1))}`;
         /** Present the selected bar's retained costs without calculating financial values in the browser. */
-        function showBreakdown({chart: instance, tooltip: state}) {
-            if (canvas.closest("[hidden]")) { hideTooltip(); return; }
-            if (!state.opacity && !tooltip.hidden && (canvas.matches(":hover") || tooltip.matches(":hover") || document.activeElement === canvas)) return;
-            if (!state.opacity || !state.dataPoints?.length) { hideTooltip(); return; }
-            tooltip.hidden = false;
-            const bin = state.dataPoints[0].raw.bin, heading = document.createElement("p");
+        function renderTooltip(bin) {
+            const heading = document.createElement("p");
             heading.className = "chart-tooltip-title"; heading.textContent = `${title(bin)}: ${currency}`;
             const table = document.createElement("table"), body = document.createElement("tbody");
             table.setAttribute("aria-label", "Savings breakdown for selected bar");
@@ -145,10 +158,24 @@ export function createSavingsView(host, api) {
             breakdownRows(body, bin, currency);
             const total = document.createElement("p"); total.className = "chart-tooltip-explanation";
             total.textContent = bin.savings == null ? "No comparable measurements" : `Saving: ${money(bin.savings)} ${currency}`;
-            if (bin.coverage_seconds > 0 && (!bin.breakdown?.actual || !bin.breakdown?.without_battery)) total.textContent += "\nSome component details are unavailable for the same comparable time.";
+            if (hasMissingComponents(bin)) total.textContent += "\nSome component details are unavailable for the same comparable time.";
             if (bin.estimated_seconds) total.textContent += "\nIncludes reconstructed measurements.";
             if (bin.savings != null) total.textContent += "\n" + find("savings-bonus-basis").textContent;
             tooltip.replaceChildren(heading, table, total);
+        }
+        function isInspectingTooltip() {
+            if (tooltip.hidden) return false;
+            return canvas.matches(":hover") || tooltip.matches(":hover") || document.activeElement === canvas;
+        }
+        function showBreakdown({tooltip: state}) {
+            if (canvas.closest("[hidden]")) { hideTooltip(); return; }
+            if (!state.opacity) {
+                if (!isInspectingTooltip()) hideTooltip();
+                return;
+            }
+            if (!state.dataPoints?.length) { hideTooltip(); return; }
+            tooltip.hidden = false;
+            renderTooltip(state.dataPoints[0].raw.bin);
             canvas.setAttribute("aria-describedby", tooltip.id);
             document.addEventListener("keydown", dismissTooltip);
             window.addEventListener("scroll", dismissOnScroll, true);
@@ -187,7 +214,7 @@ export function createSavingsView(host, api) {
             find("savings-selected").textContent = `${title(point.bin)}: ${point.y == null ? "No comparable measurements" : money(point.y) + " " + currency}`;
             const active = [{datasetIndex: 0, index: selectedIndex}], bar = chart.getDatasetMeta(0).data[selectedIndex];
             chart.setActiveElements(active); chart.tooltip.setActiveElements(active, {x: bar.x, y: bar.y}); chart.update("none");
-            showBreakdown({chart, tooltip: chart.tooltip});
+            showBreakdown({tooltip: chart.tooltip});
         };
         canvas.onblur = hideTooltip;
         canvas.onpointerleave = event => { if (!tooltip.contains(event.relatedTarget) && document.activeElement !== canvas) hideTooltip(); };
