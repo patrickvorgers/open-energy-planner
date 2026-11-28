@@ -442,6 +442,61 @@ def test_invalid_bonus_configuration_is_rejected(change):
 
 
 @pytest.mark.parametrize(
+    ("changes", "message"),
+    [
+        ({"rule_id": "", "rate_formula": None}, "Invalid bonus rule identity"),
+        ({"reset_month": True, "window": "script"}, "Invalid annual boundary"),
+    ],
+)
+def test_bonus_rule_reports_the_first_invalid_term(changes, message):
+    """Reject the identity before formulas and the annual boundary before the payment window."""
+    with pytest.raises(ValueError, match=f"^{message}$"):
+        replace(rule(), **changes)
+
+
+@pytest.mark.parametrize(
+    ("changes", "message"),
+    [
+        (
+            {"used_kwh": -1, "component_meters": "invalid"},
+            "Expected a bounded nonnegative number",
+        ),
+        (
+            {"used_kwh": 100.6, "component_meters": (("sensor.export", 49),)},
+            "Component meters do not match aggregate",
+        ),
+        (
+            {"observed_at": datetime(2025, 12, 30, tzinfo=UTC)},
+            "Counter seed predates its period",
+        ),
+    ],
+)
+def test_counter_seed_reports_the_first_inconsistent_input(changes, message):
+    """Validate quantities, physical members and chronology before checking statistics."""
+    seed = measured_inputs()[2].seeds[0]
+    with pytest.raises(ValueError, match=f"^{message}$"):
+        replace(seed, **changes)
+
+
+@pytest.mark.parametrize(
+    ("changes", "message"),
+    [
+        ({"observed_at": NOW}, "Counter statistics period mismatch"),
+        ({"used_kwh": 100.6}, "Counter volume differs from statistics"),
+        (
+            {"component_meters": (("sensor.other", 50),)},
+            "Physical statistics members do not match",
+        ),
+    ],
+)
+def test_counter_seed_rejects_disagreement_with_its_statistics(changes, message):
+    """Reject retained statistics with a mismatched timestamp, volume or physical member."""
+    seed = measured_inputs()[2].seeds[0]
+    with pytest.raises(ValueError, match=f"^{message}$"):
+        replace(seed, **changes)
+
+
+@pytest.mark.parametrize(
     ("day", "expected"),
     [("2026-01-01", "2025-12-31T23:00:00+00:00"), ("2026-07-01", "2026-06-30T22:00:00+00:00")],
 )
