@@ -37,11 +37,10 @@ def number(value, *, minimum=None, maximum=None):
         valid = type(value) in (int, float) and isfinite(value)
     except OverflowError:
         valid = False
-    if (
-        not valid
-        or (minimum is not None and value < minimum)
-        or (maximum is not None and value > maximum)
-    ):
+    if not valid:
+        raise ValueError("Invalid finite number")
+    below_minimum = minimum is not None and value < minimum
+    if below_minimum or (maximum is not None and value > maximum):
         raise ValueError("Invalid finite number")
     return value
 
@@ -67,28 +66,37 @@ def parse_configuration(body, *, revision=None):
         raise TypeError("Source bindings are required")
     if not body["bindings"]:
         raise ValueError("Select at least one source")
-    specs = []
-    for raw in body["bindings"]:
-        if not isinstance(raw, dict):
-            raise TypeError("Invalid source binding")
-        key, entity = identifier(raw.get("key")), identifier(raw.get("entity_id"))
-        quantity = raw.get("quantity")
-        if not re.fullmatch(r"sensor\.[a-z0-9_]+", entity) or quantity not in UNITS:
-            raise ValueError("Select a supported sensor quantity")
-        required, multiplier = raw.get("required", True), raw.get("multiplier", 1)
-        age = number(
-            raw.get("maximum_age_s", MAX_READING_AGE_SECONDS),
-            minimum=1,
-            maximum=MAX_SOURCE_AGE_SECONDS,
-        )
-        attribute = raw.get("timestamp_attribute")
-        if type(required) is not bool or type(multiplier) is not int or multiplier not in (-1, 1):
-            raise ValueError("Invalid source direction or required flag")
-        if quantity != "power" and multiplier != 1:
-            raise ValueError("Only power sources support direction inversion")
-        if attribute is not None:
-            identifier(attribute)
-        specs.append(SourceSpec(key, entity, quantity, required, multiplier, age, attribute))
+    specs = tuple(_parse_source_binding(raw) for raw in body["bindings"])
+    _validate_source_roles(specs)
+    return SourceConfiguration(revision or str(uuid4()), specs)
+
+
+def _parse_source_binding(raw):
+    """Validate one bound sensor's identity, direction and maximum age."""
+    if not isinstance(raw, dict):
+        raise TypeError("Invalid source binding")
+    key, entity = identifier(raw.get("key")), identifier(raw.get("entity_id"))
+    quantity = raw.get("quantity")
+    if not re.fullmatch(r"sensor\.[a-z0-9_]+", entity) or quantity not in UNITS:
+        raise ValueError("Select a supported sensor quantity")
+    required, multiplier = raw.get("required", True), raw.get("multiplier", 1)
+    age = number(
+        raw.get("maximum_age_s", MAX_READING_AGE_SECONDS),
+        minimum=1,
+        maximum=MAX_SOURCE_AGE_SECONDS,
+    )
+    attribute = raw.get("timestamp_attribute")
+    if type(required) is not bool or type(multiplier) is not int or multiplier not in (-1, 1):
+        raise ValueError("Invalid source direction or required flag")
+    if quantity != "power" and multiplier != 1:
+        raise ValueError("Only power sources support direction inversion")
+    if attribute is not None:
+        identifier(attribute)
+    return SourceSpec(key, entity, quantity, required, multiplier, age, attribute)
+
+
+def _validate_source_roles(specs):
+    """Require the primary grid and validate quantity and presence rules across sensors."""
     if len({spec.key for spec in specs}) != len(specs) or not any(
         source.required for source in specs
     ):
@@ -116,7 +124,6 @@ def parse_configuration(body, *, revision=None):
         for spec in specs
     ):
         raise ValueError("Every additional export meter must be required energy")
-    return SourceConfiguration(revision or str(uuid4()), tuple(specs))
 
 
 def configuration_document(configuration):
@@ -153,8 +160,22 @@ def parse_report(body, configuration, now):
     if not isinstance(raw_readings, list) or not isinstance(raw_issues, list):
         raise TypeError("Readings and issues must be lists")
     specs = {spec.key: spec for spec in configuration.bindings}
-    readings, issues, seen = [], [], set()
-    for raw in [*raw_readings, *raw_issues]:
+    _validate_observation_membership([*raw_readings, *raw_issues], specs)
+    readings = tuple(_parse_reading(raw, specs[raw["key"]], captured) for raw in raw_readings)
+    issues = tuple(
+        ObservationIssue(raw["key"], raw["entity_id"], identifier(raw.get("reason")))
+        for raw in raw_issues
+    )
+    location = _parse_report_location(body.get("location"))
+    return ObservationReport(
+        str(uuid4()), configuration.revision, captured, readings, issues, location
+    )
+
+
+def _validate_observation_membership(entries, specs):
+    """Check the complete report's source identities before reading any values."""
+    seen = set()
+    for raw in entries:
         if not isinstance(raw, dict) or not isinstance(raw.get("key"), str):
             raise TypeError("Invalid observation entry")
         spec = specs.get(raw["key"])
@@ -163,39 +184,29 @@ def parse_report(body, configuration, now):
         seen.add(spec.key)
     if seen != set(specs):
         raise ValueError("Every configured source requires a reading or issue")
-    for raw in raw_readings:
-        spec = specs[raw["key"]]
-        value = number(raw.get("value"))
-        if raw.get("unit") != UNITS[spec.quantity]:
-            raise ValueError("Expected normalized observation units")
-        if spec.quantity == "soc" and not 0 <= value <= FULL_SOC_PERCENT:
-            raise ValueError("Invalid battery SoC")
-        if spec.quantity == "energy" and value < 0:
-            raise ValueError("Invalid cumulative energy")
-        kind = raw.get("timestamp_kind")
-        if kind not in (
-            ("device_sample",) if spec.timestamp_attribute else ("ha_report", "ha_state")
-        ):
-            raise ValueError("Observation timestamp provenance mismatch")
-        observed, reported = (
-            stamp(raw.get("observed_at"), captured),
-            stamp(raw.get("reported_at"), captured),
-        )
-        readings.append(
-            Observation(spec.key, spec.entity_id, value, raw["unit"], observed, reported, kind)
-        )
-    for raw in raw_issues:
-        issues.append(ObservationIssue(raw["key"], raw["entity_id"], identifier(raw.get("reason"))))
-    raw_location = body.get("location")
-    location = None
-    if raw_location is not None:
-        if not isinstance(raw_location, dict) or set(raw_location) != {
-            "latitude",
-            "longitude",
-            "timezone",
-        }:
-            raise ValueError("Invalid Home Assistant location")
-        location = SiteLocation(**raw_location)
-    return ObservationReport(
-        str(uuid4()), configuration.revision, captured, tuple(readings), tuple(issues), location
-    )
+
+
+def _parse_reading(raw, spec, captured):
+    """Validate one measurement's units, bounds and timestamp provenance."""
+    value = number(raw.get("value"))
+    if raw.get("unit") != UNITS[spec.quantity]:
+        raise ValueError("Expected normalized observation units")
+    if spec.quantity == "soc" and not 0 <= value <= FULL_SOC_PERCENT:
+        raise ValueError("Invalid battery SoC")
+    if spec.quantity == "energy" and value < 0:
+        raise ValueError("Invalid cumulative energy")
+    kind = raw.get("timestamp_kind")
+    if kind not in (("device_sample",) if spec.timestamp_attribute else ("ha_report", "ha_state")):
+        raise ValueError("Observation timestamp provenance mismatch")
+    observed = stamp(raw.get("observed_at"), captured)
+    reported = stamp(raw.get("reported_at"), captured)
+    return Observation(spec.key, spec.entity_id, value, raw["unit"], observed, reported, kind)
+
+
+def _parse_report_location(raw):
+    """Validate the optional location's exact fields before constructing it."""
+    if raw is None:
+        return None
+    if not isinstance(raw, dict) or set(raw) != {"latitude", "longitude", "timezone"}:
+        raise ValueError("Invalid Home Assistant location")
+    return SiteLocation(**raw)

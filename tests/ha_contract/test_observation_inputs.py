@@ -118,6 +118,37 @@ def test_named_power_roles_reject_other_quantities(role, quantity):
 
 
 @pytest.mark.parametrize(
+    ("key", "quantity", "message"),
+    [
+        ("grid.power.extra", "energy", "Every additional grid power source must be required power"),
+        (
+            "grid.export_energy.extra",
+            "power",
+            "Every additional export meter must be required energy",
+        ),
+    ],
+)
+def test_additional_grid_sources_enforce_their_role_specific_contract(key, quantity, message):
+    """Reject incompatible split-grid sensors with the error owned by their role."""
+    raw = configuration_document(configuration(battery=False))
+    raw["bindings"].append({"key": key, "entity_id": "sensor.extra", "quantity": quantity})
+
+    with pytest.raises(ValueError, match=message):
+        parse_configuration(raw)
+
+
+@pytest.mark.parametrize("age", [1, 3600])
+def test_maximum_source_age_bounds_survive_stored_configuration_round_trip(age):
+    """Reload either inclusive age limit along with the original revision and canonical bindings."""
+    raw = configuration_document(configuration(battery=False))
+    raw["bindings"][0].update(maximum_age_s=age, multiplier=-1, timestamp_attribute="sample_time")
+
+    restored = parse_configuration(raw, revision=raw["revision"])
+
+    assert configuration_document(restored) == raw
+
+
+@pytest.mark.parametrize(
     "change",
     [
         {"value": True},
@@ -135,6 +166,44 @@ def test_wire_receiver_independently_rejects_invalid_observations(change):
     raw["readings"][0].update(change)
     with pytest.raises((ValueError, TypeError)):
         parse_report(raw, configuration(), NOW)
+
+
+def test_wire_receiver_rejects_unrepresentable_integer_before_reading_units():
+    """An overflowing numeric measurement selects the number error before the unit error."""
+    raw = report_body()
+    raw["readings"][0].update(value=10**400, unit="kW")
+
+    with pytest.raises(ValueError, match="^Invalid finite number$"):
+        parse_report(raw, configuration(), NOW)
+
+
+def test_report_membership_is_validated_before_decoding_readings():
+    """A source cannot provide both a reading and an issue, even when its reading is malformed."""
+    config = configuration(battery=False)
+    raw = report_body(config)
+    raw["readings"][0]["value"] = True
+    raw["issues"] = [{"key": "grid.power", "entity_id": "sensor.grid", "reason": "unavailable"}]
+
+    with pytest.raises(ValueError, match="^Unexpected, duplicate or mismatched observation$"):
+        parse_report(raw, config, NOW)
+
+
+@pytest.mark.parametrize("age", [timedelta(seconds=29, milliseconds=999), timedelta(seconds=30)])
+def test_report_transport_cutoff_and_location_require_canonical_input(age):
+    """A capture immediately inside the age limit keeps its location and normalized UTC timestamp."""
+    config = configuration(battery=False)
+    captured = NOW - age
+    raw = report_body(config, now=captured)
+    raw["location"] = {"latitude": 51.5, "longitude": 4.5, "timezone": "Europe/Amsterdam"}
+    if age == timedelta(seconds=30):
+        with pytest.raises(ValueError, match="^Observation report expired$"):
+            parse_report(raw, config, NOW)
+        return
+
+    report = parse_report(raw, config, NOW)
+
+    assert report.captured_at == captured
+    assert asdict(report.location) == raw["location"]
 
 
 def test_report_requires_every_bound_source_exactly_once():
