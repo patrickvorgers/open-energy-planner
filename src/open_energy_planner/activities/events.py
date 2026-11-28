@@ -20,14 +20,39 @@ MAX_CONTEXT_PLAN_ID_CHARACTERS = 128
 
 def context_instant(value):
     """Admit one bounded aware diagnostic timestamp without rejecting domain work."""
-    if isinstance(value, str) and len(value) <= MAX_CONTEXT_TIMESTAMP_CHARACTERS:
-        try:
-            instant = datetime.fromisoformat(value)
-            if instant.utcoffset() is not None:
-                return instant.astimezone(UTC)
-        except (ValueError, OverflowError):
-            pass
-    return None
+    if not isinstance(value, str) or len(value) > MAX_CONTEXT_TIMESTAMP_CHARACTERS:
+        return None
+    try:
+        instant = datetime.fromisoformat(value)
+        return instant.astimezone(UTC) if instant.utcoffset() is not None else None
+    except (ValueError, OverflowError):
+        return None
+
+
+def _context_plan_id(value):
+    """Accept only bounded application identifiers suitable for public navigation."""
+    if not isinstance(value, str) or not value:
+        return None
+    if len(value) > MAX_CONTEXT_PLAN_ID_CHARACTERS or not value.isascii():
+        return None
+    return value if all(character.isalnum() or character in "-_" for character in value) else None
+
+
+def _context_label(value):
+    """Bound a public label after replacing nonprintable whitespace and normalizing spacing."""
+    if not isinstance(value, str):
+        return ""
+    printable = "".join(character if character.isprintable() else " " for character in value)
+    return " ".join(printable.split())[:MAX_CONTEXT_LABEL_CHARACTERS]
+
+
+def _context_range(value, start_field, end_field):
+    """Publish both endpoints as UTC only when a complete aware range is ordered."""
+    start = context_instant(value.get(start_field))
+    end = context_instant(value.get(end_field))
+    if start is None or end is None or end <= start:
+        return {}
+    return {start_field: start.isoformat(), end_field: end.isoformat()}
 
 
 def public_context(value):
@@ -40,30 +65,19 @@ def public_context(value):
     if not isinstance(value, dict):
         return {}
     result = {}
-    plan_id = value.get("plan_id")
-    if (
-        isinstance(plan_id, str)
-        and 1 <= len(plan_id) <= MAX_CONTEXT_PLAN_ID_CHARACTERS
-        and plan_id.isascii()
-        and all(character.isalnum() or character in "-_" for character in plan_id)
-    ):
+    if plan_id := _context_plan_id(value.get("plan_id")):
         result["plan_id"] = plan_id
-    label = value.get("label")
-    if isinstance(label, str):
-        label = " ".join(
-            "".join(character if character.isprintable() else " " for character in label).split()
-        )[:MAX_CONTEXT_LABEL_CHARACTERS]
-        if label:
-            result["label"] = label
+    if label := _context_label(value.get("label")):
+        result["label"] = label
     for start_field, end_field in (("start", "end"), ("waiting_start", "waiting_end")):
-        start, end = (context_instant(value.get(field)) for field in (start_field, end_field))
-        if start is not None and end is not None and end > start:
-            result.update({start_field: start.isoformat(), end_field: end.isoformat()})
+        result.update(_context_range(value, start_field, end_field))
     generated = context_instant(value.get("plan_generated_at"))
-    if generated is not None:
-        result["plan_generated_at"] = generated.isoformat()
-        if value.get("plan_strategy") in ("minimize cost", "minimize consumption"):
-            result["plan_strategy"] = value["plan_strategy"]
+    if generated is None:
+        return result
+    result["plan_generated_at"] = generated.isoformat()
+    strategy = value.get("plan_strategy")
+    if strategy in ("minimize cost", "minimize consumption"):
+        result["plan_strategy"] = strategy
     return result
 
 
@@ -381,8 +395,7 @@ class Events:
         result = self.changes(cursor)
         if result["reset"] or result["events"]:
             return result
-        try:
+        # A normal long-poll deadline still gets the same final replay check.
+        with suppress(TimeoutError):
             await asyncio.wait_for(wakeup.wait(), timeout)
-        except TimeoutError:
-            pass
         return self.changes(cursor)
