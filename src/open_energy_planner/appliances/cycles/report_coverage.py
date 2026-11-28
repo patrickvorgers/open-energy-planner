@@ -9,6 +9,29 @@ MAX_REPORT_GAP_SECONDS = 600
 RETENTION_HOURS = 14
 
 
+def _usable_reported_power(power_states):
+    value = power_states[-1] if power_states else None
+    try:
+        power = float(value["state"]) * {"W": 1, "kW": 1000}[value["unit"]]
+    except (TypeError, KeyError, ValueError, OverflowError):
+        return False
+    return isfinite(power) and 0 <= power <= MAX_CYCLE_POWER_W
+
+
+def _extends_window(previous, body, captured, reported):
+    return (
+        previous.get("session") == body.get("observer_session")
+        and previous.get("power_entity") == body["power_entity"]
+        and previous.get("valid")
+        and timedelta(0)
+        < captured - instant(previous["captured_at"])
+        <= timedelta(seconds=MAX_REPORT_GAP_SECONDS)
+        and timedelta(0)
+        <= reported - instant(previous["reported_at"])
+        <= timedelta(seconds=MAX_REPORT_GAP_SECONDS)
+    )
+
+
 def advance(previous, body, *, continuous):
     """Extend coverage only within one live observer session and ten-minute report/capture gaps.
 
@@ -34,30 +57,9 @@ def advance(previous, body, *, continuous):
         and reported is not None
         and timedelta(0) <= captured - reported <= timedelta(seconds=MAX_REPORT_GAP_SECONDS)
     )
-    value = body["power_states"][-1] if body["power_states"] else None
-    try:
-        power = float(value["state"]) * {"W": 1, "kW": 1000}[value["unit"]]
-        usable = isfinite(power) and 0 <= power <= MAX_CYCLE_POWER_W
-    except (TypeError, KeyError, ValueError, OverflowError):
-        usable = False
-    if not usable:
-        valid = False
-    extends = (
-        valid
-        and continuous
-        and previous.get("session") == session
-        and previous.get("power_entity") == body["power_entity"]
-        and previous.get("valid")
-        and windows
-        and timedelta(0)
-        < captured - instant(previous["captured_at"])
-        <= timedelta(seconds=MAX_REPORT_GAP_SECONDS)
-        and timedelta(0)
-        <= reported - instant(previous["reported_at"])
-        <= timedelta(seconds=MAX_REPORT_GAP_SECONDS)
-    )
+    valid = _usable_reported_power(body["power_states"]) and valid
     if valid:
-        if extends:
+        if continuous and windows and _extends_window(previous, body, captured, reported):
             windows[-1] = [windows[-1][0], max(instant(windows[-1][1]), reported).isoformat()]
         else:
             windows.append([captured.isoformat(), captured.isoformat()])

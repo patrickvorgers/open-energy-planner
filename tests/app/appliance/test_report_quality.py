@@ -53,6 +53,28 @@ def test_new_ha_session_cannot_bridge_old_coverage():
     assert not covers(coverage, first, instant(body["end"]))
 
 
+def test_replayed_valid_report_cannot_erase_a_newer_invalid_capture():
+    """An older good report cannot rejoin coverage that an invalid capture has interrupted."""
+    body = raw_trace()
+    body["observer_session"] = "one-session"
+    first = instant(body["end"])
+    coverage = advance(None, body, continuous=False)
+
+    interrupted_at = (first + timedelta(minutes=2)).isoformat()
+    invalid_capture = dict(body, end=interrupted_at, power_reported_at=interrupted_at)
+    invalid_capture["power_states"] = [{"state": "unavailable", "unit": "W"}]
+    interrupted = advance(coverage, invalid_capture, continuous=True)
+    assert interrupted["valid"] is False
+    assert advance(interrupted, body, continuous=True) == interrupted
+
+    recovered_at = first + timedelta(minutes=4)
+    body.update(end=recovered_at.isoformat(), power_reported_at=recovered_at.isoformat())
+    recovered = advance(interrupted, body, continuous=True)
+    assert recovered["valid"] is True
+    assert covers(recovered, recovered_at, recovered_at)
+    assert not covers(recovered, first, recovered_at)
+
+
 def test_historical_raw_shape_is_visible_but_cannot_claim_live_observation(service):
     """Perfect historical counters and power do not prove report freshness between saved events."""
     body = raw_trace()
