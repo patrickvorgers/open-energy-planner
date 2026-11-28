@@ -33,8 +33,8 @@ COLLECTION_PATHS = {
 }
 
 
-def _transfer_capture_time(transfer, now):
-    """Validate the page identity and return its bounded, aware capture time."""
+def _validate_transfer_fields(transfer):
+    """Check the transfer envelope before interpreting the capture timestamp."""
     if not isinstance(transfer, dict) or set(transfer) != TRANSFER_FIELDS:
         raise ValueError("Invalid transfer identity")
     if not all(
@@ -49,7 +49,11 @@ def _transfer_capture_time(transfer, now):
         or type(transfer["complete"]) is not bool
     ):
         raise ValueError("Invalid transfer fields")
-    captured = datetime.fromisoformat(transfer["captured_at"])
+
+
+def _transfer_capture_time(value, now):
+    """Parse an aware capture time within the accepted receipt window."""
+    captured = datetime.fromisoformat(value)
     if captured.tzinfo is None or not (
         -timedelta(seconds=CATALOGUE_CLOCK_SKEW_SECONDS)
         <= now - captured
@@ -75,9 +79,7 @@ def _append_fragment(body, snapshot):
     """Append one validated collection fragment to the pending snapshot."""
     if set(body) != {"transfer", "path", "items"} or not isinstance(body["path"], list):
         raise ValueError("Invalid discovery fragment")
-    path, items = body["path"], body["items"]
-    if not all(isinstance(field, str) for field in path) or tuple(path) not in COLLECTION_PATHS:
-        raise ValueError("Invalid discovery collection")
+    path, items = _collection_path(body["path"]), body["items"]
     if not isinstance(items, list) or not items:
         raise ValueError("Empty discovery fragment")
     target = snapshot
@@ -86,6 +88,13 @@ def _append_fragment(body, snapshot):
     if not isinstance(target, list):
         raise TypeError("Invalid discovery collection type")
     target.extend(deepcopy(items))
+
+
+def _collection_path(path):
+    """Admit only collection coordinates explicitly defined by the wire protocol."""
+    if not all(isinstance(field, str) for field in path) or tuple(path) not in COLLECTION_PATHS:
+        raise ValueError("Invalid discovery collection")
+    return path
 
 
 class CatalogueTransfer:
@@ -137,7 +146,8 @@ class CatalogueTransfer:
             self.latest_capture = now
             return body
         transfer = body["transfer"]
-        captured = _transfer_capture_time(transfer, now)
+        _validate_transfer_fields(transfer)
+        captured = _transfer_capture_time(transfer["captured_at"], now)
         identity = {field: transfer[field] for field in TRANSFER_IDENTITY_FIELDS}
         if transfer["index"] == 0:
             self._start(body, identity, captured, size)
