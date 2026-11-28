@@ -638,7 +638,18 @@ def test_split_quarter_tooltips_summarize_controls_storage_and_original_cash(app
         *following,
     ]
     plan["input_snapshot"]["problem"] = problem
-    plan["input_snapshot"]["tariff_evidence"] = []
+    plan["input_snapshot"]["tariff_evidence"] = [
+        {
+            "start": begin.isoformat(),
+            "end": finish.isoformat(),
+            "buy_price": 0.30,
+            "sell_price": sell,
+            "market_price": spot,
+            "price_kind": "published",
+            "native_resolution_minutes": 15,
+        }
+        for begin, finish, sell, spot in ((start, middle, 0.10, 0.04), (middle, end, 0.40, 0.10))
+    ]
     first, *later = physical["expected_flows"]
     fragments = []
     for fraction, stored in ((1 / 3, 5 + 1.52 / 3), (2 / 3, 6.52)):
@@ -698,6 +709,7 @@ def test_split_quarter_tooltips_summarize_controls_storage_and_original_cash(app
         ["Energy", "Effective rate", "Revenue before bonus"]
     )
     expect(exports.locator(".chart-tooltip-value")).to_have_text(["0.8", "0.30", "0.24"])
+    expect(price_tooltip).to_contain_text("Mean spot market rate: 0.08 EUR/kWh")
     page.screenshot(path=f"results/ci/planning-quarter-prices-{width}.png")
     # Arrow navigation advances to the next quarter rather than the 00:05 tariff boundary.
     prices.press("ArrowRight")

@@ -306,7 +306,10 @@ function renderLinkedTooltip(chart, tooltip, interval, y) {
         title.className = "chart-tooltip-title";
         title.textContent = `From ${when(start)} to ${when(end)}`;
         tooltip.replaceChildren(title, linkedCostTable(interval));
-        const notes = [interval.priceStatus, ...planRankNotes(time, interval)].filter(Boolean);
+        const meanRates = [["Mean spot market rate", interval.spotRate], ["Mean export rate incl. bonus", interval.bonusRate]];
+        const notes = meanRates.filter(([, value]) => Number.isFinite(value))
+            .map(([label, value]) => `${label}: ${money(value)} ${interval.currency}/kWh`);
+        notes.push(...[interval.priceStatus, ...planRankNotes(time, interval)].filter(Boolean));
         if (interval.coveredStart !== start || interval.coveredEnd !== end) {
             notes.unshift(`Partial quarter: ${when(interval.coveredStart)} to ${when(interval.coveredEnd)} only.`);
         }
@@ -1559,6 +1562,7 @@ function prepareOriginalPlanEvidence(plan, currency) {
         appendIntervalSolarEvidence(plan, step, command, inverterGroups, {commands, deviceValues});
         inspectSteps.push({start: time, end, commands,
             gridImport: imported, gridExport: exported, currency,
+            spotRate: tariff?.market_price, bonusRate: bonusRules.length ? rates.rankedExportRate : null,
             ...rates,
             priceStatus: tariff ? `${tariff.price_kind === "published" ? "Published market rate" : tariff.price_kind === "forecast" ? "Forecast market rate" : "Market rate provenance unclassified"}: Native ${tariff.native_resolution_minutes}-minute resolution` : "Market provenance unavailable",
             values: [

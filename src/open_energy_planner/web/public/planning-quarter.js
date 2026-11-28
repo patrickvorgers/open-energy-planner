@@ -22,6 +22,12 @@ function quarterSettlement(parts, energyKey, rateKey) {
     return {energy, rate, cost, varies: rates.size > 1};
 }
 
+/** Average a displayed price across the covered time without changing settlement. */
+function meanRate(parts, key, duration) {
+    const weighted = coveredSum(parts, step => Number.isFinite(step[key]) ? step[key] * (step.end - step.start) : null);
+    return weighted == null ? null : weighted / duration;
+}
+
 /** Collect commands by identity and only show a stored state at an actual covered endpoint. */
 function quarterCommands(parts, coveredEnd) {
     const devices = new Map();
@@ -67,6 +73,8 @@ export function planningQuarterReadouts(steps) {
             currency: parts[0].step.currency, firstStep: parts[0].step,
             priceStatus: contiguous && provenance.size === 1 ? parts[0].step.priceStatus
                 : "Market rate provenance varies within the covered quarter",
+            spotRate: contiguous ? meanRate(parts, "spotRate", coveredEnd - coveredStart) : null,
+            bonusRate: contiguous ? meanRate(parts, "bonusRate", coveredEnd - coveredStart) : null,
             imports: contiguous ? quarterSettlement(parts, "gridImport", "buyRate") : {},
             exports: contiguous ? quarterSettlement(parts, "gridExport", "sellRate") : {},
             commands: contiguous ? quarterCommands(parts, coveredEnd) : [],
