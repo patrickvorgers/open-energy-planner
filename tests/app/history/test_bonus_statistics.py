@@ -6,7 +6,7 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from open_energy_planner.contracts.bonus_history import BonusHistory
+from open_energy_planner.contracts.bonus_history import BonusBudgetPreview, BonusHistory
 from open_energy_planner.contracts.bonus_statistics import derive_statistics, parse_statistics
 from open_energy_planner.contracts.compilation import BonusCompiler
 from open_energy_planner.storage.counters import CounterStore
@@ -60,6 +60,42 @@ def test_complete_sum_history_counts_resets_without_live_physical_reading():
     assert evidence.initial_kwh == 8
     assert evidence.meter_kwh == 108
     assert BonusHistory().request(contract, config, book, NOW) is None
+
+
+@pytest.mark.parametrize("missing", ["export_meter", "active_period"])
+def test_history_requires_an_export_source_and_an_active_bonus_period(missing):
+    """A grid power sensor or a future-only bonus cannot authorize Recorder history."""
+    contract, config = inputs()
+    if missing == "export_meter":
+        config = replace(config, bindings=config.bindings[:1])
+    else:
+        future_rule = replace(contract.bonuses[0], effective_from=NOW + timedelta(hours=1))
+        contract = replace(contract, bonuses=(future_rule,))
+
+    assert BonusHistory().request(contract, config, None, NOW) is None
+
+
+def test_draft_statistics_keep_the_persisted_counter_for_the_same_period():
+    """A newer temporary checkpoint cannot replace a stored manual counter for the same period."""
+    contract, config = inputs()
+    initial = derive()
+    manual_seed = replace(initial.seeds[0], used_kwh=25, statistics=None)
+    stored = replace(initial, seeds=(manual_seed,))
+    preview = BonusBudgetPreview()
+    assert preview.baselines(stored, NOW) is stored
+
+    now = NOW + timedelta(minutes=1)
+    preview.update(contract, now)
+    request = preview.request(config, None, now)
+    preview.receive(request, parse_statistics(report(request), request), None, now)
+    assert preview.book.seeds[0].used_kwh == 8
+
+    merged = preview.baselines(stored, now)
+    assert merged.seeds == (manual_seed,)
+    assert merged.recorded_at == now
+    refresh = preview.request(config, stored, now)
+    assert refresh.counter_version == merged.version
+    assert stored.recorded_at == NOW
 
 
 def test_missing_prefix_uses_first_endpoint_and_adds_only_subsequent_sum():
