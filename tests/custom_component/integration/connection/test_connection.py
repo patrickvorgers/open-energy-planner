@@ -342,6 +342,75 @@ def test_discovery_pairs_after_app_consent_and_migrates_existing_entry(tmp_path)
     asyncio.run(scenario())
 
 
+@pytest.mark.parametrize("automatic", [False, True])
+def test_discovery_with_wrong_live_identity_does_not_send_pairing_requests(tmp_path, automatic):
+    """A pinned listener must verify the advertised app instance before either consent protocol."""
+    from types import SimpleNamespace
+
+    from open_energy_planner.discovery import certificate
+
+    async def scenario():
+        """Expose a mismatched live identity behind a real trusted test certificate."""
+        async with running_chain() as (hass, entry, _upstream, _root):
+            original = dict(entry.data)
+            context, pin = certificate(tmp_path, entry.unique_id)
+            received = []
+
+            async def respond(request):
+                """Record method and path without retaining submitted credentials."""
+                received.append((request.method, request.path))
+                return web.json_response(
+                    {"instance_id": str(uuid4()), "release": "0.2.0", "ui_url": "/setup"}
+                )
+
+            app = web.Application()
+            app.router.add_route("*", "/{path:.*}", respond)
+            runner = web.AppRunner(app)
+            await runner.setup()
+            await web.TCPSite(runner, "127.0.0.1", 0, ssl_context=context).start()
+            try:
+                port = runner.addresses[0][1]
+                properties = {
+                    "instance_id": entry.unique_id,
+                    "fingerprint": pin,
+                    "release": "0.2.0",
+                }
+                flow = hass.config_entries.flow
+                if automatic:
+                    result = await flow.async_init(
+                        DOMAIN,
+                        context={"source": "integration_discovery"},
+                        data={
+                            **properties,
+                            "host": "127.0.0.1",
+                            "port": port,
+                            "secret": "synthetic-authorized-bootstrap",
+                        },
+                    )
+                    assert result["reason"] == "pairing_failed"
+                else:
+                    result = await flow.async_init(
+                        DOMAIN,
+                        context={"source": "zeroconf"},
+                        data=SimpleNamespace(
+                            ip_address="127.0.0.1", port=port, properties=properties
+                        ),
+                    )
+                    assert result["type"] == "progress"
+                    async with asyncio.timeout(10):
+                        while any(
+                            item["flow_id"] == result["flow_id"] for item in flow.async_progress()
+                        ):
+                            await asyncio.sleep(0.01)
+                assert received == [("GET", "/pair/info")]
+                assert hass.config_entries.async_entries(DOMAIN) == [entry]
+                assert dict(entry.data) == original
+            finally:
+                await runner.cleanup()
+
+    asyncio.run(scenario())
+
+
 def test_authenticated_http_rejects_missing_token_and_wrong_ack():
     """Call without credentials or acknowledge the wrong plan. Require authentication/conflict rejection."""
 
