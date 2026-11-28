@@ -4,6 +4,7 @@ import {updateCharts} from "./chart_theme.js";
 import {calendarDays, calendarTime, calendarDayStart} from "./chart_days.js";
 import {money, configuredRate, when, dateLabel, localDate, localInstant, nextDate, percentage, optionLabel, planName, useHomeAssistantTimezone, watchSourceNames} from "./display.js";
 import {BATTERY_FLOW_GROUPS, batteryPlanSeries, batteryRouteValues, energyBalances, householdForecastEnergy, quarterBalanceSeries, balancePeriodEnergy, QUARTER_MILLISECONDS} from "./balance.js";
+import {planningQuarterReadouts} from "./planning-quarter.js";
 import {bindSettingsActions, sessionResponse} from "./settings-actions.js";
 import {gridModeStrip, GRID_MODE_STRIP_HEIGHT_PX, ZERO_GRID_LABEL} from "./grid-mode-strip.js";
 bindSettingsActions();
@@ -84,6 +85,7 @@ const PRICE_SERIES = {
     bonus: {name: "Export rate incl. bonus", color: "#9255b7"},
 };
 let linkedInterval = null;
+let planningQuarters = new Map();
 const isLinkedChart = id => LINKED_CHART_IDS.includes(id);
 const DEVICE_PATTERN_SIZE_PX = 8;
 let inspectSteps = [], planningHours = 0, planEvidence = null, currentPriceWindow = null, priceRequest = 0, priceInputPlanId = null;
@@ -130,12 +132,14 @@ function evidenceCards(parent, cards) {
         target.append(article);
     }
 }
-/** Explain actual bar coverage and retain recorded commands only for the active optimizer view. */
+/** Describe partial coverage and one planned result per device for the displayed quarter. */
 function balanceNotes(bar, id, axisTime) {
     const notes = bar.coveredStart !== bar.start || bar.coveredEnd !== bar.end
         ? [`Partial quarter: Mean power covers ${axisTime(bar.coveredStart)} to ${axisTime(bar.coveredEnd)} only.`] : [];
-    if (id === "plan-chart") {
-        notes.push(...new Set(inspectSteps.filter(step => step.end > bar.coveredStart && step.start < bar.coveredEnd).flatMap(step => step.commands || [])));
+    if (id !== "plan-chart") return notes;
+    for (const {kind, name, energy, text, stored} of planningQuarters.get(bar.start)?.commands || []) {
+        if (kind === "appliance") notes.push(`${name}: ${number(energy)} kWh scheduled in this quarter`);
+        else notes.push(`${name}: ${text}${Number.isFinite(stored) ? `: Planned stored energy at end: ${number(stored)} kWh` : ""}`);
     }
     return notes;
 }
@@ -211,8 +215,8 @@ function renderTooltip({chart: instance, tooltip}, node, balance = false, balanc
     }) : tooltip.balanceItems || [];
     const groupedBalance = balance && !batteryPlan;
     node.classList.toggle("chart-tooltip-balance", groupedBalance);
-    if (instance.canvas.id === "price-chart" && linkedInterval) node.append(linkedCostTable(linkedInterval));
-    else node.append(tooltipSections(items, totalItems, groupedBalance, tooltip.balanceItems));
+    const sections = tooltipSections(items, totalItems, groupedBalance, tooltip.balanceItems);
+    node.append(sections);
     const notes = [...(interval ? balanceNotes(interval, instance.canvas.id, when) : tooltip.afterBody)];
     if (totalItems.length) notes.push("Totals include all flows, including hidden series. Supply is positive. Use is negative.");
     if (notes.length) {
@@ -233,16 +237,13 @@ function balanceTooltipData(chart, {dataPoints, interval: pinnedInterval}, time)
     const interval = bars[0]?.raw ?? optimizerQuarter(chart, time) ?? pinnedInterval;
     return interval ? {items: bars, interval} : pointReadout;
 }
-/** Show interval cash estimates using the original plan rates. */
-function linkedCostTable({gridImport, gridExport, spotRate, buyRate, sellRate, exportWithBonus, currency}) {
-    const exportRate = exportWithBonus ?? sellRate;
-    const includesBonus = exportRate !== sellRate;
-    const revenueLabel = includesBonus ? "Revenue incl. bonus" : "Revenue";
+/** Show quarter cash estimates using the original plan rates before the bonus volume cap. Missing evidence remains unknown. */
+function linkedCostTable({imports, exports, currency, spotRate, buyRate, sellRate, bonusRate, includesBonus}) {
     const table = document.createElement("table");
     table.className = "chart-linked-cost";
-    for (const [label, energy, rate, amountLabel] of [
-        ["Grid import", gridImport, buyRate, "Cost"],
-        ["Grid export", gridExport, exportRate, revenueLabel],
+    for (const [label, {energy, rate, cost, varies}, amountLabel] of [
+        ["Grid import", imports, "Cost"],
+        ["Grid export", exports, includesBonus ? "Revenue incl. bonus" : "Revenue"],
     ]) {
         const group = table.createTBody();
         const heading = document.createElement("th");
@@ -250,10 +251,9 @@ function linkedCostTable({gridImport, gridExport, spotRate, buyRate, sellRate, e
         heading.colSpan = 3;
         heading.textContent = label;
         group.insertRow().append(heading);
-        const amount = Number.isFinite(energy) && Number.isFinite(rate) ? energy * rate : null;
         appendCostRow(group, "Energy", energy, number, "kWh");
-        appendCostRow(group, "Rate", rate, money, `${currency}/kWh`);
-        appendCostRow(group, amountLabel, amount, money, currency);
+        appendCostRow(group, varies ? "Effective rate" : "Rate", rate, money, `${currency}/kWh`);
+        appendCostRow(group, amountLabel, cost, money, currency);
     }
     const rates = table.createTBody();
     rates.className = "chart-linked-rates";
@@ -261,7 +261,7 @@ function linkedCostTable({gridImport, gridExport, spotRate, buyRate, sellRate, e
     appendCostRow(rates, PRICE_SERIES.spot.name, spotRate, money, unit, PRICE_SERIES.spot.color);
     appendCostRow(rates, PRICE_SERIES.buy.name, buyRate, money, unit, PRICE_SERIES.buy.color);
     appendCostRow(rates, PRICE_SERIES.sell.name, sellRate, money, unit, PRICE_SERIES.sell.color);
-    if (includesBonus) appendCostRow(rates, PRICE_SERIES.bonus.name, exportWithBonus, money, unit, PRICE_SERIES.bonus.color);
+    if (includesBonus) appendCostRow(rates, PRICE_SERIES.bonus.name, bonusRate, money, unit, PRICE_SERIES.bonus.color);
     return table;
 }
 
@@ -320,14 +320,17 @@ function renderLinkedTooltip(chart, tooltip, interval, y) {
     const time = (start + end) / 2;
     const x = chart.scales.x.getPixelForValue(time);
     if (chart.canvas.id === "plan-chart") {
-        const selectedRange = {start, end, coveredStart: start, coveredEnd: end};
-        renderTooltip({chart, tooltip: {opacity: 1, dataPoints: [], interval: selectedRange, caretX: x, caretY: y}}, tooltip, true, time);
+        renderTooltip({chart, tooltip: {opacity: 1, dataPoints: [], interval, caretX: x, caretY: y}}, tooltip, true, time);
     } else {
         const title = document.createElement("p");
         title.className = "chart-tooltip-title";
         title.textContent = `From ${when(start)} to ${when(end)}`;
         tooltip.replaceChildren(title, linkedCostTable(interval));
-        for (const text of [interval.priceStatus, ...planRankNotes(time)].filter(Boolean)) {
+        const notes = [interval.priceStatus, ...planRankNotes(time, interval)].filter(Boolean);
+        if (interval.coveredStart !== start || interval.coveredEnd !== end) {
+            notes.unshift(`Partial quarter: ${when(interval.coveredStart)} to ${when(interval.coveredEnd)} only.`);
+        }
+        for (const text of notes) {
             const note = document.createElement("p");
             note.className = "chart-tooltip-explanation";
             note.textContent = text;
@@ -339,11 +342,16 @@ function renderLinkedTooltip(chart, tooltip, interval, y) {
     tooltip.classList.add("chart-tooltip-linked");
 }
 
-/** Use the plan's real interval boundaries, including partial opening quarters. */
+/** Find the displayed quarter for an epoch-millisecond cursor. */
+function planningQuarterAt(time) {
+    return planningQuarters.get(Math.floor(time / QUARTER_MILLISECONDS) * QUARTER_MILLISECONDS) ?? null;
+}
+
+/** Link both charts by displayed quarters and keep the original interval inspector separate. */
 function linkedChartInteraction(canvas, tooltip, hideTooltip, signal) {
     const intervalAt = (chart, pixel) => {
         const time = chart.scales.x.getValueForPixel(pixel);
-        return inspectSteps.find(interval => interval.start <= time && time < interval.end) ?? null;
+        return planningQuarterAt(time);
     };
     const inspectInterval = (chart, interval, y) => {
         selectLinkedInterval(interval);
@@ -355,14 +363,14 @@ function linkedChartInteraction(canvas, tooltip, hideTooltip, signal) {
         tooltip.style.maxHeight = "";
         renderLinkedTooltip(chart, tooltip, interval, y);
         $("linked-chart-reading").textContent = tooltip.innerText.replace(/\s+/g, " ").trim();
-        $("inspect-time").value = inspectSteps.indexOf(interval);
+        $("inspect-time").value = inspectSteps.indexOf(interval.firstStep);
         inspect();
     };
     canvas.tabIndex = 0;
     canvas.addEventListener("keydown", event => {
         const chart = charts.get(canvas.id);
         if (event.key === "Escape") { selectLinkedInterval(null); hideTooltip(); return; }
-        const visible = inspectSteps.filter(interval => interval.end > chart.scales.x.min && interval.start < chart.scales.x.max);
+        const visible = [...planningQuarters.values()].filter(interval => interval.end > chart.scales.x.min && interval.start < chart.scales.x.max);
         if (!priceInputPlanId || !visible.length) return;
         const index = visible.indexOf(linkedInterval);
         const next = {ArrowLeft: index < 0 ? 0 : index - 1, ArrowRight: index + 1, Home: 0, End: visible.length - 1}[event.key];
@@ -595,9 +603,9 @@ function rankPlanRates(intervals, field, extreme, order) {
 }
 
 /** Share the price highlights across mouse, touch and keyboard inspection. */
-function planRankNotes(time) {
+function planRankNotes(time, quarter = null) {
     const marks = charts.get("price-chart")?.dailyPriceQuarters ?? [];
-    return marks.filter(mark => mark.start <= time && time < mark.end)
+    return marks.filter(mark => quarter ? mark.start <= quarter.coveredStart && mark.end >= quarter.coveredEnd : mark.start <= time && time < mark.end)
         .map(mark => PLAN_RANK_NOTES[mark.extreme]);
 }
 /** Explain the selected mark using the ranked contract rate or the spot preview's status. */
@@ -620,7 +628,7 @@ function chartTooltipNotes(items, {id, balance, axisTime, priceHoverTime}) {
     if (!items.length || ["forecast-chart", "reference-chart", "self-consumption-chart"].includes(id)) return "";
     const step = inspectSteps.find((step) => step.start <= items[0].parsed.x && items[0].parsed.x < step.end);
     if (id === "price-chart") return priceTooltipNotes(items[0], step, priceHoverTime);
-    return step?.commands || [];
+    return [];
 }
 
 /** Show the actual visible datasets and keep checkbox choices in the shared series menu. */
@@ -902,7 +910,7 @@ function chart(id, series, {utcDays = false, calendarDates = false, unit = "", m
                 if (id === "price-chart") priceHoverTime = instance.scales.x.getValueForPixel(event.x);
                 if (balance) {
                     const hits = instance.getElementsAtEventForMode(event, "nearest", {axis: "xy", intersect: true}, false);
-                    balanceTime = !batteryPlan && hits.some(hit => instance.data.datasets[hit.datasetIndex].tooltipGroup === "Battery state")
+                    balanceTime = id !== "plan-chart" && !batteryPlan && hits.some(hit => instance.data.datasets[hit.datasetIndex].tooltipGroup === "Battery state")
                         ? null : instance.scales.x.getValueForPixel(event.x);
                 }
             },
@@ -910,7 +918,14 @@ function chart(id, series, {utcDays = false, calendarDates = false, unit = "", m
                 if (!context.tooltip.opacity && tooltip.classList.contains("chart-tooltip-linked")) return;
                 hideTooltip();
                 const time = balanceTime; balanceTime = null;
-                renderTooltip(context, tooltip, balance, time);
+                if (id === "price-chart" && priceInputPlanId) {
+                    if (!context.tooltip.opacity) return;
+                    const cursorTime = priceHoverTime ?? context.tooltip.dataPoints?.[0]?.parsed.x;
+                    const quarter = linkedInterval ?? planningQuarterAt(cursorTime);
+                    if (!quarter) return;
+                    renderLinkedTooltip(context.chart, tooltip, quarter, context.tooltip.caretY);
+                    tooltip.classList.remove("chart-tooltip-linked");
+                } else renderTooltip(context, tooltip, balance, time);
             }, callbacks: {
                 title: (items) => !items.length ? "" : items[0].raw.start != null ? `From ${axisTime(items[0].raw.start)} to ${axisTime(items[0].raw.end)}` : axisTime(items[0].parsed.x),
                 label: (item) => `${item.dataset.label}: ${valueText(item.parsed.y, item.dataset.unit)} ${item.dataset.unit}`,
@@ -1387,6 +1402,7 @@ function resetPlanSelection(id) {
     $("overview-status").textContent = id ? "Loading selected plan…" : CONNECTED_MESSAGE;
     $("plan-description").textContent = id ? "Loading selected plan…" : "No plan selected.";
     inspectSteps = [];
+    planningQuarters = new Map();
     clearLinkedInspection();
     clearBatteryPlan();
     for (const chartId of ["plan-chart", "reference-chart", "self-consumption-chart", "energy-chart", "forecast-chart", "price-chart"]) {
@@ -1465,7 +1481,7 @@ function appendIntervalSolarEvidence(plan, step, command, inverterGroups, {comma
         const enabled = command?.devices?.[source]?.enabled;
         const name = plan.comparison_names?.[source] || `Solar ${index + 1}`;
         const production = enabled === false ? "Curtailment requested" : enabled === true ? "Production allowed" : "Fixed production";
-        commands.push(`${name}: ${production}`);
+        commands.push({kind: "solar", id: source, name, text: production});
         const inverter = plan.input_snapshot?.problem?.pv_sources?.find((unit) => unit.source_id === source)?.inverter_id;
         deviceValues.push(intervalCard(name, [["Solar production", production]], inverterGroups.get(inverter)));
     }
@@ -1477,7 +1493,7 @@ function appendIntervalBatteryEvidence({plan, flow, command, intervalIndex, batt
         const name = batteryLabels.get(battery.device_id) || `Battery ${index + 1}`;
         const target = command?.devices?.[battery.device_id];
         const text = target?.mode === "follow_grid_target" ? "Zero on the meter (local regulation)" : target?.power_w != null ? `${Math.round(target.power_w)} W fixed power (+ discharge)` : "No command";
-        commands.push(`${name}: ${text}: Stored: ${number(battery.end_kwh)} kWh`);
+        commands.push({kind: "battery", id: battery.device_id, name, text, stored: battery.end_kwh});
         const inverter = identities.find((unit) => unit.device_id === battery.device_id)?.inverter_id;
         deviceValues.push(intervalCard(name, [["Control", text], ["Stored energy", battery.end_kwh, "kWh"]], inverterGroups.get(inverter)));
         const attribution = plan.battery_flow_attribution?.[intervalIndex]?.[battery.device_id];
@@ -1525,6 +1541,7 @@ function prepareOriginalPlanEvidence(plan, currency) {
         batteryLabels.set(battery.device_id, label);
     });
     inspectSteps = [];
+    planningQuarters = new Map();
     clearLinkedInspection();
     const intervals = plan.input_snapshot?.problem?.intervals || [];
     const inverterGroups = new Map((plan.input_snapshot?.problem?.inverters || []).map((inverter, index) =>
@@ -1551,7 +1568,7 @@ function prepareOriginalPlanEvidence(plan, currency) {
             const energy = task.interval_kwh[i];
             if (energy > 0) {
                 const name = plan.comparison_names?.[task.entity_id] || "Appliance";
-                commands.push(`${name}: ${number(energy)} kWh in this interval: Cycle starts: ${when(task.start)}, ends ${when(task.end)}`);
+                commands.push({kind: "appliance", id: task.entity_id, name, energy});
                 applianceValues.push(intervalCard(name, [["Energy in this interval", energy, "kWh"], ["Cycle starts", when(task.start)], ["Cycle ends", when(task.end)]]));
             }
         }
@@ -1574,6 +1591,7 @@ function prepareOriginalPlanEvidence(plan, currency) {
             balances: []});
     });
     const balances = energyBalances(plan, new Map([...Object.entries(plan.comparison_names || {}), ...batteryLabels]));
+    planningQuarters = planningQuarterReadouts(inspectSteps);
     inspectSteps.forEach((step, index) => {
         step.balances = balances.map((group) => {
             const result = intervalCard(group.inverter ? inverterGroups.get(group.id)?.title || "Inverter" : group.name,

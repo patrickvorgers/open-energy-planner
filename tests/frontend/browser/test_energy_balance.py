@@ -605,3 +605,122 @@ def test_incomplete_first_flow_keeps_metadata_names_gap_and_later_inspection(app
         assert page.evaluate(
             "Chart.getChart(document.getElementById('energy-chart')).data.datasets[0].data.slice(0,2).map(point => point.y)"
         ) == [None, None]
+
+
+@pytest.mark.parametrize("app_site", ["savings"], indirect=True)
+def test_split_quarter_tooltips_summarize_controls_storage_and_original_cash(app_page):
+    """Two frozen tariff fragments share one battery command and one linked chart readout."""
+    page, url = app_page
+    headers = {"Authorization": "Bearer " + TOKEN}
+    plan_id = page.request.get(url + "/v1/plans?limit=1", headers=headers).json()["plans"][0][
+        "plan_id"
+    ]
+    body = page.request.get(
+        url + f"/v1/plans/{plan_id}/comparison?view=plan", headers=headers
+    ).json()
+    plan = body["plan"]
+    physical = physical_plan()
+    problem = physical["input_snapshot"]["problem"]
+    opening, *following = problem["intervals"]
+    start = datetime.fromisoformat(opening["start"])
+    middle = start + timedelta(minutes=5)
+    end = start + timedelta(minutes=15)
+    problem["intervals"] = [
+        {**opening, "duration_h": 1 / 12, "load_kwh": 1 / 3, "pv_kwh": 8 / 3, "sell_price": 0.10},
+        {
+            **opening,
+            "start": middle.isoformat(),
+            "duration_h": 1 / 6,
+            "load_kwh": 2 / 3,
+            "pv_kwh": 16 / 3,
+            "sell_price": 0.40,
+        },
+        *following,
+    ]
+    problem["export_bonuses"] = [{"rates": [0, 0.15, 0, 0]}]
+    plan["input_snapshot"]["problem"] = problem
+    plan["input_snapshot"]["tariff_evidence"] = [
+        {
+            "start": begin.isoformat(),
+            "end": finish.isoformat(),
+            "buy_price": 0.30,
+            "sell_price": sell,
+            "market_price": spot,
+            "price_kind": "published",
+            "native_resolution_minutes": 15,
+        }
+        for begin, finish, sell, spot in ((start, middle, 0.10, 0.04), (middle, end, 0.40, 0.10))
+    ]
+    first, *later = physical["expected_flows"]
+    fragments = []
+    for fraction, stored, exported in ((1 / 3, 5 + 1.52 / 3, 0.2), (2 / 3, 6.52, 0.6)):
+        fragment = deepcopy(first)
+        # Give the fragments different export power while conserving the DC and AC balances.
+        export_delta = exported - first["grid_export"] * fraction
+        fragment["grid_export"] = exported
+        fragment["solar"][0]["used_kwh"] = (
+            first["solar"][0]["used_kwh"] * fraction + export_delta / 0.9
+        )
+        fragment["inverters"][0]["export_kwh"] = (
+            first["inverters"][0]["export_kwh"] * fraction + export_delta
+        )
+        fragment["batteries"][0]["charge_kwh"] *= fraction
+        fragment["batteries"][0]["end_kwh"] = stored
+        fragments.append(fragment)
+    plan["expected_flows"] = [*fragments, *later]
+    plan["appliance_schedule"] = []
+    plan["comparison_names"] = {"battery": "Example battery"}
+    plan["steps"] = [
+        {
+            "start": start.isoformat(),
+            "end": end.isoformat(),
+            "devices": {"battery": {"mode": "fixed_power", "power_w": -6400}},
+        }
+    ]
+    page.clock.set_fixed_time(start)
+    page.route("**/comparison?view=plan", lambda route: route.fulfill(json=body))
+    page.goto(url + "/overview?plan=" + plan_id)
+    page.get_by_label("Installation API token", exact=True).fill(TOKEN)
+    page.get_by_role("button", name="Connect", exact=True).click()
+    expect(page.locator("#overview-status")).to_contain_text("Connected")
+
+    optimizer = page.locator("#plan-chart")
+    optimizer.scroll_into_view_if_needed()
+    optimizer.press("Home")
+    optimizer_tooltip = page.locator("#plan-chart-tooltip")
+    notes = optimizer_tooltip.locator(".chart-tooltip-explanation")
+    expect(notes).to_contain_text("6.52 kWh")
+    assert notes.inner_text().count("fixed power (+ discharge)") == 1
+    expect(notes).not_to_contain_text("5.507 kWh")
+    width = page.viewport_size["width"]
+    page.screenshot(path=f"results/ci/planning-quarter-optimizer-{width}.png")
+
+    prices = page.locator("#price-chart")
+    price_tooltip = page.locator("#price-chart-tooltip")
+    title = optimizer_tooltip.locator(".chart-tooltip-title").text_content()
+    for minutes in (2, 8):
+        position = prices.evaluate(
+            """(canvas, time) => {
+                const chart = Chart.getChart(canvas);
+                return {x: chart.scales.x.getPixelForValue(time), y: chart.chartArea.top + 12};
+            }""",
+            (start + timedelta(minutes=minutes)).timestamp() * 1000,
+        )
+        prices.hover(position=position)
+        expect(price_tooltip.locator(".chart-tooltip-title")).to_have_text(title)
+        expect(price_tooltip.locator(".chart-linked-cost tbody").nth(1)).to_contain_text("0.35")
+    prices.press("Home")
+    expect(price_tooltip.locator(".chart-tooltip-title")).to_have_text(title)
+    exports = price_tooltip.locator(".chart-linked-cost tbody").nth(1)
+    expect(exports.locator("th[scope=row]")).to_have_text(
+        ["Energy", "Effective rate", "Revenue incl. bonus"]
+    )
+    # 0.2 kWh at 0.10 plus 0.6 kWh at 0.55 yields 0.35 EUR.
+    # The volume-weighted effective rate is 0.4375, distinct from the time-weighted 0.40.
+    expect(exports.locator(".chart-tooltip-value")).to_have_text(["0.8", "0.44", "0.35"])
+    rates = price_tooltip.locator(".chart-linked-rates")
+    expect(rates.locator(".chart-tooltip-value")).to_have_text(["0.08", "0.30", "0.30", "0.40"])
+    page.screenshot(path=f"results/ci/planning-quarter-prices-{width}.png")
+    # Arrow navigation advances to the next quarter rather than the 00:05 tariff boundary.
+    prices.press("ArrowRight")
+    expect(page.locator("#inspect-time")).to_have_value("2")
