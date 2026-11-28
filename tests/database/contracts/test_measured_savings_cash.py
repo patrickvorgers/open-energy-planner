@@ -152,20 +152,74 @@ def test_provisional_old_day_replays_without_migrating_its_existing_archive(sett
 
 
 def test_finalized_cash_day_is_immutable_with_its_matching_index(settlement):
-    """A rejected rewrite cannot change either the retained report or the associated cash totals."""
+    """Finalized retries leave progress and cash unchanged. Corrections are rejected."""
     runtime, store, documents, _engine, _plans = settlement
     day = DailySavings(runtime).calculate(
         START.date().isoformat(), "UTC", contract(), START + timedelta(days=7), START
     )
     day["finalized_at"] = (START + timedelta(days=5)).isoformat()
-    store.put_day(day, documents, (START.date() + timedelta(days=1)).isoformat())
+    next_day = (START.date() + timedelta(days=1)).isoformat()
+    store.put_day(day, documents, next_day)
+    store.put_day(day, documents, (START.date() + timedelta(days=2)).isoformat())
+    assert documents.read("daily-progress.json") == {"next": next_day, "timezone": "UTC"}
     altered = deepcopy(day)
     altered["cash"]["savings"] = 99
     with pytest.raises(ValueError, match="immutable"):
-        store.put_day(altered, documents, (START.date() + timedelta(days=1)).isoformat())
+        store.put_day(altered, documents, next_day)
     start, end = day_window(START.date().isoformat(), "UTC")
     assert DailySavings(runtime).overview(start, end)["cash"]["savings"] == 0
     assert store.day(finalized=True) == day
+
+
+def test_cash_overview_rejects_a_period_with_two_historical_currencies(settlement):
+    """Both recorded currencies are available individually without summing unlike amounts."""
+    runtime, store, documents, engine, _plans = settlement
+    daily = DailySavings(runtime)
+    now = START + timedelta(days=2)
+    first_day = START.date().isoformat()
+    first_start, second_start = day_window(first_day, "UTC")
+    second_day = second_start.date().isoformat()
+    _start, end = day_window(second_day, "UTC")
+    report_eur = daily.calculate(first_day, "UTC", contract(), now, START)
+    store.put_day(report_eur, documents, second_day)
+
+    usd_frame = frame(start=second_start)
+    store.put_frames(
+        (usd_frame,),
+        {
+            "bindings": bindings(),
+            "seeds": [],
+            "location": None,
+            "market_identity": {"market_area": "NL", "currency": "USD"},
+        },
+    )
+    with engine.begin() as connection:
+        retain(
+            connection,
+            (
+                PriceSeries(
+                    "next-day-usd",
+                    "NL",
+                    "USD",
+                    second_start,
+                    None,
+                    None,
+                    (PricePoint(second_start, usd_frame.end, 0.4, PriceKind.PUBLISHED, 15),),
+                ),
+            ),
+        )
+    usd_contract = replace(contract(buy="market"), currency="USD")
+    report_usd = daily.calculate(second_day, "UTC", usd_contract, now, START)
+    store.put_day(report_usd, documents, end.date().isoformat())
+
+    eur = daily.overview(first_start, second_start)
+    usd = daily.overview(second_start, end)
+    assert eur["currency"] == "EUR"
+    assert eur["cash"]["actual_cost"] == pytest.approx(0.60)
+    assert usd["currency"] == "USD"
+    assert usd["cash"]["actual_cost"] == pytest.approx(0.40)
+    with pytest.raises(ValueError, match="Choose a period with one historical currency"):
+        daily.overview(first_start, end)
 
 
 def test_final_day_and_cursors_rollback_when_capture_update_fails(settlement, monkeypatch):
