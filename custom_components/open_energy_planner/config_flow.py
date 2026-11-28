@@ -39,6 +39,56 @@ MAX_TCP_PORT = 65535
 IPV6_VERSION = 6
 
 
+def _discovery_target(host, port, properties):
+    """Validate advertisement hints and normalize the pinned HTTPS endpoint."""
+    instance = properties["instance_id"]
+    pin = properties["fingerprint"]
+    if not isinstance(instance, str) or not re.fullmatch(r"[a-f0-9-]{36}", instance):
+        raise ValueError()
+    if not isinstance(pin, str) or not re.fullmatch(r"[a-f0-9]{64}", pin):
+        raise ValueError()
+    if (
+        properties.get("release") != RELEASE
+        or type(port) is not int
+        or not 1 <= port <= MAX_TCP_PORT
+    ):
+        raise ValueError()
+    address = ipaddress.ip_address(host)
+    if address.is_unspecified or address.is_multicast:
+        raise ValueError()
+    url_host = f"[{address}]" if address.version == IPV6_VERSION else address
+    return instance, pin, f"https://{url_host}:{port}"
+
+
+def _can_resume_binding(entry, entries, instance, data):
+    """Require the same enabled pending entry and its saved pin and peer token."""
+    if entry not in entries or entry.disabled_by:
+        return False
+    if entry.unique_id != instance or not entry.data.get("replacement_pending"):
+        return False
+    return (
+        entry.data.get("fingerprint") == data["fingerprint"]
+        and entry.data.get("token") == data["token"]
+    )
+
+
+def _can_replace_binding(entry, data, replacing):
+    """Allow automatic replacement only at the saved Supervisor destination."""
+    if not replacing or not data.get("supervisor"):
+        return True
+    return entry.data.get("supervisor") and data["ui_url"] == entry.data.get("ui_url")
+
+
+def _binding_projection(entry, data, replacing):
+    """Retain a same-installation projection and its pending recovery marker."""
+    if replacing or not entry.data.get("projection_id"):
+        return data
+    connection = {**data, "projection_id": projection_id(entry)}
+    if entry.data.get("replacement_pending"):
+        connection["replacement_pending"] = True
+    return connection
+
+
 class PlannerConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     """Configure a local app connection after verifying its release and installation identity."""
 
@@ -78,36 +128,21 @@ class PlannerConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     async def _discovered(self, host, port, properties, *, automatic_secret=None):
         """Validate identity hints, keep existing certificate pins and deduplicate pending flows."""
         try:
-            instance = properties["instance_id"]
-            pin = properties["fingerprint"]
-            if not isinstance(instance, str) or not re.fullmatch(r"[a-f0-9-]{36}", instance):
-                raise ValueError()
-            if not isinstance(pin, str) or not re.fullmatch(r"[a-f0-9]{64}", pin):
-                raise ValueError()
-            if (
-                properties.get("release") != RELEASE
-                or type(port) is not int
-                or not 1 <= port <= MAX_TCP_PORT
-            ):
-                raise ValueError()
-            address = ipaddress.ip_address(host)
-            if address.is_unspecified or address.is_multicast:
-                raise ValueError()
-            url = f"https://{'[' + str(address) + ']' if address.version == IPV6_VERSION else address}:{port}"
+            instance, pin, url = _discovery_target(host, port, properties)
         except (KeyError, ValueError, TypeError):
             return self.async_abort(reason="invalid_discovery")
         await self.async_set_unique_id(instance)
         existing = self._async_current_entries()
         for entry in existing:
-            if entry.unique_id == instance and entry.data.get("fingerprint"):
-                if entry.data["fingerprint"] != pin:
-                    return self.async_abort(reason="identity_changed")
-                if not getattr(self, "_repair", False) and automatic_secret is None:
-                    if entry.data.get("replacement_pending") and not entry.disabled_by:
-                        return await self._bind(
-                            instance, {**entry.data, "url": url}, reconnect_entry=entry
-                        )
-                    self._abort_if_unique_id_configured(updates={"url": url})
+            if entry.unique_id != instance or not entry.data.get("fingerprint"):
+                continue
+            if entry.data["fingerprint"] != pin:
+                return self.async_abort(reason="identity_changed")
+            if getattr(self, "_repair", False) or automatic_secret is not None:
+                continue
+            if entry.data.get("replacement_pending") and not entry.disabled_by:
+                return await self._bind(instance, {**entry.data, "url": url}, reconnect_entry=entry)
+            self._abort_if_unique_id_configured(updates={"url": url})
         self._pair_url, self._pair_pin, self._pair_instance = url, pin, instance
         self._pair_secret = secrets.token_urlsafe(PAIRING_CREDENTIAL_ENTROPY_BYTES)
         proof = hashlib.sha256(self._pair_secret.encode()).hexdigest()
@@ -132,50 +167,45 @@ class PlannerConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             if info.get("instance_id") != self._pair_instance or info.get("release") != RELEASE:
                 raise ValueError("Discovered identity mismatch")
             secret = self._pair_secret
-            if self._automatic_secret is not None:
+            automatic = self._automatic_secret is not None
+            peer = {
+                "peer_id": await async_instance_id(self.hass),
+                "name": self.hass.config.location_name[:MAX_PEER_NAME_LENGTH] or "Home Assistant",
+            }
+            if automatic:
                 result = await client.request(
                     "POST",
                     "/pair/supervisor",
-                    {
-                        "peer_id": await async_instance_id(self.hass),
-                        "name": self.hass.config.location_name[:MAX_PEER_NAME_LENGTH]
-                        or "Home Assistant",
-                        "secret": self._automatic_secret,
-                    },
+                    {**peer, "secret": self._automatic_secret},
                 )
-                self._pair_result = {
-                    "url": self._pair_url,
-                    "token": result["token"],
-                    "fingerprint": self._pair_pin,
-                    "ui_url": info["ui_url"],
-                    "supervisor": True,
-                }
-                return
-            pending = await client.request(
-                "POST",
-                "/pair/request",
-                {
-                    "peer_id": await async_instance_id(self.hass),
-                    "name": self.hass.config.location_name[:MAX_PEER_NAME_LENGTH]
-                    or "Home Assistant",
-                    "secret": secret,
-                },
-            )
-            for _ in range(MAX_CONSENT_POLLS):
-                result = await client.request(
-                    "POST", "/pair/claim", {"request_id": pending["request_id"], "secret": secret}
-                )
-                if result.get("status") == "approved":
-                    self._pair_result = {
-                        "url": self._pair_url,
-                        "token": result["token"],
-                        "fingerprint": self._pair_pin,
-                        "ui_url": info["ui_url"],
-                    }
+            else:
+                result = await self._claim_app_consent(client, peer, secret)
+                if result is None:
                     return
-                await asyncio.sleep(DISCOVERY_RETRY_SECONDS)
+            paired = {
+                "url": self._pair_url,
+                "token": result["token"],
+                "fingerprint": self._pair_pin,
+                "ui_url": info["ui_url"],
+            }
+            if automatic:
+                paired["supervisor"] = True
+            self._pair_result = paired
         except (ClientError, TimeoutError, ValueError, KeyError):
             logging.getLogger(__name__).debug("App pairing failed", exc_info=True)
+
+    @staticmethod
+    async def _claim_app_consent(client, peer, secret):
+        """Poll the exact standalone request until app approval or the retry limit."""
+        pending = await client.request("POST", "/pair/request", {**peer, "secret": secret})
+        for _ in range(MAX_CONSENT_POLLS):
+            result = await client.request(
+                "POST", "/pair/claim", {"request_id": pending["request_id"], "secret": secret}
+            )
+            if result.get("status") == "approved":
+                return result
+            await asyncio.sleep(DISCOVERY_RETRY_SECONDS)
+        return None
 
     async def async_step_pairing(self, user_input=None):
         """Wait without another confirmation, then bind or migrate the existing installation entry."""
@@ -223,13 +253,8 @@ class PlannerConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         async with lock:
             manager = self.hass.config_entries
             entries = manager.async_entries(DOMAIN, include_ignore=False)
-            if reconnect_entry is not None and (
-                reconnect_entry not in entries
-                or reconnect_entry.disabled_by
-                or reconnect_entry.unique_id != instance
-                or not reconnect_entry.data.get("replacement_pending")
-                or reconnect_entry.data.get("fingerprint") != data["fingerprint"]
-                or reconnect_entry.data.get("token") != data["token"]
+            if reconnect_entry is not None and not _can_resume_binding(
+                reconnect_entry, entries, instance, data
             ):
                 return self.async_abort(reason="pairing_failed")
             if not entries:
@@ -243,18 +268,11 @@ class PlannerConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 (item for item in entries if item.unique_id == instance), entries[0]
             )
             replacing = entry.unique_id != instance
-            if (
-                replacing
-                and data.get("supervisor")
-                and (not entry.data.get("supervisor") or data["ui_url"] != entry.data.get("ui_url"))
-            ):
+            if not _can_replace_binding(entry, data, replacing):
                 return self.async_abort(reason="pairing_failed")
             if not data.get("fingerprint") and entry.data.get("fingerprint"):
                 return self.async_abort(reason="already_configured")
-            if not replacing and entry.data.get("projection_id"):
-                data = {**data, "projection_id": projection_id(entry)}
-                if entry.data.get("replacement_pending"):
-                    data["replacement_pending"] = True
+            data = _binding_projection(entry, data, replacing)
             try:
                 if replacing or len(entries) > 1 or reconnect_entry is not None:
                     # Verify the live app identity before resuming setup or withdrawing devices.
@@ -271,14 +289,8 @@ class PlannerConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     loaded = await self._update_entry(manager, entry, data)
                 if not loaded:
                     return self.async_abort(reason="pairing_failed")
-                if len(entries) > 1 and entry.state is not config_entries.ConfigEntryState.LOADED:
+                if not await self._retire_duplicate_entries(manager, entries, entry):
                     return self.async_abort(reason="pairing_failed")
-                for obsolete in entries:
-                    if obsolete is entry:
-                        continue
-                    if not await manager.async_unload(obsolete.entry_id):
-                        return self.async_abort(reason="pairing_failed")
-                    await manager.async_remove(obsolete.entry_id)
                 if "replacement_pending" in entry.data:
                     completed = dict(entry.data)
                     completed.pop("replacement_pending")
@@ -287,6 +299,19 @@ class PlannerConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 logging.getLogger(__name__).debug("App connection update failed", exc_info=True)
                 return self.async_abort(reason="pairing_failed")
             return self.async_abort(reason="already_configured")
+
+    @staticmethod
+    async def _retire_duplicate_entries(manager, entries, entry):
+        """Remove obsolete entries only after the authoritative replacement is loaded."""
+        if len(entries) > 1 and entry.state is not config_entries.ConfigEntryState.LOADED:
+            return False
+        for obsolete in entries:
+            if obsolete is entry:
+                continue
+            if not await manager.async_unload(obsolete.entry_id):
+                return False
+            await manager.async_remove(obsolete.entry_id)
+        return True
 
     async def _replace_entry(self, manager, entry, instance, data):
         """Replace a verified peer under the entry setup lock and report whether binding can continue."""
