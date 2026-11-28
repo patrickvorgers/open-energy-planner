@@ -185,6 +185,7 @@
 .chart-tooltip .chart-linked-cost th { position:static; padding:3px 4px; border:0; background:none; color:inherit; text-align:start; font-size:inherit; font-weight:400; }
 .chart-linked-cost th[scope="rowgroup"] { font-weight:700; }
 .chart-linked-cost tbody + tbody th[scope="rowgroup"] { padding-top:7px; border-top:1px solid #ffffff40; }
+.chart-tooltip .chart-linked-rates tr:first-child > * { padding-top:7px; border-top:1px solid #ffffff40; }
 .chart-tooltip .series-swatch { margin-right:7px; }
 .chart-tooltip .chart-tooltip-value { text-align:right; font-variant-numeric:tabular-nums; white-space:nowrap; }
 .chart-tooltip .chart-tooltip-unit { white-space:nowrap; }

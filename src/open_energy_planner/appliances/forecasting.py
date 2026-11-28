@@ -376,66 +376,44 @@ def build_components(
     settings_version, selected, histories, options = inputs[:4]
     if not selected:
         return None, None
-    available = {item["entity_id"] for item in options}
-    if not {item["entity_id"] for item in selected} <= available:
-        return None, {"status": "energy_consumer_removed", "devices": []}
-    if configuration.exclusions:
-        return None, {"status": "existing_exclusions_unsupported", "devices": []}
-    if not configuration.terms:
-        return None, {"status": "household_boundary_missing", "devices": []}
-    if {item["entity_id"] for item in selected} & set(configuration.entities):
-        return None, {"status": "consumer_overlaps_household_boundary", "devices": []}
-    try:
-        validate_membership(selected, options)
-    except ValueError:
-        return None, {"status": "energy_consumer_hierarchy_inconsistent", "devices": []}
+    if issue := _component_admission_issue(configuration, selected, options):
+        return None, {"status": issue, "devices": []}
+
     controlled_days = controlled_days or {}
     control_history_unavailable = any("*" in days for days in controlled_days.values())
-    forecasts, records, ready = [], [], []
-    has_unavailable_components = False
-    for item in selected:
-        try:
-            single = DemandConfiguration(
-                configuration.timezone, 0, (EnergyTerm(item["entity_id"], 1),)
-            )
-            samples = DemandReconstructor().reconstruct(single, histories, before=now)
-            model, forecast, selection, baseline_forecast = component(
-                single,
-                samples,
-                temperatures,
-                now,
-                item["weather_sensitive"],
-                documents=documents,
-                learner=item["entity_id"],
-                grid=grid,
-                weather_version=weather_version,
-                replay_windows=replay_windows if item["weather_sensitive"] else calendar_windows,
-                replay_jobs=replay_jobs,
-                replay_evidence=replay_evidence,
-                excluded_dates=("*",)
-                if control_history_unavailable
-                else controlled_days.get(item["entity_id"], ()),
-            )
-        except ValueError:
-            has_unavailable_components = True
-        else:
-            ready.append(item)
-            forecasts.append(forecast)
-            records.append(
-                {
-                    **item,
-                    "status": selection["status"],
-                    "model_selection": selection,
-                    "weather_features_used": bool(getattr(model, "temperature_enabled", False)),
-                    "forecast": forecast_document(forecast),
-                    "baseline_forecast": forecast_document(baseline_forecast),
-                }
-            )
+    forecast_component = partial(
+        component,
+        temperatures=temperatures,
+        now=now,
+        documents=documents,
+        grid=grid,
+        weather_version=weather_version,
+    )
+
+    def forecast_selected(single, samples, item):
+        """Apply the selected meter's replay and control-history policy."""
+        weather_sensitive = item["weather_sensitive"]
+        return forecast_component(
+            single,
+            samples,
+            weather_sensitive=weather_sensitive,
+            learner=item["entity_id"],
+            replay_windows=replay_windows if weather_sensitive else calendar_windows,
+            replay_jobs=replay_jobs,
+            replay_evidence=replay_evidence,
+            excluded_dates=("*",)
+            if control_history_unavailable
+            else controlled_days.get(item["entity_id"], ()),
+        )
+
+    records, forecasts = _separate_ready_consumers(
+        configuration.timezone, selected, histories, now, forecast_selected
+    )
+    separated = [item["entity_id"] for item in records]
     configuration = replace(
         configuration,
         exclusions=tuple(
-            ExcludedLoad(digest(item["entity_id"])[:CONSUMER_ID_HEX_LENGTH], item["entity_id"])
-            for item in ready
+            ExcludedLoad(digest(entity)[:CONSUMER_ID_HEX_LENGTH], entity) for entity in separated
         ),
     )
     try:
@@ -443,45 +421,119 @@ def build_components(
             configuration, (*household_histories, *histories), before=now
         )
         residual_configuration = replace(configuration, exclusions=())
-        _, remaining, residual_selection, baseline_forecast = component(
+        _, remaining, residual_selection, baseline_forecast = forecast_component(
             residual_configuration,
             residual,
-            temperatures,
-            now,
-            True,
-            documents=documents,
+            weather_sensitive=True,
             boundary=configuration.version,
             learner="residual",
-            grid=grid,
-            weather_version=weather_version,
             excluded_dates=("*",)
             if control_history_unavailable
-            else sorted(
-                {
-                    day
-                    for entity, days in controlled_days.items()
-                    if entity not in {item["entity_id"] for item in ready}
-                    for day in days
-                }
-            ),
+            else _residual_controlled_dates(controlled_days, separated),
         )
         baseline = forecast_document(baseline_forecast)
     except ValueError:
-        return None, {
-            "status": "history_or_weather_not_ready",
-            "detail": COMPONENT_FORECAST_UNAVAILABLE,
+        return None, _unavailable_composition(records)
+    return _combine_ready_consumers(
+        residual_configuration,
+        now,
+        weather_version,
+        forecasts,
+        remaining,
+        {
             "devices": records,
-        }
-    if has_unavailable_components and not ready:
-        return None, {
-            "status": "history_or_weather_not_ready",
-            "detail": COMPONENT_FORECAST_UNAVAILABLE,
-            "devices": records,
-            "residual": forecast_document(remaining),
             "residual_baseline": baseline,
             "residual_selection": residual_selection,
             "configuration_version": settings_version,
+        },
+        has_unavailable_components=len(records) != len(selected),
+    )
+
+
+def _component_admission_issue(configuration, selected, options):
+    """Check availability and disjoint ownership in the original admission order."""
+    available = {item["entity_id"] for item in options}
+    selected_entities = {item["entity_id"] for item in selected}
+    if not selected_entities <= available:
+        return "energy_consumer_removed"
+    if configuration.exclusions:
+        return "existing_exclusions_unsupported"
+    if not configuration.terms:
+        return "household_boundary_missing"
+    if selected_entities & set(configuration.entities):
+        return "consumer_overlaps_household_boundary"
+    try:
+        validate_membership(selected, options)
+    except ValueError:
+        return "energy_consumer_hierarchy_inconsistent"
+    return None
+
+
+def _separate_ready_consumers(timezone, selected, histories, now, forecast_selected):
+    """Forecast each ready meter and produce matching records in selection order."""
+    records, forecasts = [], []
+    for item in selected:
+        try:
+            single = DemandConfiguration(timezone, 0, (EnergyTerm(item["entity_id"], 1),))
+            samples = DemandReconstructor().reconstruct(single, histories, before=now)
+            model, forecast, selection, baseline_forecast = forecast_selected(single, samples, item)
+        except ValueError:
+            continue
+        forecasts.append(forecast)
+        records.append(
+            {
+                **item,
+                "status": selection["status"],
+                "model_selection": selection,
+                "weather_features_used": bool(getattr(model, "temperature_enabled", False)),
+                "forecast": forecast_document(forecast),
+                "baseline_forecast": forecast_document(baseline_forecast),
+            }
+        )
+    return records, forecasts
+
+
+def _residual_controlled_dates(controlled_days, separated):
+    """Exclude controlled dates for meters still represented in the residual."""
+    separated_entities = set(separated)
+    return sorted(
+        {
+            day
+            for entity, days in controlled_days.items()
+            if entity not in separated_entities
+            for day in days
         }
+    )
+
+
+def _unavailable_composition(records):
+    """Retain ready devices without emitting a replacement household forecast."""
+    return {
+        "status": "history_or_weather_not_ready",
+        "detail": COMPONENT_FORECAST_UNAVAILABLE,
+        "devices": records,
+    }
+
+
+def _combine_ready_consumers(
+    configuration,
+    now,
+    weather_version,
+    forecasts,
+    remaining,
+    evidence,
+    *,
+    has_unavailable_components,
+):
+    """Restore the household total and attach evidence for the same component boundary."""
+    records = evidence["devices"]
+
+    def residual_document():
+        """Serialize the residual alongside the evidence shared by both outcomes."""
+        return {"devices": records, "residual": forecast_document(remaining), **evidence}
+
+    if has_unavailable_components and not records:
+        return None, {**_unavailable_composition(records), **residual_document()}
     try:
         total = tuple(
             ForecastStep(
@@ -494,10 +546,10 @@ def build_components(
         forecast = DemandForecast(
             # Keep the public household boundary unchanged. Selection family and
             # training identity additionally retain the component configuration.
-            replace(configuration, exclusions=()).version,
+            configuration.version,
             digest(
                 [
-                    settings_version,
+                    evidence["configuration_version"],
                     remaining.training_version,
                     [part.version for part in forecasts],
                 ]
@@ -519,19 +571,11 @@ def build_components(
         return forecast, {
             "status": "partial_history" if has_unavailable_components else "active",
             "detail": COMPONENT_FORECAST_UNAVAILABLE if has_unavailable_components else None,
-            "separated_entities": [item["entity_id"] for item in ready],
-            "devices": records,
-            "residual": forecast_document(remaining),
-            "residual_baseline": baseline,
-            "residual_selection": residual_selection,
-            "configuration_version": settings_version,
+            "separated_entities": [record["entity_id"] for record in records],
+            **residual_document(),
         }
     except ValueError:
-        return None, {
-            "status": "history_or_weather_not_ready",
-            "detail": COMPONENT_FORECAST_UNAVAILABLE,
-            "devices": records,
-        }
+        return None, _unavailable_composition(records)
 
 
 def component_history_ready(configuration, samples):
@@ -539,6 +583,64 @@ def component_history_ready(configuration, samples):
     return len(samples) >= MIN_PROFILE_TRAINING_DAYS * HOURS_PER_DAY and {
         sample.start.astimezone(ZoneInfo(configuration.timezone)).hour for sample in samples
     } == set(range(HOURS_PER_DAY))
+
+
+def _recent_component_kwh(samples, now):
+    """Read the contiguous completed feature window in mean kWh per hour."""
+    # A new measured hour updates a feature without changing the saved fit.
+    measured = samples[-RECENT_HISTORY_HOURS:]
+    if (
+        len(measured) == RECENT_HISTORY_HOURS
+        and measured[-1].start - measured[0].start == timedelta(hours=RECENT_HISTORY_HOURS - 1)
+        and measured[-1].start + timedelta(hours=1) <= now
+    ):
+        return sum(sample.residual_kwh for sample in measured) / RECENT_HISTORY_HOURS
+    return None
+
+
+def _predict_component_candidates(predict_model, fitted, weather, samples, now, *, refresh_recent):
+    """Predict the required baseline and retain each independently usable alternative."""
+    baseline = fitted["baseline"]
+    if not baseline.residual_profile:
+        raise ValueError("At least seven complete days covering every hour are required")
+    models = {"baseline": baseline}
+    forecasts = {"baseline": predict_model(baseline)}
+    recent = _recent_component_kwh(samples, now) if refresh_recent else None
+    for kind in ("ridge", "weather"):
+        if kind not in fitted:
+            continue
+        candidate = fitted[kind]
+        try:
+            prediction = predict_model(candidate, temperatures=weather, recent=recent)
+        except (ValueError, ImportError, OSError):
+            continue
+        models[kind], forecasts[kind] = candidate, prediction
+    return models, forecasts
+
+
+def _queue_component_replay(replay_jobs, family, learner, replay, excluded_dates, selection):
+    """Keep original live days out of the next background replay job."""
+    original_days = {
+        window["day"] for window in selection["windows"] if window.get("source") == "live"
+    }
+    replay_jobs.append((family, learner, partial(replay, (*excluded_dates, *original_days))))
+
+
+def _component_selection_identity(configuration, boundary, models):
+    """Keep comparison evidence tied to the measured boundary and fitted feature sets."""
+    return [
+        configuration.version,
+        boundary,
+        [
+            (
+                name,
+                model.model_id,
+                getattr(model, "temperature_enabled", False),
+                getattr(model, "feature_names", ()),
+            )
+            for name, model in models.items()
+        ],
+    ]
 
 
 def component(
@@ -603,63 +705,20 @@ def component(
         boundary=boundary,
         learner=learner,
     )
-    baseline = fitted["baseline"]
-    if not baseline.residual_profile:
-        raise ValueError("At least seven complete days covering every hour are required")
-    models = {"baseline": baseline}
-    forecasts = {
-        "baseline": predict(
-            configuration, samples, now, baseline, grid=grid, weather_version=weather_version
-        )
-    }
     weather = temperatures if weather_sensitive else ()
-    recent = None
-    if replay_windows is not None:
-        # A new measured hour updates a feature without changing the saved fit.
-        measured = samples[-RECENT_HISTORY_HOURS:]
-        if (
-            len(measured) == RECENT_HISTORY_HOURS
-            and measured[-1].start - measured[0].start == timedelta(hours=RECENT_HISTORY_HOURS - 1)
-            and measured[-1].start + timedelta(hours=1) <= now
-        ):
-            recent = sum(sample.residual_kwh for sample in measured) / RECENT_HISTORY_HOURS
-    for kind in ("ridge", "weather"):
-        if kind not in fitted:
-            continue
-        try:
-            candidate = fitted[kind]
-            prediction = predict(
-                configuration,
-                samples,
-                now,
-                candidate,
-                temperatures=weather,
-                grid=grid,
-                weather_version=weather_version,
-                recent=recent,
-            )
-            models[kind], forecasts[kind] = candidate, prediction
-        except (ValueError, ImportError, OSError):
-            pass
+    predict_model = partial(
+        predict, configuration, samples, now, grid=grid, weather_version=weather_version
+    )
+    models, forecasts = _predict_component_candidates(
+        predict_model, fitted, weather, samples, now, refresh_recent=replay_windows is not None
+    )
     replays = None
     if replay_windows is not None:
         family = replay_family(configuration, models)
         replays = (replay_evidence or {}).get(family, ())
     selection = choose_daily(
         documents,
-        [
-            configuration.version,
-            boundary,
-            [
-                (
-                    name,
-                    model.model_id,
-                    getattr(model, "temperature_enabled", False),
-                    getattr(model, "feature_names", ()),
-                )
-                for name, model in models.items()
-            ],
-        ],
+        _component_selection_identity(configuration, boundary, models),
         configuration.timezone,
         {name: forecast_document(forecast) for name, forecast in forecasts.items()},
         {sample.start: sample.residual_kwh for sample in samples},
@@ -668,24 +727,15 @@ def component(
         replays=replays,
     )
     if replay_jobs is not None and documents is not None and replay_windows and len(models) > 1:
-        original_days = {
-            window["day"] for window in selection["windows"] if window.get("source") == "live"
-        }
-        replay_jobs.append(
-            (
-                family,
-                learner,
-                partial(
-                    replay_scores,
-                    documents,
-                    configuration,
-                    samples,
-                    weather,
-                    replay_windows,
-                    models,
-                    (*excluded_dates, *original_days),
-                ),
-            )
+        _queue_component_replay(
+            replay_jobs,
+            family,
+            learner,
+            partial(
+                replay_scores, documents, configuration, samples, weather, replay_windows, models
+            ),
+            excluded_dates,
+            selection,
         )
     chosen = selection["selected"]
     selection["selected_model"] = models[chosen].model_id

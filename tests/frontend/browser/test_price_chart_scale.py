@@ -1,13 +1,19 @@
 """Exercise zero-based price charts using complete synthetic tariff days and original plan inputs."""
 
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 import pytest
 from playwright.sync_api import expect
 
 from tests.app.contract.support.settings import settings
-from tests.frontend.browser.helpers import TOKEN, discover, open_chart_series
+from tests.frontend.browser.documentation_fixture import START
+from tests.frontend.browser.helpers import (
+    TOKEN,
+    discover,
+    open_chart_series,
+    wait_for_product_reads,
+)
 
 
 @pytest.mark.parametrize("app_site", ["prices"], indirect=True)
@@ -140,3 +146,86 @@ def test_original_plan_price_scale_uses_the_same_zero_reference(app_page, negati
         "() => {const axis=Chart.getChart(document.getElementById('price-chart')).scales.y; return [axis.min,axis.max];}"
     )
     assert bounds == pytest.approx([-0.27, 0.23] if negative else [0, 0.50 / 0.9])
+
+
+@pytest.mark.parametrize("app_site", ["documentation"], indirect=True)
+def test_price_tooltip_uses_the_visible_bonus_rate_for_export_revenue(app_page):
+    """The linked readout uses the selected quarter's rate with normal and missing bonus fallbacks."""
+    page, url = app_page
+    page.clock.set_fixed_time(START)
+    first_quarter = START + timedelta(hours=10)
+
+    def original_plan_with_bonus(route):
+        """Supply frozen synthetic bonus rates without changing the plan's physical flows."""
+        document = route.fetch().json()
+        problem = document["plan"]["input_snapshot"]["problem"]
+        rates = [0.0] * len(problem["intervals"])
+        rates[40:43] = [0.17, 0.0, None]
+        problem["export_bonuses"] = [{"rates": rates}]
+        route.fulfill(json=document)
+
+    page.route("**/v1/plans/*/comparison?view=plan", original_plan_with_bonus)
+    page.goto(url + "/overview")
+    page.get_by_label("Installation API token", exact=True).fill(TOKEN)
+    page.get_by_role("button", name="Connect", exact=True).click()
+    expect(page.locator("#price-chart-legend")).to_contain_text("Export rate incl. bonus")
+    wait_for_product_reads(page)
+    page.get_by_role("button", name="Full period", exact=True).click()
+
+    price_chart = page.locator("#price-chart")
+    price_chart.scroll_into_view_if_needed()
+    tooltip = page.locator("#price-chart-tooltip")
+    export = tooltip.locator("tbody").filter(has_text="Grid export")
+    for offset, (rate, revenue_label, amount) in enumerate(
+        [
+            ("0.25", "Revenue incl. bonus", "0.17"),
+            ("0.08", "Revenue", "0.06"),
+            ("0.08", "Revenue", "0.06"),
+        ]
+    ):
+        midpoint = first_quarter + timedelta(minutes=15 * offset + 7)
+        point = price_chart.evaluate(
+            """(canvas, time) => {
+                const chart = Chart.getChart(canvas);
+                return {x: chart.scales.x.getPixelForValue(time), y: chart.chartArea.top + 15};
+            }""",
+            midpoint.timestamp() * 1000,
+        )
+        if offset == 0 and page.viewport_size["width"] >= 640:
+            price_chart.hover(position=point)
+            expect(export.get_by_text(revenue_label, exact=True)).to_be_visible()
+            expect(tooltip.locator(".chart-linked-rates tr")).to_have_count(4)
+        price_chart.click(position=point)
+        expect(tooltip).to_be_visible()
+        expect(export.get_by_role("row").filter(has_text="Rate").locator("td").first).to_have_text(
+            rate
+        )
+        expect(
+            export.get_by_role("row")
+            .filter(has=page.get_by_text(revenue_label, exact=True))
+            .locator("td")
+            .first
+        ).to_have_text(amount)
+        expect(page.locator("#linked-chart-reading")).to_contain_text(revenue_label)
+        rates = tooltip.locator(".chart-linked-rates")
+        names = ["Spot market rate", "Import rate", "Export rate"]
+        if offset == 0:
+            names.append("Export rate incl. bonus")
+        expect(rates.get_by_role("rowheader")).to_have_text(names)
+        expect(rates.locator(".chart-tooltip-value")).to_have_text(
+            ["0.08", "0.18", "0.08", "0.25"] if offset == 0 else ["0.08", "0.18", "0.08"]
+        )
+        expect(rates.get_by_role("rowheader").first).to_have_css("border-top-width", "1px")
+        if offset <= 1:
+            directory = Path("results/ci/price-tooltip-proposal")
+            directory.mkdir(parents=True, exist_ok=True)
+            name = "with-bonus" if offset == 0 else "without-bonus"
+            tooltip.screenshot(
+                path=str(directory / f"detail-{name}-{page.viewport_size['width']}.png")
+            )
+            page.screenshot(
+                path=str(
+                    directory
+                    / f"{'with-bonus' if offset == 0 else 'without-bonus'}-{page.viewport_size['width']}.png"
+                )
+            )

@@ -371,7 +371,8 @@ changes do not rewrite the displayed plan's saved rates.
 With a plan selected, Price inputs sits directly below the Optimizer balance with
 matching time bounds and plot edges. A shared cursor uses the displayed quarter
 boundaries. The tooltip sums gross grid import and export and their cash value
-across the original contract segments, before export bonus and battery valuation.
+across the original contract segments, applying eligible export rates before the
+bonus volume cap and excluding battery valuation.
 The detailed inspector retains the original interval boundaries. The Optimizer
 shows one command summary per device and the recorded battery end state when it
 coincides with the covered quarter end. The price

@@ -11,20 +11,23 @@ function coveredSum(parts, valueOf) {
 }
 
 /** Use frozen rates for each fragment before combining cash and energy. */
-function quarterSettlement(parts, energyKey, rateKey) {
+function quarterSettlement(parts, energyKey, rateOf) {
     const energy = coveredSum(parts, step => step[energyKey]);
-    const rates = new Set(parts.map(({step}) => step[rateKey]));
+    const rates = new Set(parts.map(({step}) => rateOf(step)));
     const cost = coveredSum(parts, step => {
-        const energy = step[energyKey], rate = step[rateKey];
+        const energy = step[energyKey], rate = rateOf(step);
         return Number.isFinite(energy) && Number.isFinite(rate) ? energy * rate : null;
     });
-    const rate = rates.size === 1 ? parts[0].step[rateKey] : energy > 0 && cost != null ? cost / energy : null;
+    const rate = rates.size === 1 ? rateOf(parts[0].step) : energy > 0 && cost != null ? cost / energy : null;
     return {energy, rate, cost, varies: rates.size > 1};
 }
 
 /** Average a displayed price across the covered time without changing settlement. */
-function meanRate(parts, key, duration) {
-    const weighted = coveredSum(parts, step => Number.isFinite(step[key]) ? step[key] * (step.end - step.start) : null);
+function meanRate(parts, rateOf, duration) {
+    const weighted = coveredSum(parts, step => {
+        const rate = rateOf(step);
+        return Number.isFinite(rate) ? rate * (step.end - step.start) : null;
+    });
     return weighted == null ? null : weighted / duration;
 }
 
@@ -52,6 +55,10 @@ function quarterCommands(parts, coveredEnd) {
     }));
 }
 
+const importRate = step => step.buyRate;
+const baseExportRate = step => step.sellRate;
+const exportRate = step => step.exportWithBonus ?? step.sellRate;
+
 /** Prepare one display readout per UTC quarter while retaining actual coverage at plan edges. */
 export function planningQuarterReadouts(steps) {
     const partsByStart = new Map();
@@ -68,15 +75,20 @@ export function planningQuarterReadouts(steps) {
         const coveredStart = parts[0].start, coveredEnd = parts.at(-1).end;
         const contiguous = parts.every((part, index) => !index || part.start === parts[index - 1].end);
         const provenance = new Set(parts.map(({step}) => step.priceStatus));
+        const includesBonus = parts.some(({step}) => Number.isFinite(step.exportWithBonus) && step.exportWithBonus !== step.sellRate);
+        const duration = coveredEnd - coveredStart;
         return [start, {
             start, end: start + QUARTER_MILLISECONDS, coveredStart, coveredEnd,
             currency: parts[0].step.currency, firstStep: parts[0].step,
             priceStatus: contiguous && provenance.size === 1 ? parts[0].step.priceStatus
                 : "Market rate provenance varies within the covered quarter",
-            spotRate: contiguous ? meanRate(parts, "spotRate", coveredEnd - coveredStart) : null,
-            bonusRate: contiguous ? meanRate(parts, "bonusRate", coveredEnd - coveredStart) : null,
-            imports: contiguous ? quarterSettlement(parts, "gridImport", "buyRate") : {},
-            exports: contiguous ? quarterSettlement(parts, "gridExport", "sellRate") : {},
+            spotRate: contiguous ? meanRate(parts, step => step.spotRate, duration) : null,
+            buyRate: contiguous ? meanRate(parts, importRate, duration) : null,
+            sellRate: contiguous ? meanRate(parts, baseExportRate, duration) : null,
+            bonusRate: contiguous && includesBonus ? meanRate(parts, exportRate, duration) : null,
+            includesBonus,
+            imports: contiguous ? quarterSettlement(parts, "gridImport", importRate) : {},
+            exports: contiguous ? quarterSettlement(parts, "gridExport", exportRate) : {},
             commands: contiguous ? quarterCommands(parts, coveredEnd) : [],
         }];
     }));

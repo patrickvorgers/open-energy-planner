@@ -34,6 +34,7 @@ def test_unusable_activity_context_is_omitted(value):
         "x" * 129,
         "https://example.invalid",
         "../other",
+        "plan-é",
         "bad\nidentity",
         "x?token=private",
     ],
@@ -52,6 +53,7 @@ def test_activity_plan_identity_rejects_unsafe_navigation_inputs(identity):
         ("2026-10-25T12:00:00+00:00", "2026-10-25T12:00:00+00:00"),
         ("2026-10-25T13:00:00+00:00", "2026-10-25T12:00:00+00:00"),
         ("invalid", "2026-10-25T13:00:00+00:00"),
+        ("0001-01-01T00:00:00+01:00", "2026-10-25T13:00:00+00:00"),
         ("x" * 41, "2026-10-25T13:00:00+00:00"),
     ],
 )
@@ -72,6 +74,23 @@ def test_invalid_plan_context_keeps_subject_without_unknown_strategy(generated):
             "plan_strategy": "PRIVATE_STRATEGY",
         }
     ) == {"label": "Archived plan"}
+
+
+def test_waiting_range_is_independent_of_source_range_and_plan_timestamp():
+    """A valid waiting range survives unusable source and plan timestamps."""
+    assert public_context(
+        {
+            "start": "invalid",
+            "end": "2026-10-25T13:00:00+00:00",
+            "waiting_start": "2026-10-25T01:00:00+02:00",
+            "waiting_end": "2026-10-25T03:00:00+01:00",
+            "plan_generated_at": "invalid",
+            "plan_strategy": "minimize consumption",
+        }
+    ) == {
+        "waiting_start": "2026-10-24T23:00:00+00:00",
+        "waiting_end": "2026-10-25T02:00:00+00:00",
+    }
 
 
 def test_plan_context_never_publishes_unknown_strategy_values():
@@ -158,7 +177,12 @@ def test_replay_atomic_subscription_reset_and_detached_snapshots(tmp_path):
                 events.availability("prices", Health.AVAILABLE, str(index))
             assert events.changes(cursor)["reset"]
             assert events.changes("another-process:1")["reset"]
-            assert (await events.subscribe(events.cursor, timeout=0.001))["events"] == []
+            current = events.cursor
+            assert await events.subscribe(current, timeout=0.001) == {
+                "cursor": current,
+                "reset": False,
+                "events": [],
+            }
         finally:
             repository.close()
 

@@ -637,6 +637,7 @@ def test_split_quarter_tooltips_summarize_controls_storage_and_original_cash(app
         },
         *following,
     ]
+    problem["export_bonuses"] = [{"rates": [0, 0.15, 0, 0]}]
     plan["input_snapshot"]["problem"] = problem
     plan["input_snapshot"]["tariff_evidence"] = [
         {
@@ -652,11 +653,17 @@ def test_split_quarter_tooltips_summarize_controls_storage_and_original_cash(app
     ]
     first, *later = physical["expected_flows"]
     fragments = []
-    for fraction, stored in ((1 / 3, 5 + 1.52 / 3), (2 / 3, 6.52)):
+    for fraction, stored, exported in ((1 / 3, 5 + 1.52 / 3, 0.2), (2 / 3, 6.52, 0.6)):
         fragment = deepcopy(first)
-        fragment["grid_export"] *= fraction
-        fragment["solar"][0]["used_kwh"] *= fraction
-        fragment["inverters"][0]["export_kwh"] *= fraction
+        # Give the fragments different export power while conserving the DC and AC balances.
+        export_delta = exported - first["grid_export"] * fraction
+        fragment["grid_export"] = exported
+        fragment["solar"][0]["used_kwh"] = (
+            first["solar"][0]["used_kwh"] * fraction + export_delta / 0.9
+        )
+        fragment["inverters"][0]["export_kwh"] = (
+            first["inverters"][0]["export_kwh"] * fraction + export_delta
+        )
         fragment["batteries"][0]["charge_kwh"] *= fraction
         fragment["batteries"][0]["end_kwh"] = stored
         fragments.append(fragment)
@@ -701,15 +708,18 @@ def test_split_quarter_tooltips_summarize_controls_storage_and_original_cash(app
         )
         prices.hover(position=position)
         expect(price_tooltip.locator(".chart-tooltip-title")).to_have_text(title)
-        expect(price_tooltip.locator(".chart-linked-cost tbody").last).to_contain_text("0.24")
+        expect(price_tooltip.locator(".chart-linked-cost tbody").nth(1)).to_contain_text("0.35")
     prices.press("Home")
     expect(price_tooltip.locator(".chart-tooltip-title")).to_have_text(title)
-    exports = price_tooltip.locator(".chart-linked-cost tbody").last
+    exports = price_tooltip.locator(".chart-linked-cost tbody").nth(1)
     expect(exports.locator("th[scope=row]")).to_have_text(
-        ["Energy", "Effective rate", "Revenue before bonus"]
+        ["Energy", "Effective rate", "Revenue incl. bonus"]
     )
-    expect(exports.locator(".chart-tooltip-value")).to_have_text(["0.8", "0.30", "0.24"])
-    expect(price_tooltip).to_contain_text("Mean spot market rate: 0.08 EUR/kWh")
+    # 0.2 kWh at 0.10 plus 0.6 kWh at 0.55 yields 0.35 EUR.
+    # The volume-weighted effective rate is 0.4375, distinct from the time-weighted 0.40.
+    expect(exports.locator(".chart-tooltip-value")).to_have_text(["0.8", "0.44", "0.35"])
+    rates = price_tooltip.locator(".chart-linked-rates")
+    expect(rates.locator(".chart-tooltip-value")).to_have_text(["0.08", "0.30", "0.30", "0.40"])
     page.screenshot(path=f"results/ci/planning-quarter-prices-{width}.png")
     # Arrow navigation advances to the next quarter rather than the 00:05 tariff boundary.
     prices.press("ArrowRight")
