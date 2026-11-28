@@ -228,13 +228,15 @@ function balanceTooltipData(chart, {dataPoints, interval: pinnedInterval}, time)
     const interval = bars[0]?.raw ?? optimizerQuarter(chart, time) ?? pinnedInterval;
     return interval ? {items: bars, interval} : pointReadout;
 }
-/** Show plan cash flows before bonus and battery valuation. Missing evidence remains unknown. */
-function linkedCostTable({gridImport, gridExport, buyRate, sellRate, currency}) {
+/** Show interval cash estimates using the original plan rates. */
+function linkedCostTable({gridImport, gridExport, buyRate, sellRate, exportWithBonus, currency}) {
+    const exportRate = exportWithBonus ?? sellRate;
+    const revenueLabel = exportRate !== sellRate ? "Revenue incl. bonus" : "Revenue before bonus";
     const table = document.createElement("table");
     table.className = "chart-linked-cost";
     for (const [label, energy, rate, amountLabel] of [
         ["Grid import", gridImport, buyRate, "Cost"],
-        ["Grid export", gridExport, sellRate, "Revenue before bonus"],
+        ["Grid export", gridExport, exportRate, revenueLabel],
     ]) {
         const group = table.createTBody();
         const heading = document.createElement("th");
@@ -1346,7 +1348,7 @@ function intervalContractRates({plan, bonusRules, index, start, end, prices, tar
     }
     const buyRate = tariff ? tariff.buy_price : prices.buy_price;
     const sellRate = tariff ? tariff.sell_price : prices.sell_price;
-    return {buyRate, sellRate, rankedExportRate: bonusRules.length ? exportWithBonus : sellRate};
+    return {buyRate, sellRate, exportWithBonus, rankedExportRate: bonusRules.length ? exportWithBonus : sellRate};
 }
 
 /** Clear display state before reading a different plan or the live price preview. */
