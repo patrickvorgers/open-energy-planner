@@ -80,19 +80,7 @@ class ContractBasisSource:
         problem = future.problem
         if problem.export_bonuses:
             raise InputsUnavailable("unsupported_contract_bonus")
-        end = problem.intervals[-1].start + timedelta(hours=problem.intervals[-1].duration_h)
-        if not now < end <= now + timedelta(hours=PLANNING_HORIZON_HOURS):
-            raise InputsUnavailable("unsupported_forecast_horizon")
-        try:
-            timeline = prices.timeline(
-                now,
-                market_area=contract.market_area,
-                currency=contract.currency,
-                hours=(end - now).total_seconds() / SECONDS_PER_HOUR,
-            )
-            evidence = TariffCalculator().calculate(timeline, contract)
-        except (ValueError, TypeError, OverflowError) as error:
-            raise InputsUnavailable("contract_or_market_prices_invalid") from error
+        timeline, evidence = _command_tariffs(prices, contract, problem.intervals, now)
         location = report.location if report else None
         compiler = BonusCompiler()
         try:
@@ -105,42 +93,9 @@ class ContractBasisSource:
             raise InputsUnavailable("bonus_window_unavailable") from error
         edges.update(item.start for item in evidence)
         edges.update(item.end for item in evidence)
-        intervals, used = [], []
-        for step in problem.intervals:
-            left = max(now, step.start)
-            right = min(timeline.covered_until, step.start + timedelta(hours=step.duration_h))
-            if left >= right:
-                continue
-            boundaries = sorted({left, right, *(edge for edge in edges if left < edge < right)})
-            group = step.control_group or f"{step.start.isoformat()}:{step.duration_h}"
-            for begin, until in pairwise(boundaries):
-                price = next(
-                    (item for item in evidence if item.start <= begin and item.end >= until), None
-                )
-                if price is None:
-                    raise InputsUnavailable("tariff_coverage_gap")
-                duration = (until - begin).total_seconds() / SECONDS_PER_HOUR
-                intervals.append(
-                    replace(
-                        step,
-                        start=begin,
-                        duration_h=duration,
-                        buy_price=price.buy_price,
-                        sell_price=price.sell_price,
-                        load_kwh=step.load_kwh * duration / step.duration_h,
-                        pv_kwh=step.pv_kwh * duration / step.duration_h,
-                        pv_sources=tuple(
-                            (key, value * duration / step.duration_h)
-                            for key, value in step.pv_sources
-                        ),
-                        control_group=group,
-                    )
-                )
-                used.append(replace(price, start=begin, end=until))
-                if len(intervals) > MAX_BILLING_SEGMENTS:
-                    raise InputsUnavailable("too_many_billing_segments")
-        if not intervals or intervals[0].start != now:
-            raise InputsUnavailable("tariff_coverage_gap")
+        intervals, used = _apply_billing_edges(
+            problem.intervals, timeline.covered_until, evidence, edges, now
+        )
         book = self.counters()
         try:
             bonus_rules, bonus_evidence = compiler.compile(
@@ -152,65 +107,13 @@ class ContractBasisSource:
                 reason if reason.startswith("bonus_") else "bonus_rules_invalid"
             ) from error
         priced = replace(problem, intervals=tuple(intervals), export_bonuses=bonus_rules)
-        terminal_tariffs = []
+        terminal_tariffs = ()
         if priced.batteries:
-            planning_end = intervals[-1].start + timedelta(hours=intervals[-1].duration_h)
-            extended = prices.timeline(
-                now,
-                market_area=contract.market_area,
-                currency=contract.currency,
-                hours=(planning_end - now).total_seconds() / SECONDS_PER_HOUR
-                + TERMINAL_VALUATION_HOURS,
-            )
-            for entry in extended.entries:
-                if entry.end <= planning_end:
-                    continue
-                entry = replace(entry, start=max(entry.start, planning_end))
-                try:
-                    additional = TariffCalculator().calculate(
-                        PriceTimeline(
-                            entry.start,
-                            entry.end,
-                            contract.market_area,
-                            contract.currency,
-                            (entry,),
-                        ),
-                        contract,
-                    )
-                except (ValueError, TypeError, OverflowError):
-                    # Optional future valuation must not make covered commands
-                    # unusable when later contract periods are not configured.
-                    break
-                terminal_tariffs.extend(additional)
-            priced = replace(priced, terminal_valuations=derive(priced, tuple(terminal_tariffs)))
-        used_versions = {item.source_version for item in (*used, *terminal_tariffs)}
-        # Coverage and provider expiry bound commands. The next planning tick is not data expiry.
-        deadlines = [future.valid_until]
-        deadlines.extend(
-            source.expires_at
-            for source in prices.series
-            if source.version in used_versions and source.expires_at is not None
-        )
-        # Issue-time precedence can change selected rates without changing the
-        # source cache's semantic version. Retain that selection, but exclude
-        # receipt-only hashes and moving boundaries between equivalent tariffs.
-        # Lead buckets and control steps may split the same rate as time advances.
-        selected = []
-        for item in (*used, *terminal_tariffs):
-            identity = (
-                item.market_price,
-                item.buy_price,
-                item.sell_price,
-                item.price_kind,
-                item.native_resolution_minutes,
-                item.source_id,
-                item.period_index,
-            )
-            segment = (item.end.isoformat(), *identity)
-            if selected and selected[-1][1:] == identity:
-                selected[-1] = segment
-            else:
-                selected.append(segment)
+            terminal_tariffs = _terminal_tariffs(prices, contract, intervals, now)
+            priced = replace(priced, terminal_valuations=derive(priced, terminal_tariffs))
+        tariffs = (*used, *terminal_tariffs)
+        deadlines = [future.valid_until, *_provider_expiries(prices.series, tariffs)]
+        selected = _selected_tariff_segments(tariffs)
         version = hashlib.sha256(
             json.dumps(
                 (
@@ -232,3 +135,125 @@ class ContractBasisSource:
             tariff_evidence=tuple(used),
             bonus_evidence=bonus_evidence,
         )
+
+
+def _command_tariffs(prices, contract, intervals, now):
+    """Price only the supported command horizon and keep its coverage separate."""
+    end = intervals[-1].start + timedelta(hours=intervals[-1].duration_h)
+    if not now < end <= now + timedelta(hours=PLANNING_HORIZON_HOURS):
+        raise InputsUnavailable("unsupported_forecast_horizon")
+    try:
+        timeline = prices.timeline(
+            now,
+            market_area=contract.market_area,
+            currency=contract.currency,
+            hours=(end - now).total_seconds() / SECONDS_PER_HOUR,
+        )
+        evidence = TariffCalculator().calculate(timeline, contract)
+    except (ValueError, TypeError, OverflowError) as error:
+        raise InputsUnavailable("contract_or_market_prices_invalid") from error
+    return timeline, evidence
+
+
+def _apply_billing_edges(source_intervals, covered_until, evidence, edges, now):
+    """Prorate interval energy across priced segments while preserving control groups."""
+    intervals, used = [], []
+    for step in source_intervals:
+        left = max(now, step.start)
+        right = min(covered_until, step.start + timedelta(hours=step.duration_h))
+        if left >= right:
+            continue
+        boundaries = sorted({left, right, *(edge for edge in edges if left < edge < right)})
+        group = step.control_group or f"{step.start.isoformat()}:{step.duration_h}"
+        for begin, until in pairwise(boundaries):
+            price = next(
+                (item for item in evidence if item.start <= begin and item.end >= until), None
+            )
+            if price is None:
+                raise InputsUnavailable("tariff_coverage_gap")
+            duration = (until - begin).total_seconds() / SECONDS_PER_HOUR
+            intervals.append(
+                replace(
+                    step,
+                    start=begin,
+                    duration_h=duration,
+                    buy_price=price.buy_price,
+                    sell_price=price.sell_price,
+                    load_kwh=step.load_kwh * duration / step.duration_h,
+                    pv_kwh=step.pv_kwh * duration / step.duration_h,
+                    pv_sources=tuple(
+                        (key, value * duration / step.duration_h) for key, value in step.pv_sources
+                    ),
+                    control_group=group,
+                )
+            )
+            used.append(replace(price, start=begin, end=until))
+            if len(intervals) > MAX_BILLING_SEGMENTS:
+                raise InputsUnavailable("too_many_billing_segments")
+    if not intervals or intervals[0].start != now:
+        raise InputsUnavailable("tariff_coverage_gap")
+    return intervals, used
+
+
+def _terminal_tariffs(prices, contract, intervals, now):
+    """Price the usable post-horizon prefix without making covered commands depend on it."""
+    planning_end = intervals[-1].start + timedelta(hours=intervals[-1].duration_h)
+    extended = prices.timeline(
+        now,
+        market_area=contract.market_area,
+        currency=contract.currency,
+        hours=(planning_end - now).total_seconds() / SECONDS_PER_HOUR + TERMINAL_VALUATION_HOURS,
+    )
+    tariffs = []
+    for entry in extended.entries:
+        if entry.end <= planning_end:
+            continue
+        entry = replace(entry, start=max(entry.start, planning_end))
+        try:
+            additional = TariffCalculator().calculate(
+                PriceTimeline(
+                    entry.start,
+                    entry.end,
+                    contract.market_area,
+                    contract.currency,
+                    (entry,),
+                ),
+                contract,
+            )
+        except (ValueError, TypeError, OverflowError):
+            # Later contract periods may be unconfigured even though commands are fully priced.
+            break
+        tariffs.extend(additional)
+    return tuple(tariffs)
+
+
+def _selected_tariff_segments(tariffs):
+    """Represent effective selection without receipt hashes or moving equal-price boundaries."""
+    # Issuance precedence can change the effective rates without changing the cache's version.
+    selected = []
+    for item in tariffs:
+        identity = (
+            item.market_price,
+            item.buy_price,
+            item.sell_price,
+            item.price_kind,
+            item.native_resolution_minutes,
+            item.source_id,
+            item.period_index,
+        )
+        segment = (item.end.isoformat(), *identity)
+        if selected and selected[-1][1:] == identity:
+            selected[-1] = segment
+        else:
+            selected.append(segment)
+    return selected
+
+
+def _provider_expiries(series, tariffs):
+    """Find expiries of sources whose evidence was used, independent of planning ticks."""
+    used_versions = {item.source_version for item in tariffs}
+    return (
+        source.expires_at
+        for source in series
+        if source.version in used_versions and source.expires_at is not None
+    )
