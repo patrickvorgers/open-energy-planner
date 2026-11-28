@@ -33,6 +33,111 @@ async function refreshEvidence() {
     finally { evidenceRefreshing = false; }
 }
 pollApplianceEvidence(refreshEvidence);
+/** Confirm cancellation against the task represented by this card. */
+function cancelPlanningButton(option, task) {
+    const cancel = node("button", "Cancel planning"); cancel.type = "button"; cancel.className = "secondary";
+    cancel.onclick = async () => {
+        if (cancel.disabled || !await confirmAction({title: "Cancel appliance planning?", message: `${option.name || option.entity_id} will no longer be scheduled for this request.\n\nThis does not stop the physical appliance or report that its cycle has completed. Home Assistant and the appliance remain responsible for physical control.`, confirmLabel: "Cancel planning"})) return;
+        if (!cancel.isConnected) {
+            find("status").textContent = `${option.name || option.entity_id}: Information was refreshed while confirmation was open. Review the current task, then choose Cancel planning again if needed.`;
+            return;
+        }
+        if (cancel.disabled) return;
+        cancel.disabled = true;
+        try { await api("v1/appliances/cancel", {entity_id: option.entity_id, task_id: task.id}); await load(); }
+        catch { find("status").textContent = `${option.name || option.entity_id}: Cancellation could not be confirmed. Choose Refresh task evidence to check the current task before trying again. Physical control remains with Home Assistant.`; }
+        finally { if (cancel.isConnected) cancel.disabled = false; }
+    };
+    return cancel;
+}
+
+/** Submit a new task for the appliance represented by this form. */
+function scheduleForm(entityId, device, activeTask) {
+    const form = node("form");
+    const deadline = node("input");
+    const deadlineLabel = node("label", "Finish before (Home Assistant time)");
+    deadline.type = "datetime-local";
+    deadline.required = true;
+    deadlineLabel.append(deadline);
+    form.append(deadlineLabel);
+    const program = node("select"), programLabel = node("label", "Cycle profile");
+    if (device?.additional_profile) {
+        for (const [value, label, profile] of [
+            ["", "Detect after start", null],
+            ["default", "Default profile", device.profile],
+            ["additional", "Additional profile", device.additional_profile],
+        ]) {
+            const choice = node("option", profile ? `${label} (${profileMetrics(profile).minutes} min)` : label);
+            choice.value = value;
+            program.append(choice);
+        }
+        programLabel.append(program);
+        form.append(programLabel);
+    }
+    const submit = node("button", "Appliance is ready");
+    submit.disabled = !device?.shiftable || !device?.profile || Boolean(activeTask);
+    form.append(submit);
+    form.onsubmit = async (event) => {
+        event.preventDefault();
+        submit.disabled = true;
+        try {
+            await api("v1/appliances/tasks", {
+                entity_id: entityId,
+                request_id: identity(),
+                ready_at: new Date().toISOString(),
+                deadline: localInstant(deadline.value),
+                ...(program.value ? {program: program.value} : {}),
+            });
+            await load();
+        } catch (error) {
+            find("status").textContent = error.message;
+            submit.disabled = false;
+        }
+    };
+    return form;
+}
+
+/** Show the current planning and execution state for this task. */
+function appendTaskStatus(card, task) {
+    card.append(node("p", `Task: ${task ? task.status.replaceAll("_", " ") : "None"}.`));
+    if (task) {
+        card.append(node("p", `Finish before: ${when(task.deadline)}: Planned start: ${task.scheduled_start ? when(task.scheduled_start) : "Not scheduled"}.`));
+        if (task.attempt) card.append(node("p", `Execution: ${optionLabel(task.attempt.status)}: Start request expires: ${when(task.attempt.expires_at)}.`));
+    }
+}
+
+/** Keep the task's measured and reported execution events in their received order. */
+function appendExecutionEvidence(card, events) {
+    if (!events?.length) return;
+    const details = node("details");
+    const list = node("ol");
+    details.append(node("summary", "Execution evidence"));
+    for (const event of events) {
+        list.append(node("li", `${when(event.at)}: ${optionLabel(event.event)}: Attempt: ${event.attempt_id}`));
+    }
+    details.append(list);
+    card.append(details);
+}
+
+/** Render one selected appliance and its scheduling controls. */
+function applianceCard(option, device) {
+    const task = device?.task;
+    const activeTask = task && !["completed", "cancelled"].includes(task.status);
+    const card = node("section"); card.className = "chart-card"; card.dataset.applianceEntity = option.entity_id; card.append(node("h2", option.name));
+    const metrics = device?.profile && profileMetrics(device.profile);
+    card.append(node("p", metrics ? `Average cycle: ${metrics.energyKwh.toFixed(2)} kWh, ${metrics.minutes} minutes.` : "Waiting for a completed measured cycle."));
+    const insights = node("a", "View cycle insights");
+    const destination = new URL("appliance-cycles", new URL(document.querySelector('meta[name="oep-api-base"]').content, location.href));
+    destination.hash = new URLSearchParams({entity: device.entity_id}).toString();
+    if (new URL(location.href).searchParams.get("embedded") === "1") destination.searchParams.set("embedded", "1");
+    insights.href = destination.href; card.append(insights);
+    appendTaskStatus(card, task);
+    card.append(scheduleForm(option.entity_id, device, activeTask));
+    if (activeTask) card.append(cancelPlanningButton(option, task));
+    appendExecutionEvidence(card, task?.events);
+    return card;
+}
+
 /**
  * Show selected cycle appliances, excluding persisted charging and thermal meters.
  * Read failures leave existing evidence visible and report status.
@@ -47,52 +152,8 @@ async function load() {
         const permitted = current.devices.filter(device => device.shiftable);
         find("appliance-empty").hidden = Boolean(permitted.length);
         for (const option of consumers.options.filter((item) => permitted.some(device => device.entity_id === item.entity_id))) {
-            const device = current.devices.find((item) => item.entity_id === option.entity_id), task = device?.task;
-            const card = node("section"); card.className = "chart-card"; card.dataset.applianceEntity = option.entity_id; card.append(node("h2", option.name));
-            card.append(node("p", device?.profile ? `Average cycle: ${(profileMetrics(device.profile).energyKwh).toFixed(2)} kWh, ${profileMetrics(device.profile).minutes} minutes.` : "Waiting for a completed measured cycle."));
-            const insights = node("a", "View cycle insights");
-            const destination = new URL("appliance-cycles", new URL(document.querySelector('meta[name="oep-api-base"]').content, location.href));
-            destination.hash = new URLSearchParams({entity: device.entity_id}).toString();
-            if (new URL(location.href).searchParams.get("embedded") === "1") destination.searchParams.set("embedded", "1");
-            insights.href = destination.href; card.append(insights);
-            card.append(node("p", `Task: ${task ? task.status.replaceAll("_", " ") : "None"}.`));
-            if (task) {
-                card.append(node("p", `Finish before: ${when(task.deadline)}: Planned start: ${task.scheduled_start ? when(task.scheduled_start) : "Not scheduled"}.`));
-                if (task.attempt) card.append(node("p", `Execution: ${optionLabel(task.attempt.status)}: Start request expires: ${when(task.attempt.expires_at)}.`));
-            }
-            const form = node("form"), deadline = node("input"), deadlineLabel = node("label", "Finish before (Home Assistant time)"); deadline.type = "datetime-local"; deadline.required = true; deadlineLabel.append(deadline); form.append(deadlineLabel);
-            const program = node("select"), programLabel = node("label", "Cycle profile");
-            if (device?.additional_profile) {
-                for (const [value, label, profile] of [
-                    ["", "Detect after start", null],
-                    ["default", "Default profile", device.profile],
-                    ["additional", "Additional profile", device.additional_profile],
-                ]) {
-                    const choice = node("option", profile ? `${label} (${profileMetrics(profile).minutes} min)` : label);
-                    choice.value = value; program.append(choice);
-                }
-                programLabel.append(program); form.append(programLabel);
-            }
-            const submit = node("button", "Appliance is ready"); submit.disabled = !device?.shiftable || !device?.profile || Boolean(task && !["completed", "cancelled"].includes(task.status)); form.append(submit); card.append(form);
-            form.onsubmit = async (event) => { event.preventDefault(); submit.disabled = true; try { await api("v1/appliances/tasks", {entity_id: option.entity_id, request_id: identity(), ready_at: new Date().toISOString(), deadline: localInstant(deadline.value), ...(program.value ? {program: program.value} : {})}); await load(); } catch (error) { find("status").textContent = error.message; submit.disabled = false; } };
-            if (task && !["completed", "cancelled"].includes(task.status)) {
-                const cancel = node("button", "Cancel planning"); cancel.type = "button"; cancel.className = "secondary";
-                cancel.onclick = async () => {
-                    if (cancel.disabled || !await confirmAction({title: "Cancel appliance planning?", message: `${option.name || option.entity_id} will no longer be scheduled for this request.\n\nThis does not stop the physical appliance or report that its cycle has completed. Home Assistant and the appliance remain responsible for physical control.`, confirmLabel: "Cancel planning"})) return;
-                    if (!cancel.isConnected) {
-                        find("status").textContent = `${option.name || option.entity_id}: Information was refreshed while confirmation was open. Review the current task, then choose Cancel planning again if needed.`;
-                        return;
-                    }
-                    if (cancel.disabled) return;
-                    cancel.disabled = true;
-                    try { await api("v1/appliances/cancel", {entity_id: option.entity_id, task_id: task.id}); await load(); }
-                    catch { find("status").textContent = `${option.name || option.entity_id}: Cancellation could not be confirmed. Choose Refresh task evidence to check the current task before trying again. Physical control remains with Home Assistant.`; }
-                    finally { if (cancel.isConnected) cancel.disabled = false; }
-                };
-                card.append(cancel);
-            }
-            if (task?.events?.length) { const details = node("details"), list = node("ol"); details.append(node("summary", "Execution evidence")); for (const event of task.events) list.append(node("li", `${when(event.at)}: ${optionLabel(event.event)}: Attempt: ${event.attempt_id}`)); details.append(list); card.append(details); }
-            find("appliance-list").append(card);
+            const device = current.devices.find((item) => item.entity_id === option.entity_id);
+            find("appliance-list").append(applianceCard(option, device));
         }
     } catch { find("status").textContent = "Appliance information could not be loaded. Check the connection and try Refresh."; }
 }

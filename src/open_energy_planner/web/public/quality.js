@@ -77,15 +77,11 @@ function devices(data) {
     for (const button of document.querySelectorAll("#quality-subjects button")) button.setAttribute("aria-pressed", String(button.dataset.subject === subject));
 }
 
-/** Plot archived numeric evidence. Null actuals remain gaps instead of measured zeros.
- * Measured bars and forecast lines retain their hourly kWh values. Lines never bridge missing hours.
- * Accessible responsive controls toggle each series independently. Tooltips list each series once.
- * The physical lower bound is zero. Only the upper end receives clearance.
- */
-function graph(source, index, inProgress) {
+/** Identify repeated local times consistently across chart endpoints. */
+function evidenceTimeFor(rows) {
     // Unique instants share occurrence labels across table rows and tooltip endpoints.
     const localHours = new Map(), hourOccurrences = new Map();
-    const instants = [...new Set(source.rows.flatMap(row => [Date.parse(row.start), Date.parse(row.end)]))].sort((left, right) => left - right);
+    const instants = [...new Set(rows.flatMap(row => [Date.parse(row.start), Date.parse(row.end)]))].sort((left, right) => left - right);
     for (const instant of instants) {
         const label = when(instant), hours = localHours.get(label) || [];
         hours.push(instant); localHours.set(label, hours);
@@ -94,11 +90,11 @@ function graph(source, index, inProgress) {
         if (hours.length > 1) hours.forEach((instant, occurrence) => hourOccurrences.set(instant, ` (${occurrence + 1} of ${hours.length})`));
     }
     /** Keep endpoint formatting while identifying repeated local wall times without timezone names. */
-    const evidenceTime = (value, options = {}) => when(value, options) + (hourOccurrences.get(Date.parse(value)) || "");
-    const article = document.createElement("article"), heading = document.createElement("h2"), wrap = document.createElement("div"), canvas = document.createElement("canvas");
-    article.className = "chart-card"; heading.textContent = source.title; article.append(heading);
-    showOriginalSolarModel(article, source, displayedDay.day);
-    const daily = source.daily;
+    return (value, options = {}) => when(value, options) + (hourOccurrences.get(Date.parse(value)) || "");
+}
+
+/** Describe the archived daily totals and whether the measurements can be compared. */
+function renderDailyTotals(article, daily) {
     const totals = document.createElement("dl"); totals.className = "quality-daily quality-summary";
     const complete = daily.measured_kwh != null && !daily.evaluation_issue;
     for (const [label, value] of [
@@ -110,13 +106,18 @@ function graph(source, index, inProgress) {
         term.textContent = label; description.textContent = value; item.append(term, description); totals.append(item);
     }
     article.append(totals);
+}
+
+/** Explain the completeness of the archived measurement intervals. */
+function renderDailyCoverage(article, source, inProgress) {
     const measuredDay = source.coverage.hours > 0 && source.coverage.measured_hours === source.coverage.hours;
     paragraph(article, !inProgress && measuredDay ? `Complete day: ${source.coverage.measured_hours} of ${source.coverage.hours} hours measured.` : `${inProgress ? "Day in progress" : "Incomplete measurements"}: ${source.coverage.measured_hours} of ${source.coverage.hours} hours measured. Daily accuracy waits for complete comparable evidence.`, "quality-coverage");
-    if (daily.evaluation_issue) paragraph(article, daily.evaluation_issue, "balance-warning");
-    canvas.id = `quality-chart-${index}`; canvas.setAttribute("role", "img"); canvas.setAttribute("aria-label", `${source.title}: Original predicted and measured hourly energy`);
-    const plot = document.createElement("div"); plot.className = "chart-plot";
-    wrap.className = "chart-wrap"; wrap.append(canvas); plot.append(wrap); article.append(plot); find("quality-charts").append(article);
-    charts.push(qualityChart(canvas, plot, source, displayedDay, evidenceTime));
+    const issue = source.daily.evaluation_issue;
+    if (issue) paragraph(article, issue, "balance-warning");
+}
+
+/** Compare the original forecast model with alternatives for the same day. */
+function modelComparison(source) {
     const comparison = document.createElement("div"); comparison.className = "table-scroll quality-comparison"; comparison.tabIndex = 0; comparison.setAttribute("role", "region"); comparison.setAttribute("aria-label", "Model comparison for this day");
     const modelsTable = document.createElement("table"), caption = document.createElement("caption"); caption.textContent = "Model comparison for this day"; modelsTable.append(caption);
     const modelHead = document.createElement("tr");
@@ -124,7 +125,27 @@ function graph(source, index, inProgress) {
     const modelHeader = document.createElement("thead"); modelHeader.append(modelHead); modelsTable.append(modelHeader);
     const modelBody = document.createElement("tbody");
     for (const [index, model] of [source, ...(source.alternatives || [])].entries()) {const line = document.createElement("tr"); for (const value of [model.model_label + (index ? "" : ": Original choice"), quantity(model.daily?.predicted_kwh), quantity(model.daily?.error_kwh), quantity(model.metrics.mae_kwh)]) {const cell = document.createElement("td"); cell.textContent = value; line.append(cell);} modelBody.append(line);}
-    modelsTable.append(modelBody); comparison.append(modelsTable); article.append(comparison);
+    modelsTable.append(modelBody); comparison.append(modelsTable);
+    return comparison;
+}
+
+/** Plot archived numeric evidence. Null actuals remain gaps instead of measured zeros.
+ * Measured bars and forecast lines retain their hourly kWh values. Lines never bridge missing hours.
+ * Accessible responsive controls toggle each series independently. Tooltips list each series once.
+ * The physical lower bound is zero. Only the upper end receives clearance.
+ */
+function graph(source, index, inProgress) {
+    const evidenceTime = evidenceTimeFor(source.rows);
+    const article = document.createElement("article"), heading = document.createElement("h2"), wrap = document.createElement("div"), canvas = document.createElement("canvas");
+    article.className = "chart-card"; heading.textContent = source.title; article.append(heading);
+    showOriginalSolarModel(article, source, displayedDay.day);
+    renderDailyTotals(article, source.daily);
+    renderDailyCoverage(article, source, inProgress);
+    canvas.id = `quality-chart-${index}`; canvas.setAttribute("role", "img"); canvas.setAttribute("aria-label", `${source.title}: Original predicted and measured hourly energy`);
+    const plot = document.createElement("div"); plot.className = "chart-plot";
+    wrap.className = "chart-wrap"; wrap.append(canvas); plot.append(wrap); article.append(plot); find("quality-charts").append(article);
+    charts.push(qualityChart(canvas, plot, source, displayedDay, evidenceTime));
+    article.append(modelComparison(source));
     const current = currentRows.get(source.id);
     if (current) renderCurrentModel(article, current, expandedModels.has(source.id));
 }
