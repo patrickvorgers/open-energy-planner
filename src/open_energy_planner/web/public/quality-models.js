@@ -16,23 +16,97 @@ function solarReadiness(choice, training, calibration) {
     return choice.issue && !choice.daily_total_comparison?.ml_held ? "comparison_unavailable" : "active";
 }
 
+/** Add configured solar sources and their current selection and history evidence. */
+function addSolarModelRows(rows, solar) {
+    for (const [index, source] of (solar.configuration?.sources || []).entries()) {
+        const id = source.source_id;
+        const choice = solar.source_selection?.[id];
+        const training = solar.learning?.[id];
+        const calibration = solar.calibration_status?.[id];
+        rows.set(id, {
+            id,
+            scope: "solar",
+            label: solar.source_names?.[id] || `Solar ${index + 1}`,
+            active: solar.source_model_labels?.[id] || solar.source_models?.[id],
+            readiness: solarReadiness(choice, training, calibration),
+            solarSelection: choice,
+            solarLearning: calibration,
+            solarTraining: training,
+            solarWeatherService: solar.weather_service,
+            solarHistory: solar.history_import?.[source.entity_id],
+            solarLearningStart: source.learning_start,
+            issue: solar.history_issues?.[source.entity_id] || solar.feedback_issues?.[source.curtailment_entity_id] || solar.issue,
+        });
+    }
+}
+
+/** Add available device forecasts, then add status rows for selected devices still waiting. */
+function addDeviceModelRows(rows, consumers) {
+    const result = consumers.result;
+    const deviceLabel = id => consumers.options?.find(option => option.entity_id === id)?.name || id;
+    for (const device of result?.devices || []) {
+        const id = device.entity_id;
+        rows.set(id, {
+            id,
+            scope: "devices",
+            label: deviceLabel(id),
+            active: device.forecast.model,
+            readiness: device.status ?? result.status,
+            temperature: device.weather_features_used,
+            weatherLearning: device.weather_learning,
+            dailySelection: device.model_selection,
+        });
+    }
+    for (const selected of consumers.selected || []) {
+        const id = selected.entity_id;
+        if (rows.has(id)) continue;
+        rows.set(id, {
+            id,
+            scope: "devices",
+            label: deviceLabel(id),
+            readiness: result?.status || "waiting_for_history",
+            issue: consumers.history_issues?.[id] || result?.detail || consumers.issue || "Waiting for usable historical evidence",
+        });
+    }
+}
+
+/** Overlay selection evidence by stable ID and keep established names for configured solar sources. */
+function applyModelSelections(rows, selection) {
+    for (const model of selection.models || []) {
+        const household = model.scope === "demand";
+        if (!household && !model.scope?.startsWith("solar:")) continue;
+        const id = household ? "household" : model.scope.slice("solar:".length);
+        if (!id) continue;
+        const current = rows.get(id);
+        rows.set(id, {
+            ...current,
+            id,
+            scope: household ? "household" : "solar",
+            label: household ? model.label : current?.label || model.label,
+            active: model.active_model_label || model.active_model,
+            selection: model,
+        });
+    }
+}
+
 /** Associate current readiness and selection with stable forecast IDs, never historical names. */
 export function currentModelRows(current = {}, selection = {}) {
     const rows = new Map();
-    if (current.household) rows.set("household", {id: "household", scope: "household", label: "Household consumption", active: current.household.model, readiness: current.household.status, issue: current.household.issue, dailySelection: current.household.model_selection});
-    const solar = current.solar || {}, consumers = current.consumers || {};
-    for (const [index, source] of (solar.configuration?.sources || []).entries()) {
-        const choice = solar.source_selection?.[source.source_id], training = solar.learning?.[source.source_id];
-        const readiness = solarReadiness(choice, training, solar.calibration_status?.[source.source_id]);
-        rows.set(source.source_id, {id: source.source_id, scope: "solar", label: solar.source_names?.[source.source_id] || `Solar ${index + 1}`, active: solar.source_model_labels?.[source.source_id] || solar.source_models?.[source.source_id], readiness, solarSelection: choice, solarLearning: solar.calibration_status?.[source.source_id], solarTraining: solar.learning?.[source.source_id], solarWeatherService: solar.weather_service, solarHistory: solar.history_import?.[source.entity_id], solarLearningStart: source.learning_start, issue: solar.history_issues?.[source.entity_id] || solar.feedback_issues?.[source.curtailment_entity_id] || solar.issue});
+    const household = current.household;
+    if (household) {
+        rows.set("household", {
+            id: "household",
+            scope: "household",
+            label: "Household consumption",
+            active: household.model,
+            readiness: household.status,
+            issue: household.issue,
+            dailySelection: household.model_selection,
+        });
     }
-    for (const device of consumers.result?.devices || []) rows.set(device.entity_id, {id: device.entity_id, scope: "devices", label: consumers.options?.find(row => row.entity_id === device.entity_id)?.name || device.entity_id, active: device.forecast.model, readiness: device.status ?? consumers.result.status, temperature: device.weather_features_used, weatherLearning: device.weather_learning, dailySelection: device.model_selection});
-    for (const selected of consumers.selected || []) if (!rows.has(selected.entity_id)) rows.set(selected.entity_id, {id: selected.entity_id, scope: "devices", label: consumers.options?.find(row => row.entity_id === selected.entity_id)?.name || selected.entity_id, readiness: consumers.result?.status || "waiting_for_history", issue: consumers.history_issues?.[selected.entity_id] || consumers.result?.detail || consumers.issue || "Waiting for usable historical evidence"});
-    for (const model of selection.models || []) {
-        const id = model.scope === "demand" ? "household" : model.scope?.startsWith("solar:") ? model.scope.slice("solar:".length) : null;
-        if (!id) continue;
-        rows.set(id, {...rows.get(id), id, scope: model.scope === "demand" ? "household" : "solar", label: model.scope?.startsWith("solar:") ? rows.get(id)?.label || model.label : model.label, active: model.active_model_label || model.active_model, selection: model});
-    }
+    addSolarModelRows(rows, current.solar || {});
+    addDeviceModelRows(rows, current.consumers || {});
+    applyModelSelections(rows, selection);
     return rows;
 }
 
