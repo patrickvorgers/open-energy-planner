@@ -29,6 +29,104 @@ from open_energy_planner.storage.writes import complete_write
 _LOGGER = logging.getLogger(__name__)
 
 
+def _matches_energy_battery(battery, hint):
+    """Prefer Energy's cumulative meter and fall back to SoC or power only for an unbound battery."""
+    if battery.energy_entity == hint["energy_entity"]:
+        return True
+    if battery.energy_entity is not None:
+        return False
+    if hint["soc_entity"] and battery.soc_entity == hint["soc_entity"]:
+        return True
+    return bool(hint["power_entity"] and battery.power_entity == hint["power_entity"])
+
+
+def _validate_energy_membership(physical, pv, terms, hints):
+    """Keep every proposed solar source, battery and household term tied to Energy."""
+    if {source.entity_id for source in pv.sources} != set(hints["solar_sources"]):
+        raise ValueError("Solar sources must match the Energy dashboard")
+    unmatched = list(physical.batteries)
+    for hint in hints["batteries"]:
+        match = next(
+            (battery for battery in unmatched if _matches_energy_battery(battery, hint)), None
+        )
+        if match is None:
+            raise ValueError("Battery sensors must match the Energy dashboard")
+        unmatched.remove(match)
+    if unmatched:
+        raise ValueError("Remove or restore saved batteries absent from Energy")
+    if terms != hints["terms"]:
+        raise ValueError("Use the complete Energy dashboard household balance")
+
+
+def _require_sensor(entities, entity, kind):
+    """Require the selected sensor to have current HA metadata for its measurement role."""
+    item = entities.get(entity, {})
+    units = {"power": ("W", "kW"), "energy": ("Wh", "kWh", "MWh"), "battery": ("%",)}
+    message = "Choose an available sensor of the required type"
+    if item.get("unit") not in units[kind] or item.get("device_class") != kind:
+        raise ValueError(message)
+    if kind == "energy" and item.get("state_class") not in ("total", "total_increasing"):
+        raise ValueError(message)
+
+
+def _validate_setup_sensors(physical, pv, load, catalogue_entities):
+    """Validate all proposed grid, demand, PV and battery sensors before publication."""
+    entities = {item["entity_id"]: item for item in catalogue_entities}
+    _require_sensor(entities, physical.grid_power_entity, "power")
+    for entity in physical.additional_grid_power_entities:
+        _require_sensor(entities, entity, "power")
+    for term in load.terms:
+        _require_sensor(entities, term.entity_id, "energy")
+    if physical.grid_export_entity:
+        _require_sensor(entities, physical.grid_export_entity, "energy")
+    for entity in physical.additional_grid_export_entities:
+        _require_sensor(entities, entity, "energy")
+    for source in pv.sources:
+        _require_sensor(entities, source.entity_id, "energy")
+    for battery in physical.batteries:
+        _require_sensor(entities, battery.soc_entity, "battery")
+        _require_sensor(entities, battery.power_entity, "power")
+
+
+def _validate_setup_converters(physical, pv):
+    """Apply linked-device domain invariants without running a solver or inventing measured SoC."""
+    converters = {inverter.inverter_id: inverter for inverter in pv.inverters}
+    for converter in physical.inverters:
+        if converter.inverter_id in converters and converters[converter.inverter_id] != converter:
+            raise ValueError("Shared inverter definitions disagree")
+        converters[converter.inverter_id] = converter
+    ids = {source.source_id for source in pv.sources}
+    if ids & {battery.device_id for battery in physical.batteries}:
+        raise ValueError("Device identities collide")
+    for battery in physical.batteries:
+        if (
+            any(source.inverter_id == battery.inverter_id for source in pv.sources)
+            and not converters[battery.inverter_id].hybrid
+        ):
+            raise ValueError("PV and storage sharing requires a hybrid converter")
+    InstallationProblem(
+        (
+            Interval(
+                datetime.now(UTC),
+                1,
+                0,
+                0,
+                0,
+                0,
+                pv_sources=tuple((source.source_id, 0) for source in pv.sources),
+            ),
+        ),
+        tuple(converters.values()),
+        (),
+        tuple(
+            PVUnit(source.source_id, source.inverter_id, source.can_curtail)
+            for source in pv.sources
+        ),
+        physical.import_limit_w,
+        physical.export_limit_w,
+    )
+
+
 def register(
     app,
     installation,
@@ -82,32 +180,26 @@ def register(
                 catalogue.current(datetime.now(UTC))["stale"] or request.query.get("refresh") == "1"
             ) and catalogue.requested is None:
                 catalogue.request_refresh()
-            return web.json_response(
-                {
-                    "mode": "home_assistant" if live else "synthetic",
-                    "panel_settings": discovery_handler.panel_settings(),
-                    **setup_definitions(),
-                    "catalogue": catalogue.current(datetime.now(UTC)),
-                    "market_area_options": COUNTRY_BIDDING_AREA_OPTIONS.get(
-                        (catalogue.value or {}).get("country"), ()
-                    ),
-                    "market_area_hint": COUNTRY_BIDDING_AREA_HINTS.get(
-                        catalogue.value.get("country")
-                    )
-                    if catalogue.value
-                    else None,
-                    "devices": catalogue.devices(
-                        installation_catalogue(
-                            installation, solar, live.current_snapshot if live else None
-                        )
-                    ),
-                    "annual_estimate": annual_estimate(
-                        catalogue.value["suggestions"]["terms"], catalogue.value["history"]
-                    )
-                    if catalogue.value
-                    else None,
-                }
-            )
+            return web.json_response(settings_view())
+
+    def settings_view():
+        """Project definitions, current discovery metadata and bounded estimate under the setup lock."""
+        data = catalogue.value
+        country = data.get("country") if data else None
+        return {
+            "mode": "home_assistant" if live else "synthetic",
+            "panel_settings": discovery_handler.panel_settings(),
+            **setup_definitions(),
+            "catalogue": catalogue.current(datetime.now(UTC)),
+            "market_area_options": COUNTRY_BIDDING_AREA_OPTIONS.get(country, ()),
+            "market_area_hint": COUNTRY_BIDDING_AREA_HINTS.get(country),
+            "devices": catalogue.devices(
+                installation_catalogue(installation, solar, live.current_snapshot if live else None)
+            ),
+            "annual_estimate": annual_estimate(data["suggestions"]["terms"], data["history"])
+            if data
+            else None,
+        }
 
     def setup_definitions():
         """Project canonical settings without reading unrelated operational state."""
@@ -133,9 +225,10 @@ def register(
         """Reject a stale form before changing any of its configuration owners."""
         for name, configuration in current_configurations().items():
             expected = configuration.version if configuration is not None else None
-            if (required or "expected_version" in body[name]) and (
-                "expected_version" not in body[name] or body[name]["expected_version"] != expected
-            ):
+            definition = body[name]
+            if not required and "expected_version" not in definition:
+                continue
+            if "expected_version" not in definition or definition["expected_version"] != expected:
                 raise web.HTTPConflict(text="Installation settings changed. Reload before saving")
 
     def validated_setup(body, *, save=False):
@@ -160,108 +253,11 @@ def register(
         catalogue.validate_membership("solar", pv)
         load = parse_demand(body["demand"])
         catalogue.validate_membership("demand", load)
-        hints = current["data"]["suggestions"]
-        if {source.entity_id for source in pv.sources} != set(hints["solar_sources"]):
-            raise ValueError("Solar sources must match the Energy dashboard")
-        unmatched = list(physical.batteries)
-        for hint in hints["batteries"]:
-            match = next(
-                (
-                    battery
-                    for battery in unmatched
-                    if battery.energy_entity == hint["energy_entity"]
-                    or (
-                        battery.energy_entity is None
-                        and (
-                            (hint["soc_entity"] and battery.soc_entity == hint["soc_entity"])
-                            or (
-                                hint["power_entity"]
-                                and battery.power_entity == hint["power_entity"]
-                            )
-                        )
-                    )
-                ),
-                None,
-            )
-            if match is None:
-                raise ValueError("Battery sensors must match the Energy dashboard")
-            unmatched.remove(match)
-        if unmatched:
-            raise ValueError("Remove or restore saved batteries absent from Energy")
-        if body["demand"]["terms"] != current["data"]["suggestions"]["terms"]:
-            raise ValueError("Use the complete Energy dashboard household balance")
-        entities = {
-            entity_item["entity_id"]: entity_item for entity_item in current["data"]["entities"]
-        }
-
-        def sensor(entity, kind):
-            """Require selected sensors to exist in the fresh typed HA catalogue."""
-            item = entities.get(entity, {})
-            units = {"power": ("W", "kW"), "energy": ("Wh", "kWh", "MWh"), "battery": ("%",)}
-            if (
-                item.get("unit") not in units[kind]
-                or item.get("device_class") != kind
-                or (
-                    kind == "energy"
-                    and item.get("state_class") not in ("total", "total_increasing")
-                )
-            ):
-                raise ValueError("Choose an available sensor of the required type")
-
-        sensor(physical.grid_power_entity, "power")
-        for entity in physical.additional_grid_power_entities:
-            sensor(entity, "power")
-        for term in load.terms:
-            sensor(term.entity_id, "energy")
-        if physical.grid_export_entity:
-            sensor(physical.grid_export_entity, "energy")
-        for entity in physical.additional_grid_export_entities:
-            sensor(entity, "energy")
-        for source in pv.sources:
-            sensor(source.entity_id, "energy")
-        for battery in physical.batteries:
-            sensor(battery.soc_entity, "battery")
-            sensor(battery.power_entity, "power")
-        converters = {inverter.inverter_id: inverter for inverter in pv.inverters}
-        for converter in physical.inverters:
-            if (
-                converter.inverter_id in converters
-                and converters[converter.inverter_id] != converter
-            ):
-                raise ValueError("Shared inverter definitions disagree")
-            converters[converter.inverter_id] = converter
-        # Reuse linked-device domain invariants without running a solver or inventing measured SoC.
-        ids = {source_item.source_id for source_item in pv.sources}
-        if ids & {battery_item.device_id for battery_item in physical.batteries}:
-            raise ValueError("Device identities collide")
-        for battery in physical.batteries:
-            if (
-                any(source_item.inverter_id == battery.inverter_id for source_item in pv.sources)
-                and not converters[battery.inverter_id].hybrid
-            ):
-                raise ValueError("PV and storage sharing requires a hybrid converter")
-        InstallationProblem(
-            (
-                Interval(
-                    datetime.now(UTC),
-                    1,
-                    0,
-                    0,
-                    0,
-                    0,
-                    pv_sources=tuple((source_item.source_id, 0) for source_item in pv.sources),
-                ),
-            ),
-            tuple(converters.values()),
-            (),
-            tuple(
-                PVUnit(source_item.source_id, source_item.inverter_id, source_item.can_curtail)
-                for source_item in pv.sources
-            ),
-            physical.import_limit_w,
-            physical.export_limit_w,
+        _validate_energy_membership(
+            physical, pv, body["demand"]["terms"], current["data"]["suggestions"]
         )
-
+        _validate_setup_sensors(physical, pv, load, current["data"]["entities"])
+        _validate_setup_converters(physical, pv)
         return {"installation": physical, "solar": pv, "demand": load}
 
     def save_setup(changes):
@@ -295,6 +291,39 @@ def register(
             demand.restore_committed_configuration()
         if "solar" in changes:
             solar.restore_committed_configuration()
+
+    async def commit_setup(changes):
+        """Publish durable changes and revoke old commands before restoring updated forecasts."""
+        measurement = sources(changes["installation"]) if "installation" in changes else None
+        activated = False
+
+        def activate(_changes):
+            """Revoke obsolete commands before acknowledging the saved settings."""
+            nonlocal activated
+            if measurement is not None:
+                live.install_configuration(measurement)
+            else:
+                live.invalidate(
+                    "demand_forecast_pending"
+                    if "demand" in changes
+                    else "solar_forecast_unavailable"
+                )
+            activated = True
+
+        try:
+            await persist(
+                save_setup,
+                changes,
+                activate,
+                contract_input=measurement is not None,
+                force_replan=False,
+                defer_refresh=True,
+            )
+        finally:
+            if activated and ("solar" in changes or "demand" in changes):
+                cancellation = await complete_write(restore_forecast_settings, changes)
+                if cancellation is not None:
+                    raise cancellation
 
     async def preview(request):
         """Check a prospective setup without writing definitions or running a solver."""
@@ -339,38 +368,7 @@ def register(
                     if previous[name] is None or candidate.version != previous[name].version
                 }
                 if changes:
-                    measurement = (
-                        sources(proposal["installation"]) if "installation" in changes else None
-                    )
-                    activated = False
-
-                    def activate(_changes):
-                        """Revoke obsolete commands before acknowledging the saved settings."""
-                        nonlocal activated
-                        if measurement is not None:
-                            live.install_configuration(measurement)
-                        else:
-                            live.invalidate(
-                                "demand_forecast_pending"
-                                if "demand" in changes
-                                else "solar_forecast_unavailable"
-                            )
-                        activated = True
-
-                    try:
-                        await persist(
-                            save_setup,
-                            changes,
-                            activate,
-                            contract_input=measurement is not None,
-                            force_replan=False,
-                            defer_refresh=True,
-                        )
-                    finally:
-                        if activated and ("solar" in changes or "demand" in changes):
-                            cancellation = await complete_write(restore_forecast_settings, changes)
-                            if cancellation is not None:
-                                raise cancellation
+                    await commit_setup(changes)
                 return web.json_response(
                     {
                         **setup_definitions(),

@@ -222,3 +222,56 @@ def test_setup_preview_validates_optional_export_sensor(tmp_path, kind):
             assert state["installation"] is None
 
     asyncio.run(scenario())
+
+
+def test_setup_save_requires_each_initial_version_before_writing(tmp_path):
+    """A preview may omit versions. A save with a missing or stale owner version changes no settings."""
+
+    async def scenario():
+        """Exercise preview, rejected saves and the valid save through the authenticated setup routes."""
+        token = "setup-test-token-0123456789"
+        headers = {"Authorization": "Bearer " + token}
+        async with TestClient(
+            TestServer(create_app(tmp_path, token, source="home_assistant"))
+        ) as client:
+            catalogue = setup_metadata()
+            response = await client.post("/v1/ha/catalogue", headers=headers, json=catalogue)
+            assert response.status == 200
+            body = {
+                "installation": {
+                    "grid_power_entity": "sensor.grid",
+                    "import_limit_w": 5000,
+                    "export_limit_w": 5000,
+                },
+                "solar": {"sources": [], "inverters": []},
+                "demand": {
+                    "annual_kwh": 3500,
+                    "timezone": "Europe/Amsterdam",
+                    "terms": catalogue["suggestions"]["terms"],
+                    "exclusions": [],
+                },
+            }
+            response = await client.post("/v1/setup/preview", headers=headers, json=body)
+            assert response.status == 200
+            assert await response.json() == {"batteries": 0, "solar_sources": 0, "annual_kwh": 3500}
+
+            body["installation"]["expected_version"] = None
+            body["solar"]["expected_version"] = None
+            response = await client.put("/v1/setup", headers=headers, json=body)
+            assert response.status == 409
+            assert await response.text() == "Installation settings changed. Reload before saving"
+            body["demand"]["expected_version"] = "stale"
+            response = await client.put("/v1/setup", headers=headers, json=body)
+            assert response.status == 409
+            state = await (await client.get("/v1/setup", headers=headers)).json()
+            assert all(state[name] is None for name in body)
+
+            body["demand"]["expected_version"] = None
+            response = await client.put("/v1/setup", headers=headers, json=body)
+            assert response.status == 200
+            saved = await response.json()
+            assert saved["installation"]["import_limit_w"] == 5000
+            assert saved["demand"]["annual_kwh"] == 3500
+            assert saved["solar"]["sources"] == []
+
+    asyncio.run(scenario())
