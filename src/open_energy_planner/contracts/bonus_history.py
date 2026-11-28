@@ -48,6 +48,51 @@ class BaselineRequest:
         }
 
 
+def _relevant_rule_ids(contract, now):
+    """Select bonus rules that can apply now or before the planning horizon ends."""
+    horizon = now + timedelta(hours=PLANNING_HORIZON_HOURS)
+    starts = (
+        rule.effective_from for rule in contract.bonuses if now < rule.effective_from < horizon
+    )
+    return {
+        rule.rule_id
+        for instant in (now, *starts)
+        if (rule := contract.bonus_at(instant)) is not None
+    }
+
+
+def _active_periods(contract, now):
+    """Retain the current period of families whose terms and supplier have started."""
+    return tuple(
+        (identity, versions[0].period_start(now))
+        for identity, versions in BonusCompiler().families(contract).items()
+        if versions[0].effective_from <= now
+        and (versions[0].contract_start is None or versions[0].contract_start <= now)
+    )
+
+
+def _validated_periods(book, entity_id, end):
+    """Only matching statistics with a valid checkpoint can suppress a new history request."""
+    periods = set()
+    for seed in book.seeds:
+        if seed.entity_id != entity_id or seed.statistics is None:
+            continue
+        if seed.statistics.latest_at >= end and not seed.statistics.issue:
+            periods.add((seed.rule_id, seed.period_start))
+    return periods
+
+
+def _validate_history_source(request, history):
+    """Require the requested history identity and component evidence for an aggregate."""
+    if history.entity_id != request.entity_id:
+        raise ValueError("History source changed")
+    components = {entity for entity, _value in history.component_meters}
+    sources = set(request.entity_ids or (request.entity_id,))
+    # The history identity proves a lone source. Aggregates need component evidence too.
+    if (components or len(sources) > 1) and components != sources:
+        raise ValueError("History components changed")
+
+
 class BonusHistory:
     """Request missing references and refresh annual statistics checkpoints outside HA."""
 
@@ -59,43 +104,15 @@ class BonusHistory:
         if not specs or any(not spec.required or spec.quantity != "energy" for spec in specs):
             return None
         entity_id = export_identity(spec.entity_id for spec in specs)
-        horizon = now + timedelta(hours=PLANNING_HORIZON_HOURS)
-        relevant = {
-            rule.rule_id
-            for instant in (
-                now,
-                *(
-                    rule.effective_from
-                    for rule in contract.bonuses
-                    if now < rule.effective_from < horizon
-                ),
-            )
-            if (rule := contract.bonus_at(instant)) is not None
-        }
-        active_periods = tuple(
-            (identity, versions[0].period_start(now))
-            for identity, versions in BonusCompiler().families(contract).items()
-            if versions[0].effective_from <= now
-            and (versions[0].contract_start is None or versions[0].contract_start <= now)
-        )
+        relevant = _relevant_rule_ids(contract, now)
+        active_periods = _active_periods(contract, now)
         periods = tuple(
             (identity, start) for identity, start in active_periods if identity in relevant
         )
         if not periods:
             return None
         end = now.replace(minute=0, second=0, microsecond=0) - timedelta(hours=1)
-        if book and all(
-            any(
-                seed.rule_id == identity
-                and seed.period_start == start
-                and seed.entity_id == entity_id
-                and seed.statistics is not None
-                and seed.statistics.latest_at >= end
-                and not seed.statistics.issue
-                for seed in book.seeds
-            )
-            for identity, start in periods
-        ):
+        if book and _validated_periods(book, entity_id, end).issuperset(periods):
             return None
         if any(start > end or start.minute or start.second for _, start in periods):
             return None
@@ -113,24 +130,13 @@ class BonusHistory:
 
     def derive(self, request, history, book, now):
         """Retain relevant confirmed seeds. Prior periods and removed rules stay in immutable archives."""
-        if history.entity_id != request.entity_id:
-            raise ValueError("History source changed")
-        components = {entity for entity, _value in history.component_meters}
-        sources = set(request.entity_ids or (request.entity_id,))
-        # The history identity proves a lone source. Aggregates need component evidence too.
-        if (components or len(sources) > 1) and components != sources:
-            raise ValueError("History components changed")
+        _validate_history_source(request, history)
         active = set(request.active_periods)
-        seeds = (
-            {
-                (seed.rule_id, seed.period_start): seed
-                for seed in book.seeds
-                if (seed.rule_id, seed.period_start) in active
-                and seed.entity_id == request.entity_id
-            }
-            if book
-            else {}
-        )
+        seeds = {
+            (seed.rule_id, seed.period_start): seed
+            for seed in (book.seeds if book else ())
+            if (seed.rule_id, seed.period_start) in active and seed.entity_id == request.entity_id
+        }
         for identity, start in request.periods:
             used, meter = history.baseline(start, request.end)
             seeds[identity, start] = CounterSeed(
@@ -146,6 +152,18 @@ class BonusHistory:
 
 
 BONUS_DRAFT_LIFETIME = timedelta(minutes=5)
+
+
+def _draft_periods(contract, now):
+    """Find draft periods without letting an invalid reset hide other budget rows."""
+    periods = {}
+    for identity, rules in BonusCompiler().families(contract).items():
+        try:
+            periods[identity] = rules[0].period_start(now)
+        except ValueError:
+            # The budget view reports an invalid reset on its own row.
+            continue
+    return periods
 
 
 class BonusBudgetPreview:
@@ -175,19 +193,14 @@ class BonusBudgetPreview:
         """Merge only relevant current-period seeds. Persisted confirmations override temporary history."""
         if self.contract is None:
             return stored
-        periods = {}
-        for identity, rules in BonusCompiler().families(self.contract).items():
-            try:
-                periods[identity] = rules[0].period_start(now)
-            except ValueError:
-                # An invalid reset remains a per-rule budget issue. Other rows stay readable.
-                continue
-        seeds = {}
+        periods = _draft_periods(self.contract, now)
         books = [book for book in (self.book, stored) if book]
-        for book in books:
-            for seed in book.seeds:
-                if periods.get(seed.rule_id) == seed.period_start:
-                    seeds[seed.rule_id, seed.period_start] = seed
+        seeds = {
+            (seed.rule_id, seed.period_start): seed
+            for book in books
+            for seed in book.seeds
+            if periods.get(seed.rule_id) == seed.period_start
+        }
         return (
             CounterBook(max(book.recorded_at for book in books), tuple(seeds.values()))
             if seeds
