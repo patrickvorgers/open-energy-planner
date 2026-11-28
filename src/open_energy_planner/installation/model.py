@@ -274,6 +274,17 @@ class BatteryState:
             raise ValueError("Calibration hold requires an aware deadline")
 
 
+def _validate_device_work(
+    work: tuple, work_type: type, identity_fields: tuple[str, ...], error_message: str
+) -> None:
+    """Require a typed immutable collection with each dispatch identity used only once."""
+    if not isinstance(work, tuple) or any(not isinstance(item, work_type) for item in work):
+        raise ValueError(error_message)
+    for field in identity_fields:
+        if len({getattr(item, field) for item in work}) != len(work):
+            raise ValueError(error_message)
+
+
 @dataclass(frozen=True)
 class InstallationProblem:
     """A common AC bus with local DC buses. Every converter and battery retains its own hard limits."""
@@ -319,6 +330,13 @@ class InstallationProblem:
         """
         if not isinstance(self.intervals, tuple) or not self.intervals:
             raise ValueError("At least one immutable interval is required")
+        self._validate_export_bonuses()
+        self._validate_time_and_grid_limits()
+        self._validate_work()
+        self._validate_topology()
+
+    def _validate_export_bonuses(self):
+        """Keep immutable bonus rules unique and aligned to the billing intervals."""
         if (
             not isinstance(self.export_bonuses, tuple)
             or len(self.export_bonuses) > MAX_EXPORT_BONUSES
@@ -331,111 +349,120 @@ class InstallationProblem:
             raise ValueError("Export bonuses require aligned billing segments")
         if len({rule.rule_id for rule in self.export_bonuses}) != len(self.export_bonuses):
             raise ValueError("Duplicate export bonus rule")
+
+    def _validate_time_and_grid_limits(self):
+        """Require contiguous time coverage and finite nonnegative grid limits in watts."""
         for left, right in zip(self.intervals[:-1], self.intervals[1:], strict=True):
             if left.start + timedelta(hours=left.duration_h) != right.start:
                 raise ValueError("Intervals must be contiguous in absolute time")
         for name in ("grid_import_limit_w", "grid_export_limit_w"):
             nonnegative(name, getattr(self, name))
-        self._validate_work()
+
+    def _validate_topology(self):
+        """Validate converter membership before checking battery and PV relationships."""
         if not all(
             isinstance(values, tuple)
             for values in (self.inverters, self.batteries, self.pv_sources)
         ):
             raise TypeError("Physical collections must be immutable")
-        ids = {inverter_item.inverter_id for inverter_item in self.inverters}
-        if len(ids) != len(self.inverters) or any(
-            connected_device.inverter_id not in ids
+        inverter_ids = {inverter.inverter_id for inverter in self.inverters}
+        if len(inverter_ids) != len(self.inverters) or any(
+            connected_device.inverter_id not in inverter_ids
             for connected_device in (*self.batteries, *self.pv_sources)
         ):
             raise ValueError("Invalid physical inverter links")
-        if len({battery_item.device_id for battery_item in self.batteries}) != len(self.batteries):
+        battery_states = {state.device_id: state for state in self.batteries}
+        if len(battery_states) != len(self.batteries):
             raise ValueError("Duplicate battery state")
+        self._validate_terminal_valuations(battery_states)
+        self._validate_pv_sources(battery_states.keys())
+        self._validate_shared_inverters()
+
+    def _validate_terminal_valuations(self, battery_states):
+        """Match optional terminal curves by battery identity, reserve and usable capacity."""
         if not isinstance(self.terminal_valuations, tuple) or any(
             not isinstance(curve, TerminalValuation) for curve in self.terminal_valuations
         ):
             raise TypeError("Immutable terminal valuations required")
-        if self.terminal_valuations and (
-            len(self.terminal_valuations) != len(self.batteries)
-            or {terminal_valuation.device_id for terminal_valuation in self.terminal_valuations}
-            != {battery_item.device_id for battery_item in self.batteries}
-            or any(
-                terminal_valuation.reserve_kwh
-                != next(
-                    battery_item.battery.minimum_kwh
-                    for battery_item in self.batteries
-                    if battery_item.device_id == terminal_valuation.device_id
-                )
-                or terminal_valuation.usable_kwh
-                > next(
-                    battery_item.battery.capacity_kwh - battery_item.battery.minimum_kwh
-                    for battery_item in self.batteries
-                    if battery_item.device_id == terminal_valuation.device_id
-                )
-                for terminal_valuation in self.terminal_valuations
-            )
+        if not self.terminal_valuations:
+            return
+        error_message = "Terminal valuations must match all batteries and reserves"
+        if (
+            len(self.terminal_valuations) != len(battery_states)
+            or {curve.device_id for curve in self.terminal_valuations} != battery_states.keys()
         ):
-            raise ValueError("Terminal valuations must match all batteries and reserves")
-        if len({pv_source.source_id for pv_source in self.pv_sources}) != len(self.pv_sources) or {
-            pv_source.source_id for pv_source in self.pv_sources
-        } & {battery_item.device_id for battery_item in self.batteries}:
+            raise ValueError(error_message)
+        for curve in self.terminal_valuations:
+            battery = battery_states[curve.device_id].battery
+            if (
+                curve.reserve_kwh != battery.minimum_kwh
+                or curve.usable_kwh > battery.capacity_kwh - battery.minimum_kwh
+            ):
+                raise ValueError(error_message)
+
+    def _validate_pv_sources(self, battery_ids):
+        """Keep command identities distinct and require every declared PV quantity per interval."""
+        source_ids = {source.source_id for source in self.pv_sources}
+        if len(source_ids) != len(self.pv_sources) or source_ids & battery_ids:
             raise ValueError("Ambiguous command identities")
         for step in self.intervals:
-            if set(dict(step.pv_sources)) != {
-                pv_source.source_id for pv_source in self.pv_sources
-            } or len(step.pv_sources) != len(self.pv_sources):
+            if set(dict(step.pv_sources)) != source_ids or len(step.pv_sources) != len(source_ids):
                 raise ValueError("Per-source PV quantities required")
-        for inverter in self.inverters:
-            if (
-                not inverter.hybrid
-                and any(
-                    battery_item.inverter_id == inverter.inverter_id
-                    for battery_item in self.batteries
-                )
-                and any(
-                    pv_source.inverter_id == inverter.inverter_id for pv_source in self.pv_sources
-                )
-            ):
-                raise ValueError("PV and battery sharing requires a hybrid inverter")
+
+    def _validate_shared_inverters(self):
+        """Require hybrid capability where PV and batteries share an inverter."""
+        shared_inverter_ids = {state.inverter_id for state in self.batteries} & {
+            source.inverter_id for source in self.pv_sources
+        }
+        if any(
+            not inverter.hybrid and inverter.inverter_id in shared_inverter_ids
+            for inverter in self.inverters
+        ):
+            raise ValueError("PV and battery sharing requires a hybrid inverter")
 
     def _validate_work(self):
         """Validate device work uniqueness and reserve checkpoints against the original intervals."""
-        ends = {step.start + timedelta(hours=step.duration_h) for step in self.intervals}
-        if (
-            not isinstance(self.thermal_work, tuple)
-            or any(not isinstance(work, ThermalWork) for work in self.thermal_work)
-            or len({work.device_id for work in self.thermal_work}) != len(self.thermal_work)
-            or any(len(work.demand_kwh) != len(self.intervals) for work in self.thermal_work)
-            or any(
-                work.ambient_profile_c and len(work.ambient_profile_c) != len(self.intervals)
-                for work in self.thermal_work
-            )
+        interval_ends = {step.start + timedelta(hours=step.duration_h) for step in self.intervals}
+        self._validate_thermal_work()
+        self._validate_reserve_checkpoints(interval_ends)
+        _validate_device_work(
+            self.ev_work,
+            EVWork,
+            ("session_id", "point_id", "vehicle_id"),
+            "Invalid or multiply connected EV work",
+        )
+        _validate_device_work(
+            self.appliances,
+            ApplianceWork,
+            ("task_id", "entity_id"),
+            "Invalid or overlapping appliance work",
+        )
+
+    def _validate_thermal_work(self):
+        """Require one work item per heat store and interval-aligned demand and ambient data."""
+        error_message = "Invalid thermal storage work"
+        _validate_device_work(self.thermal_work, ThermalWork, ("device_id",), error_message)
+        interval_count = len(self.intervals)
+        if any(len(work.demand_kwh) != interval_count for work in self.thermal_work):
+            raise ValueError(error_message)
+        if any(
+            work.ambient_profile_c and len(work.ambient_profile_c) != interval_count
+            for work in self.thermal_work
         ):
-            raise ValueError("Invalid thermal storage work")
-        if (
-            not isinstance(self.reserve_checkpoints, tuple)
-            or any(
-                not isinstance(end, datetime) or end.utcoffset() is None or end not in ends
-                for end in self.reserve_checkpoints
-            )
-            or tuple(sorted(set(self.reserve_checkpoints))) != self.reserve_checkpoints
+            raise ValueError(error_message)
+
+    def _validate_reserve_checkpoints(self, interval_ends):
+        """Keep only unique ordered aware reserve checkpoints at interval ends."""
+        error_message = "Invalid original reserve checkpoints"
+        if not isinstance(self.reserve_checkpoints, tuple) or any(
+            not isinstance(checkpoint, datetime)
+            or checkpoint.utcoffset() is None
+            or checkpoint not in interval_ends
+            for checkpoint in self.reserve_checkpoints
         ):
-            raise ValueError("Invalid original reserve checkpoints")
-        if (
-            not isinstance(self.ev_work, tuple)
-            or any(not isinstance(work, EVWork) for work in self.ev_work)
-            or any(
-                len({getattr(work, identity) for work in self.ev_work}) != len(self.ev_work)
-                for identity in ("session_id", "point_id", "vehicle_id")
-            )
-        ):
-            raise ValueError("Invalid or multiply connected EV work")
-        if (
-            not isinstance(self.appliances, tuple)
-            or any(not isinstance(work, ApplianceWork) for work in self.appliances)
-            or len({work.task_id for work in self.appliances}) != len(self.appliances)
-            or len({work.entity_id for work in self.appliances}) != len(self.appliances)
-        ):
-            raise ValueError("Invalid or overlapping appliance work")
+            raise ValueError(error_message)
+        if tuple(sorted(set(self.reserve_checkpoints))) != self.reserve_checkpoints:
+            raise ValueError(error_message)
 
 
 @dataclass(frozen=True)
