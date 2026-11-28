@@ -89,6 +89,7 @@ def test_jeroen_preserves_real_zero_negative_prices_issue_time_and_known_exclusi
         "duplicate",
         "seconds",
         "missing_utc",
+        "truncated_row",
         "bad_rows",
     ],
 )
@@ -109,6 +110,8 @@ def test_jeroen_rejects_malformed_or_stale_evidence(fault):
         payload["rows"][1][-1] = "2026-10-27T08:15:01Z"
     elif fault == "missing_utc":
         payload["columns"][-1] = "local_only"
+    elif fault == "truncated_row":
+        payload["rows"][0].pop()
     else:
         payload["rows"] = None
     with pytest.raises(PricesUnavailable, match="invalid_jeroen_forecast"):

@@ -90,7 +90,36 @@ def test_peer_discovery_report_updates_route_and_rejects_foreign_identity(tmp_pa
                     assert requested["market_area"] == "NL"
                     assert requested["days"]
                 day = now.astimezone(ZoneInfo(prices.schedule.timezone)).date()
-                body = {**body, "reason": "ready", "responses": [response(source, day, now)]}
+                day_response = response(source, day, now)
+                body = {**body, "reason": "ready", "responses": [day_response]}
+                intervals = day_response["data"]["NL"]
+                invalid_bodies = (
+                    {"responses": [{**day_response, "unexpected": True}]},
+                    {"responses": [{**day_response, "request_id": "truncated"}]},
+                    {"responses": [{**day_response, "data": {"BE": intervals}}]},
+                    {"responses": [{**day_response, "data": {"NL": []}}]},
+                    {
+                        "responses": [
+                            {
+                                **day_response,
+                                "data": {"NL": [{**intervals[0], "price": True}, *intervals[1:]]},
+                            }
+                        ]
+                    },
+                    {"responses": [day_response, day_response]},
+                    {"available": False, "reason": "not_configured"},
+                )
+                for invalid in invalid_bodies:
+                    async with client.post(
+                        url + "/v1/ha/market-prices",
+                        json=body | invalid,
+                        headers=headers,
+                        ssl=Fingerprint(bytes.fromhex(pin)),
+                    ) as result:
+                        assert result.status == 400
+                        assert await result.text() == "Invalid Home Assistant market prices"
+                assert source.request(now)["days"] == requested["days"]
+                assert not prices.store.series
                 async with client.post(
                     url + "/v1/ha/market-prices",
                     json=body,
