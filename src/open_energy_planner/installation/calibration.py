@@ -53,6 +53,120 @@ def available_charge_w(settings, battery, converter):
     )
 
 
+def _restore_ledger(body):
+    """Check the durable envelope, then validate every row before making it available."""
+    error_message = "Invalid calibration ledger"
+    if not isinstance(body, dict) or set(body) != {"schema", "batteries"}:
+        raise ValueError(error_message)
+    if type(body["schema"]) is not int or body["schema"] != 1:
+        raise ValueError(error_message)
+    rows = body["batteries"]
+    if not isinstance(rows, dict):
+        raise TypeError("Invalid calibration batteries")
+    for row in rows.values():
+        _validate_ledger_row(row)
+    return rows
+
+
+def _validate_ledger_row(row):
+    """Require the stored fields and validate the frozen policy before reading its evidence."""
+    if set(row) != {
+        "definition",
+        "enabled_at",
+        "completed_at",
+        "hold_started_at",
+        "observed_at",
+    } or not isinstance(row["definition"], list):
+        raise ValueError("Invalid calibration progress")
+    interval_days, hold_hours = _validate_ledger_policy(row["definition"])
+    _validate_ledger_evidence(row, interval_days, hold_hours)
+
+
+def _validate_ledger_policy(policy):
+    """Validate the positional policy in its persisted shape and return its durations."""
+    error_message = "Invalid calibration policy"
+    if len(policy) != 6 or not all(isinstance(value, str) for value in policy[:2]):
+        raise ValueError(error_message)
+    if type(policy[2]) is not bool:
+        raise ValueError(error_message)
+    capacity, interval_days, hold_hours = policy[3:]
+    if type(capacity) not in (int, float) or not isfinite(capacity) or capacity <= 0:
+        raise ValueError(error_message)
+    if type(interval_days) is not int or not 1 <= interval_days <= MAX_CALIBRATION_INTERVAL_DAYS:
+        raise ValueError(error_message)
+    if (
+        type(hold_hours) not in (int, float)
+        or not isfinite(hold_hours)
+        or not MIN_CALIBRATION_HOLD_HOURS <= hold_hours <= MAX_CALIBRATION_HOLD_HOURS
+    ):
+        raise ValueError(error_message)
+    return interval_days, hold_hours
+
+
+def _validate_ledger_evidence(row, interval_days, hold_hours):
+    """Require ordered aware evidence and deadlines representable after a restart."""
+    enabled = instant(row["enabled_at"])
+    enabled + timedelta(days=interval_days)
+    times = {}
+    for field in ("completed_at", "hold_started_at", "observed_at"):
+        if row[field] is None:
+            continue
+        value = instant(row[field])
+        if value < enabled:
+            raise ValueError("Calibration evidence precedes enabling")
+        times[field] = value
+
+    completed = times.get("completed_at")
+    started = times.get("hold_started_at")
+    observed = times.get("observed_at")
+    # Check future deadline arithmetic before the planner or progress display can use it.
+    if completed is not None:
+        completed + timedelta(days=interval_days)
+    if started is not None:
+        started + timedelta(hours=hold_hours)
+    if any(
+        transition is not None and (observed is None or transition > observed)
+        for transition in (completed, started)
+    ):
+        raise ValueError("Calibration evidence exceeds its observation")
+
+
+def _matching_capture_pair(battery, soc, power, captured_at):
+    """Require bound readings in the expected units and fresh explicit device samples."""
+    if soc is None or power is None:
+        return False
+    if (soc.entity_id, power.entity_id) != (battery.soc_entity, battery.power_entity):
+        return False
+    if (soc.unit, power.unit) != ("%", "W"):
+        return False
+    return all(
+        reading.timestamp_kind != "device_sample"
+        or 0
+        <= (captured_at - reading.observed_at).total_seconds()
+        <= CALIBRATION_MAX_CAPTURE_GAP_SECONDS
+        for reading in (soc, power)
+    )
+
+
+def _hold_interrupted(soc, power, previous, captured_at):
+    """A missing capture, actual discharge or large SoC sag invalidates an existing hold."""
+    if previous is None:
+        return True
+    if (captured_at - previous).total_seconds() > CALIBRATION_MAX_CAPTURE_GAP_SECONDS:
+        return True
+    return power.value > 0 or soc.value < CALIBRATION_MINIMUM_HOLD_SOC
+
+
+def _complete_hold(row, captured_at, hold_hours):
+    """Record completion only when the current capture reaches the continuous hold deadline."""
+    started = row["hold_started_at"]
+    if not started or captured_at < instant(started) + timedelta(hours=hold_hours):
+        return False
+    row["completed_at"] = captured_at.isoformat()
+    row["hold_started_at"] = None
+    return True
+
+
 class BatteryCalibration:
     """Own one bounded active-database ledger, with durable transitions and minute checkpoints.
 
@@ -67,61 +181,8 @@ class BatteryCalibration:
         self.persisted = {}
         try:
             if documents.exists(CALIBRATION_DOCUMENT):
-                body = documents.read(CALIBRATION_DOCUMENT)
-                if (
-                    not isinstance(body, dict)
-                    or set(body) != {"schema", "batteries"}
-                    or type(body["schema"]) is not int
-                    or body["schema"] != 1
-                ):
-                    raise ValueError("Invalid calibration ledger")
-                rows = body["batteries"]
-                if not isinstance(rows, dict):
-                    raise ValueError("Invalid calibration batteries")
-                for row in rows.values():
-                    if set(row) != {
-                        "definition",
-                        "enabled_at",
-                        "completed_at",
-                        "hold_started_at",
-                        "observed_at",
-                    } or not isinstance(row["definition"], list):
-                        raise ValueError("Invalid calibration progress")
-                    policy = row["definition"]
-                    if (
-                        len(policy) != 6
-                        or not all(isinstance(value, str) for value in policy[:2])
-                        or type(policy[2]) is not bool
-                        or type(policy[3]) not in (int, float)
-                        or not isfinite(policy[3])
-                        or policy[3] <= 0
-                        or type(policy[4]) is not int
-                        or not 1 <= policy[4] <= MAX_CALIBRATION_INTERVAL_DAYS
-                        or type(policy[5]) not in (int, float)
-                        or not isfinite(policy[5])
-                        or not MIN_CALIBRATION_HOLD_HOURS <= policy[5] <= MAX_CALIBRATION_HOLD_HOURS
-                    ):
-                        raise ValueError("Invalid calibration policy")
-                    enabled = instant(row["enabled_at"])
-                    enabled + timedelta(days=policy[4])
-                    for key in ("completed_at", "hold_started_at", "observed_at"):
-                        if row[key] is not None and instant(row[key]) < enabled:
-                            raise ValueError("Calibration evidence precedes enabling")
-                    if row["completed_at"] is not None:
-                        instant(row["completed_at"]) + timedelta(days=policy[4])
-                    if row["hold_started_at"] is not None:
-                        instant(row["hold_started_at"]) + timedelta(hours=policy[5])
-                    if any(
-                        row[key] is not None
-                        and (
-                            row["observed_at"] is None
-                            or instant(row[key]) > instant(row["observed_at"])
-                        )
-                        for key in ("completed_at", "hold_started_at")
-                    ):
-                        raise ValueError("Calibration evidence exceeds its observation")
-                self.state = rows
-                self.persisted = deepcopy(rows)
+                self.state = _restore_ledger(documents.read(CALIBRATION_DOCUMENT))
+                self.persisted = deepcopy(self.state)
         except (ValueError, TypeError, KeyError, AttributeError, OverflowError, OSError):
             self.issue = "battery_calibration_unreadable"
 
@@ -210,65 +271,19 @@ class BatteryCalibration:
         rows = self.configured(settings, report.captured_at)
         readings = {reading.key: reading for reading in report.readings}
         converters = {converter.inverter_id: converter for converter in settings.inverters}
+
+        def charging_power(battery):
+            """Read rated capacity only when evaluating the battery's next charging window."""
+            return available_charge_w(settings, battery, converters[battery.inverter_id])
+
         force = rows != self.state
         for battery in settings.batteries:
             if not battery.calibration_enabled:
                 continue
-            row = rows[battery.device_id]
-            if report.captured_at < instant(row["enabled_at"]):
-                continue
-            previous = instant(row["observed_at"]) if row["observed_at"] else None
-            if previous and report.captured_at <= previous:
-                continue
-            soc = readings.get(f"battery.{battery.device_id}.soc")
-            power = readings.get(f"battery.{battery.device_id}.power")
-            valid = (
-                soc is not None
-                and power is not None
-                and soc.entity_id == battery.soc_entity
-                and power.entity_id == battery.power_entity
-                and soc.unit == "%"
-                and power.unit == "W"
-                and all(
-                    reading.timestamp_kind != "device_sample"
-                    or 0
-                    <= (report.captured_at - reading.observed_at).total_seconds()
-                    <= CALIBRATION_MAX_CAPTURE_GAP_SECONDS
-                    for reading in (soc, power)
-                )
-            )
-            interrupted = (
-                previous is None
-                or (report.captured_at - previous).total_seconds()
-                > CALIBRATION_MAX_CAPTURE_GAP_SECONDS
-            )
-            old_hold = row["hold_started_at"]
-            if (
-                not valid
-                or interrupted
-                or power.value > 0
-                or soc.value < CALIBRATION_MINIMUM_HOLD_SOC
+            if self._observe_battery(
+                battery, rows[battery.device_id], readings, report.captured_at, charging_power
             ):
-                row["hold_started_at"] = None
-            start_allowed = (
-                row["completed_at"] is None
-                or old_hold is not None
-                or self.directive(
-                    battery,
-                    report.captured_at,
-                    available_charge_w(settings, battery, converters[battery.inverter_id]),
-                )[0]
-            )
-            if valid and power.value <= 0 and soc.value >= FULL_SOC_PERCENT and start_allowed:
-                row["hold_started_at"] = row["hold_started_at"] or report.captured_at.isoformat()
-            if row["hold_started_at"] and report.captured_at >= instant(
-                row["hold_started_at"]
-            ) + timedelta(hours=battery.calibration_hold_hours):
-                row["completed_at"] = report.captured_at.isoformat()
-                row["hold_started_at"] = None
                 force = True
-            force = force or row["hold_started_at"] != old_hold
-            row["observed_at"] = report.captured_at.isoformat()
         checkpoint = any(
             not self.persisted.get(key, {}).get("observed_at")
             or (report.captured_at - instant(self.persisted[key]["observed_at"])).total_seconds()
@@ -280,6 +295,32 @@ class BatteryCalibration:
             self.install(rows)
         else:
             self.state = rows
+
+    def _observe_battery(self, battery, row, readings, captured_at, charging_power):
+        """Update one detached row and report whether its hold or completion changed."""
+        if captured_at < instant(row["enabled_at"]):
+            return False
+        previous = instant(row["observed_at"]) if row["observed_at"] else None
+        if previous and captured_at <= previous:
+            return False
+        soc = readings.get(f"battery.{battery.device_id}.soc")
+        power = readings.get(f"battery.{battery.device_id}.power")
+        valid = _matching_capture_pair(battery, soc, power, captured_at)
+        old_hold = row["hold_started_at"]
+        if not valid or _hold_interrupted(soc, power, previous, captured_at):
+            row["hold_started_at"] = None
+
+        start_allowed = (
+            row["completed_at"] is None
+            or old_hold is not None
+            or self.directive(battery, captured_at, charging_power(battery))[0]
+        )
+        full_capture = valid and power.value <= 0 and soc.value >= FULL_SOC_PERCENT
+        if full_capture and start_allowed:
+            row["hold_started_at"] = row["hold_started_at"] or captured_at.isoformat()
+        completed = _complete_hold(row, captured_at, battery.calibration_hold_hours)
+        row["observed_at"] = captured_at.isoformat()
+        return completed or row["hold_started_at"] != old_hold
 
     def document(self, battery, now):
         """Expose readable progress separately from editable installation definitions."""
