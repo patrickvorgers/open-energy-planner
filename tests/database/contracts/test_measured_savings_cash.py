@@ -168,6 +168,45 @@ def test_finalized_cash_day_is_immutable_with_its_matching_index(settlement):
     assert store.day(finalized=True) == day
 
 
+def test_final_day_and_cursors_rollback_when_capture_update_fails(settlement, monkeypatch):
+    """A late cursor failure rolls back the report, indexed cash and retry progress together."""
+    runtime, store, documents, _engine, _plans = settlement
+    day_key = START.date().isoformat()
+    next_day = (START.date() + timedelta(days=1)).isoformat()
+    now = START + timedelta(days=7)
+    start, end = day_window(day_key, "UTC")
+    daily = DailySavings(runtime)
+    report = daily.calculate(day_key, "UTC", contract(), now, START)
+    report["finalized_at"] = now.isoformat()
+    prior_capture = {"end": start.isoformat()}
+    prior_progress = {"next": day_key, "timezone": "UTC"}
+    documents.write("capture.json", prior_capture)
+    documents.write("daily-progress.json", prior_progress)
+    write = documents.write
+
+    def write_then_fail(name, value):
+        """Fail only after staging the last write inside the report transaction."""
+        write(name, value)
+        if name == "capture.json":
+            raise OSError("Capture cursor unavailable")
+
+    with monkeypatch.context() as staged_failure:
+        staged_failure.setattr(documents, "write", write_then_fail)
+        with pytest.raises(OSError, match="Capture cursor unavailable"):
+            store.put_day(report, documents, next_day)
+
+    assert store.day(after=start) is None
+    assert daily.overview(start, end)["cash"]["coverage_seconds"] == 0
+    assert documents.read("capture.json") == prior_capture
+    assert documents.read("daily-progress.json") == prior_progress
+
+    store.put_day(report, documents, next_day)
+    assert store.day(finalized=True) == report
+    assert daily.overview(start, end)["cash"]["coverage_seconds"] == 1800
+    assert documents.read("capture.json") == {"end": report["end"]}
+    assert documents.read("daily-progress.json") == {"next": next_day, "timezone": "UTC"}
+
+
 def test_legacy_report_is_retained_without_fabricating_new_policy_totals(settlement):
     """Keep the finalized record in the archive and omit it from the Savings comparison."""
     runtime, store, documents, _engine, _plans = settlement
