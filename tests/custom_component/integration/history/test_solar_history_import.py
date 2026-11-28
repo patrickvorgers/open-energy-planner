@@ -105,7 +105,12 @@ def test_solar_monthly_discovery_and_annual_capture_preserve_gaps_and_empty_year
                 if period == "month":
                     return {
                         entity: [
-                            {"start": datetime(2023, 2, 1, tzinfo=UTC).timestamp(), "sum": 100}
+                            {"start": "not-a-timestamp", "sum": 90.0},
+                            {
+                                "start": datetime(2022, 1, 1, tzinfo=UTC).timestamp(),
+                                "sum": None,
+                            },
+                            {"start": datetime(2023, 2, 1, tzinfo=UTC).timestamp(), "sum": 100},
                         ]
                     }
                 assert period == "hour"
@@ -207,5 +212,83 @@ def test_solar_discovery_does_not_expand_hourly_transfer_ranges(monkeypatch, bas
             request["basis"] = basis
         with pytest.raises(ValueError, match="Invalid history request range"):
             await history.HistoryBridge(hass).capture(request)
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize(
+    "change",
+    [None, {"start": 1}, {"state": float("inf")}, {"sum": 2}],
+    ids=["aligned", "different-hour", "non-finite", "reset"],
+)
+def test_combined_meter_history_requires_aligned_finite_nondecreasing_sums(monkeypatch, change):
+    """Only aligned meter histories may be combined and retain their separate terminal states."""
+    from custom_components.open_energy_planner import history
+
+    async def scenario():
+        """Submit the old combined-meter request through the real HA Recorder executor."""
+        async with running_chain(live=True, recorder=True) as (hass, _entry, _url, _root):
+            first, second = "sensor.first_meter", "sensor.second_meter"
+            start = datetime(2026, 1, 1, tzinfo=UTC)
+            end = start + timedelta(hours=2)
+            later = (start + timedelta(hours=1)).timestamp()
+            rows = {
+                first: [
+                    {"start": start.timestamp(), "sum": 1, "state": 20},
+                    {"start": later, "sum": 2, "state": 21},
+                ],
+                second: [
+                    {"start": start.timestamp(), "sum": 3, "state": 40},
+                    {"start": later, "sum": 6, "state": 43, **(change or {})},
+                ],
+            }
+
+            def metadata(_hass, statistic_ids):
+                """Expose two cumulative energy channels in their original metadata."""
+                assert statistic_ids == {first, second}
+                return {
+                    meter: (
+                        index,
+                        {"has_sum": True, "unit_of_measurement": "kWh", "source": "recorder"},
+                    )
+                    for index, meter in enumerate((first, second), start=1)
+                }
+
+            def statistics(_hass, lower, upper, statistic_ids, period, units, fields):
+                """Check that the ordinary combined-meter query has no extra boundary hours."""
+                assert (lower, upper, statistic_ids, period, units, fields) == (
+                    start,
+                    end,
+                    {first, second},
+                    "hour",
+                    {"energy": "kWh"},
+                    {"sum", "state"},
+                )
+                return rows
+
+            monkeypatch.setattr(history, "get_metadata", metadata)
+            monkeypatch.setattr(history, "statistics_during_period", statistics)
+            response = await history.HistoryBridge(hass).capture(
+                {
+                    "version": "combined-synthetic",
+                    "entity_id": first,
+                    "entity_ids": [second, first],
+                    "start": start.isoformat(),
+                    "end": end.isoformat(),
+                }
+            )
+            if change:
+                assert response == {
+                    "request_version": "combined-synthetic",
+                    "error": "history_unavailable",
+                }
+            else:
+                assert response == {
+                    "request_version": "combined-synthetic",
+                    "component_meters": [[second, 43], [first, 21]],
+                    "entity_id": first,
+                    "unit": "kWh",
+                    "hours": [[start.timestamp(), 4, 60], [later, 8, 64]],
+                }
 
     asyncio.run(scenario())
