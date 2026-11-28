@@ -434,7 +434,7 @@ def test_model_status_distinguishes_actual_forecast_preference_and_decision_evid
 
 @pytest.mark.parametrize("width", [1280, 390])
 def test_quality_ready_device_is_independent_of_an_untrained_selected_device(app_page, width):
-    """A ready boiler shows its own shadow status while a new dryer still reports missing history."""
+    """A ready boiler keeps its shadow status while a dryer reports its own history issue."""
     page, url = app_page
     page.set_viewport_size({"width": width, "height": 900})
     page.route(
@@ -457,9 +457,10 @@ def test_quality_ready_device_is_independent_of_an_untrained_selected_device(app
                             {"entity_id": "sensor.boiler", "weather_sensitive": False},
                             {"entity_id": "sensor.dryer", "weather_sensitive": False},
                         ],
+                        "history_issues": {"sensor.dryer": "New dryer needs more history"},
                         "result": {
                             "status": "history_or_weather_not_ready",
-                            "detail": "New dryer needs more history",
+                            "detail": "Combined device forecast is incomplete",
                             "devices": [
                                 {
                                     "entity_id": "sensor.boiler",
@@ -490,6 +491,7 @@ def test_quality_ready_device_is_independent_of_an_untrained_selected_device(app
     dryer.get_by_text("Current model and learning", exact=True).click()
     expect(dryer).to_contain_text("History or weather not ready")
     expect(dryer).to_contain_text("New dryer needs more history")
+    expect(dryer).not_to_contain_text("Combined device forecast is incomplete")
 
 
 def test_quality_current_models_filter_without_midnight_history_and_clear_failures(app_page):
