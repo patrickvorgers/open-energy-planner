@@ -215,12 +215,7 @@ def test_price_tooltip_uses_the_visible_bonus_rate_for_export_revenue(app_page):
         expect(rates.locator(".chart-tooltip-value")).to_have_text(
             ["0.08", "0.18", "0.08", "0.25"] if offset == 0 else ["0.08", "0.18", "0.08"]
         )
-        assert (
-            rates.get_by_role("rowheader").first.evaluate(
-                "th => getComputedStyle(th).borderTopWidth"
-            )
-            == "1px"
-        )
+        expect(rates.get_by_role("rowheader").first).to_have_css("border-top-width", "1px")
         if offset <= 1:
             directory = Path("results/ci/price-tooltip-proposal")
             directory.mkdir(parents=True, exist_ok=True)
