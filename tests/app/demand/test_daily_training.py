@@ -435,6 +435,14 @@ def test_cached_component_cannot_replace_missing_current_measurement_coverage(
     assert [learner.call_count for learner in fit_counts] == [1, 1, 0]
 
 
+def test_component_does_not_separate_with_an_unfinished_training_hour(demand_store, configuration):
+    """An unfinished last hour cannot complete the seven days required for a measured baseline."""
+    samples = samples_before(NOW + timedelta(hours=1), hours=7 * 24)
+
+    with pytest.raises(ValueError, match="At least seven complete days covering every hour"):
+        component(configuration, samples, (), NOW, False, documents=demand_store.documents)
+
+
 def household_runtime(store, configuration):
     """Provide a real household runtime with forty completed measured days and no selected devices."""
     store.save(configuration)
