@@ -27,6 +27,8 @@ from open_energy_planner.storage.adapters.payloads import decode_payload, encode
 
 MAX_DETAIL_INTERVALS = 96
 DAILY_CHART_WINDOW_DAYS = 366
+DAILY_SCENARIOS = ("actual", "reference", "without_battery")
+CASH_SCENARIOS = ("actual", "without_battery")
 TOTAL_KEYS = (
     "purchase",
     "sale",
@@ -62,6 +64,88 @@ def _read_snapshot(engine):
                 # sqlite3's legacy mode otherwise begins no read transaction for SELECT.
                 connection.exec_driver_sql("BEGIN")
             yield connection
+
+
+def _daily_report_values(report):
+    """Project the complete archive and optional indexed values for one day."""
+    values = {
+        "end": stamp(report["end"]),
+        "day": report["day"],
+        "timezone": report["timezone"],
+        "currency": report["currency"],
+        "market_area": report["market_area"],
+        "finalized_at": report["finalized_at"],
+        "payload": encode_payload(canonical(report)),
+        "payload_hash": digest(report),
+        "savings": report.get("savings"),
+        "avoided_import_kwh": report.get("avoided_import_kwh"),
+        "comparison_seconds": report.get("comparison_seconds", 0.0),
+        "battery_savings": report.get("battery_savings"),
+        "battery_comparison_seconds": report.get("battery_comparison_seconds", 0.0),
+        "self_consumption_savings": report.get("self_consumption_savings"),
+        "self_consumption_comparison_seconds": report.get(
+            "self_consumption_comparison_seconds", 0.0
+        ),
+    }
+    scenarios = report["scenarios"]
+    for scenario in DAILY_SCENARIOS:
+        evidence = scenarios.get(scenario, {})
+        totals = evidence.get("totals")
+        values.update(
+            {
+                f"{scenario}_{total_key}": totals.get(total_key) if totals is not None else None
+                for total_key in TOTAL_KEYS
+            }
+        )
+        values[f"{scenario}_coverage_seconds"] = evidence.get("coverage_seconds", 0.0)
+    return values
+
+
+def _replace_daily_cash(connection, day_key, report, values):
+    """Rebuild the matching cash index under the caller's report transaction."""
+    connection.execute(
+        SAVINGS_UNCAPPED_DAYS.delete().where(SAVINGS_UNCAPPED_DAYS.c.start == day_key)
+    )
+    if report["policy"] != CASH_POLICY_VERSION:
+        return
+    connection.execute(
+        SAVINGS_UNCAPPED_DAYS.insert().values(
+            start=day_key,
+            end=values["end"],
+            day=values["day"],
+            currency=values["currency"],
+            **report["cash"],
+            **{
+                f"{kind}_{component}": value
+                for kind, amounts in (report["matched_components"] or {}).items()
+                for component, value in amounts.items()
+            },
+        )
+    )
+
+
+def _advance_daily_progress(documents, report, next_day):
+    """Advance retry progress and the finalized capture boundary in the same transaction."""
+    documents.write("daily-progress.json", {"next": next_day, "timezone": report["timezone"]})
+    if report["finalized_at"] is None:
+        return
+    capture = documents.read("capture.json") if documents.exists("capture.json") else None
+    if capture is None or datetime.fromisoformat(capture["end"]) < datetime.fromisoformat(
+        report["end"]
+    ):
+        documents.write("capture.json", {"end": report["end"]})
+
+
+def _add_cash_breakdown(totals):
+    """Expose matched components only when the aggregate has shared evidence."""
+    totals.pop("period", None)
+    breakdown = {}
+    for scenario in CASH_SCENARIOS:
+        components = {
+            component: totals.pop(f"{scenario}_{component}") for component in CASH_COMPONENTS
+        }
+        breakdown[scenario] = components if totals["coverage_seconds"] else None
+    totals["breakdown"] = breakdown
 
 
 class SettlementStore:
@@ -116,11 +200,11 @@ class SettlementStore:
 
     def put_day(self, report, documents, next_day):
         """Publish one complete daily report and its retry cursor atomically. Final days are immutable."""
-        key = stamp(report["start"])
+        day_key = stamp(report["start"])
         with documents.transaction():
             connection = documents.pending.connection
             old = (
-                connection.execute(select(SAVINGS_DAYS).where(SAVINGS_DAYS.c.start == key))
+                connection.execute(select(SAVINGS_DAYS).where(SAVINGS_DAYS.c.start == day_key))
                 .mappings()
                 .first()
             )
@@ -128,76 +212,15 @@ class SettlementStore:
                 if self._day_report(old) != report:
                     raise ValueError("Final daily savings are immutable")
                 return
-            values = {
-                "end": stamp(report["end"]),
-                "day": report["day"],
-                "timezone": report["timezone"],
-                "currency": report["currency"],
-                "market_area": report["market_area"],
-                "finalized_at": report["finalized_at"],
-                "payload": encode_payload(canonical(report)),
-                "payload_hash": digest(report),
-                **{
-                    f"{scenario}_{key}": report["scenarios"][scenario]["totals"].get(key)
-                    if report["scenarios"].get(scenario, {}).get("totals") is not None
-                    else None
-                    for scenario in ("actual", "reference", "without_battery")
-                    for key in TOTAL_KEYS
-                },
-                **{
-                    f"{scenario}_coverage_seconds": report["scenarios"]
-                    .get(scenario, {})
-                    .get("coverage_seconds", 0.0)
-                    for scenario in ("actual", "reference", "without_battery")
-                },
-                "savings": report.get("savings"),
-                "avoided_import_kwh": report.get("avoided_import_kwh"),
-                **{
-                    key: report.get(key, 0.0 if key.endswith("seconds") else None)
-                    for key in (
-                        "comparison_seconds",
-                        "battery_savings",
-                        "battery_comparison_seconds",
-                        "self_consumption_savings",
-                        "self_consumption_comparison_seconds",
-                    )
-                },
-            }
+            values = _daily_report_values(report)
             if old:
                 connection.execute(
-                    SAVINGS_DAYS.update().where(SAVINGS_DAYS.c.start == key).values(**values)
+                    SAVINGS_DAYS.update().where(SAVINGS_DAYS.c.start == day_key).values(**values)
                 )
             else:
-                connection.execute(SAVINGS_DAYS.insert().values(start=key, **values))
-            connection.execute(
-                SAVINGS_UNCAPPED_DAYS.delete().where(SAVINGS_UNCAPPED_DAYS.c.start == key)
-            )
-            if report["policy"] == CASH_POLICY_VERSION:
-                connection.execute(
-                    SAVINGS_UNCAPPED_DAYS.insert().values(
-                        start=key,
-                        end=values["end"],
-                        day=values["day"],
-                        currency=values["currency"],
-                        **report["cash"],
-                        **{
-                            f"{kind}_{component}": value
-                            for kind, amounts in (report["matched_components"] or {}).items()
-                            for component, value in amounts.items()
-                        },
-                    )
-                )
-            documents.write(
-                "daily-progress.json", {"next": next_day, "timezone": report["timezone"]}
-            )
-            if report["finalized_at"] is not None:
-                capture = (
-                    documents.read("capture.json") if documents.exists("capture.json") else None
-                )
-                if capture is None or datetime.fromisoformat(
-                    capture["end"]
-                ) < datetime.fromisoformat(report["end"]):
-                    documents.write("capture.json", {"end": report["end"]})
+                connection.execute(SAVINGS_DAYS.insert().values(start=day_key, **values))
+            _replace_daily_cash(connection, day_key, report, values)
+            _advance_daily_progress(documents, report, next_day)
 
     def activations(self, start, end):
         """Read the last advice state and subsequent changes for one metering interval."""
@@ -239,14 +262,13 @@ class SettlementStore:
     def cash_overview(self, start, end, connection):
         """Sum matched estimates and their components from the same indexed rows."""
         table = SAVINGS_UNCAPPED_DAYS
-        kinds = ("actual", "without_battery")
         columns = (
             "actual_cost",
             "without_battery_cost",
             "savings",
             "coverage_seconds",
             "estimated_seconds",
-            *(f"{kind}_{component}" for kind in kinds for component in CASH_COMPONENTS),
+            *(f"{kind}_{component}" for kind in CASH_SCENARIOS for component in CASH_COMPONENTS),
         )
         bounds = (table.c.start >= stamp(start), table.c.end <= stamp(end))
         amounts = [func.sum(table.c[key]).label(key) for key in columns]
@@ -286,14 +308,7 @@ class SettlementStore:
         summary["estimated_seconds"] = summary["estimated_seconds"] or 0.0
         summary["policy"] = CASH_POLICY_VERSION
         for values in (summary, *summary["chart"]):
-            values.pop("period", None)
-            breakdown = {}
-            for kind in kinds:
-                components = {
-                    component: values.pop(f"{kind}_{component}") for component in CASH_COMPONENTS
-                }
-                breakdown[kind] = components if values["coverage_seconds"] else None
-            values["breakdown"] = breakdown
+            _add_cash_breakdown(values)
         return summary
 
     def days(self, start, end, *, _connection=None):
@@ -319,6 +334,8 @@ class SettlementStore:
     def put_frames(self, frames, context=None, active_connection=None):
         """Retain original metering in bounded batches inside one writer transaction.
 
+        Use one lookup and at most one bulk insert per batch, keeping memory and
+        SQL parameters bounded regardless of the size of the input stream.
         Compare retained evidence and duplicates in the same batch using their
         original JSON. Only unrecorded intervals may be inserted.
         """
