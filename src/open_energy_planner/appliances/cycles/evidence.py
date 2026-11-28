@@ -139,15 +139,8 @@ def representative_hourly_profile(records):
     return replace(profile, power_w=powers)
 
 
-def refine(settings, records):
-    """Use all distinct cycles for energy and available fine cycles for the timing shape.
-
-    Fine evidence supersedes overlapping hourly ranges from the same sensor pair.
-    Original archives remain intact, including ambiguous coarse ranges that may
-    contain more than one finer run. Excluding those coarse ranges avoids counting
-    their consumption a second time. Manual estimates remain until fine evidence
-    is available. Existing explicitly recorded profiles remain usable.
-    """
+def _reconcile_cycle_ranges(records):
+    """Retain separate resolution summaries and select independent evidence for the model."""
     fine = [record for record in records if record.get("quality") != "hourly_estimate"]
 
     coarse = distinct_ranges(
@@ -174,9 +167,89 @@ def refine(settings, records):
     distinct = (
         fine if observed else fine + [record for record in coarse if not overlaps_fine(record)]
     )
-    if fine and all(record.get("quality") == "explicit_completion" for record in fine):
+    explicit_only = bool(fine) and all(
+        record.get("quality") == "explicit_completion" for record in fine
+    )
+    if explicit_only:
         # An explicit completed profile takes precedence over coarse-only fallback learning.
         distinct = fine
+    return coarse, fine, distinct, bool(observed), explicit_only
+
+
+def _fine_timing_profile(fine_profile, combined, fine, distinct):
+    """Apply the model's energy to the finer duration within the physical power bound."""
+    factor = combined.energy_kwh / fine_profile.energy_kwh
+    if max(fine_profile.power_w) * factor > MAX_CYCLE_POWER_W:
+        # Coarse energy cannot force a finer timing shape beyond the physical power boundary.
+        distinct, combined, factor = fine, fine_profile, 1
+    return (
+        CycleProfile(
+            tuple(power * factor for power in fine_profile.power_w),
+            combined.samples,
+            "synthetic" if any(record["synthetic"] for record in distinct) else "measured",
+            fine_profile.measured_duration_seconds,
+            fine_profile.phase_seconds,
+            fine_profile.phase_durations_seconds,
+        ),
+        distinct,
+    )
+
+
+def _apply_program_profiles(settings, fine):
+    """Replace the selected profiles only when opted-in fine evidence distinguishes programs."""
+    settings.pop("additional_profile", None)
+    if not settings.get("learn_additional_profile"):
+        return
+
+    from .programs import learn_programs
+
+    programs = learn_programs(
+        [
+            (instant(record["completed_at"]), measured(record))
+            for record in fine
+            if record.get("quality") in ("recorder_state", "five_minute_statistics")
+        ]
+    )
+    if programs:
+        standard, additional = programs
+        settings["profile"] = asdict(standard)
+        settings["additional_profile"] = asdict(additional)
+        settings["profile_sources"] = {"fine_cycles": standard.samples, "hourly_cycles": 0}
+
+
+def _recent_cycle_rows(records):
+    """Project model evidence with its original chronology, identities and source resolution."""
+    return [
+        {
+            "id": record["id"],
+            "started_at": record["started_at"],
+            "completed_at": record["completed_at"],
+            "energy_kwh": measured(record).energy_kwh,
+            "synthetic": record["synthetic"],
+            "resolution": "hour"
+            if record.get("quality") == "hourly_estimate"
+            else "state_events"
+            if record.get("quality") == "recorder_state"
+            else "5minute"
+            if measured(record).phase_seconds == FINE_PROFILE_SECONDS
+            else "15minute",
+        }
+        for record in sorted(records, key=lambda item: instant(item["completed_at"]))[
+            -MAX_RECENT_CYCLES:
+        ]
+    ]
+
+
+def refine(settings, records):
+    """Use all distinct cycles for energy and available fine cycles for the timing shape.
+
+    Fine evidence supersedes overlapping hourly ranges from the same sensor pair.
+    Original archives remain intact, including ambiguous coarse ranges that may
+    contain more than one finer run. Excluding those coarse ranges avoids counting
+    their consumption a second time. Manual estimates remain until fine evidence
+    is available. Existing explicitly recorded profiles remain usable.
+    """
+    coarse, fine, distinct, observed, explicit_only = _reconcile_cycle_ranges(records)
     if not distinct:
         return
     automatic = next(
@@ -209,18 +282,7 @@ def refine(settings, records):
             first_detected_start=min((record["started_at"] for record in fine), key=instant),
             last_detected_end=max((record["completed_at"] for record in fine), key=instant),
         )
-        factor = combined.energy_kwh / fine_profile.energy_kwh
-        if max(fine_profile.power_w) * factor > MAX_CYCLE_POWER_W:
-            # Coarse energy cannot force a finer timing shape beyond the physical power boundary.
-            distinct, combined, factor = fine, fine_profile, 1
-        combined = CycleProfile(
-            tuple(power * factor for power in fine_profile.power_w),
-            combined.samples,
-            "synthetic" if any(record["synthetic"] for record in distinct) else "measured",
-            fine_profile.measured_duration_seconds,
-            fine_profile.phase_seconds,
-            fine_profile.phase_durations_seconds,
-        )
+        combined, distinct = _fine_timing_profile(fine_profile, combined, fine, distinct)
     previous = settings.get("profile", {})
     if fine_profile or (
         not settings.get("manual_profile") and previous.get("evidence") in (None, "hourly_estimate")
@@ -230,47 +292,13 @@ def refine(settings, records):
         "hourly_cycles": combined.samples - len(fine),
         "fine_cycles": len(fine),
     }
-    settings["profile_basis"] = (
-        ProfileBasis.OBSERVED
-        if observed
-        else ProfileBasis.EXPLICIT
-        if fine and all(record.get("quality") == "explicit_completion" for record in fine)
-        else ProfileBasis.STATISTICS
-    )
-    if not observed and any(record.get("quality") == "recorder_state" for record in fine):
+    if observed:
+        settings["profile_basis"] = ProfileBasis.OBSERVED
+    elif explicit_only:
+        settings["profile_basis"] = ProfileBasis.EXPLICIT
+    elif any(record.get("quality") == "recorder_state" for record in fine):
         settings.pop("profile_basis", None)
-    settings.pop("additional_profile", None)
-    if settings.get("learn_additional_profile"):
-        from .programs import learn_programs
-
-        programs = learn_programs(
-            [
-                (instant(record["completed_at"]), measured(record))
-                for record in fine
-                if record.get("quality") in ("recorder_state", "five_minute_statistics")
-            ]
-        )
-        if programs:
-            standard, additional = programs
-            settings["profile"] = asdict(standard)
-            settings["additional_profile"] = asdict(additional)
-            settings["profile_sources"] = {"fine_cycles": standard.samples, "hourly_cycles": 0}
-    settings["recent_cycles"] = [
-        {
-            "id": record["id"],
-            "started_at": record["started_at"],
-            "completed_at": record["completed_at"],
-            "energy_kwh": measured(record).energy_kwh,
-            "synthetic": record["synthetic"],
-            "resolution": "hour"
-            if record.get("quality") == "hourly_estimate"
-            else "state_events"
-            if record.get("quality") == "recorder_state"
-            else "5minute"
-            if measured(record).phase_seconds == FINE_PROFILE_SECONDS
-            else "15minute",
-        }
-        for record in sorted(distinct, key=lambda item: instant(item["completed_at"]))[
-            -MAX_RECENT_CYCLES:
-        ]
-    ]
+    else:
+        settings["profile_basis"] = ProfileBasis.STATISTICS
+    _apply_program_profiles(settings, fine)
+    settings["recent_cycles"] = _recent_cycle_rows(distinct)
