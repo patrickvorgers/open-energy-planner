@@ -132,6 +132,41 @@ def test_installation_problem_preserves_validation_precedence(earlier, later, er
     assert str(error.value) == message
 
 
+def test_export_bonus_rules_match_every_billing_segment_and_have_unique_ids():
+    """Reject a rule missing one hour and prevent two aligned rules sharing a quota identity."""
+    inputs = problem()
+    partial = ExportBonus("bonus", (1,), (0.5,), ("period",), 0)
+    aligned = ExportBonus("bonus", (1, 2), (0.5, 0.5), ("period", "period"), 0)
+    with pytest.raises(ValueError, match="^Export bonuses require aligned billing segments$"):
+        replace(inputs, export_bonuses=(partial,))
+    with pytest.raises(ValueError, match="^Duplicate export bonus rule$"):
+        replace(inputs, export_bonuses=(aligned, aligned))
+
+
+def test_pv_command_and_interval_source_identities_are_unambiguous():
+    """A source cannot share a battery command ID or appear twice in one interval."""
+    inputs = problem()
+    with pytest.raises(ValueError, match="^Ambiguous command identities$"):
+        replace(inputs, pv_sources=(PVUnit("battery", "inverter", False),))
+
+    first, second = inputs.intervals
+    duplicated = replace(first, pv_sources=(("pv", 0), ("pv", 0)))
+    with pytest.raises(ValueError, match="^Per-source PV quantities required$"):
+        replace(inputs, intervals=(duplicated, second))
+
+
+def test_reserve_checkpoints_keep_unique_interval_ends_in_order():
+    """Reject repeated and reversed checkpoint ends even when each occurs in the horizon."""
+    inputs = problem()
+    first_end = START + timedelta(hours=1)
+    second_end = START + timedelta(hours=2)
+    ordered = (first_end, second_end)
+    assert replace(inputs, reserve_checkpoints=ordered).reserve_checkpoints == ordered
+    for checkpoints in ((first_end, first_end), (second_end, first_end)):
+        with pytest.raises(ValueError, match="^Invalid original reserve checkpoints$"):
+            replace(inputs, reserve_checkpoints=checkpoints)
+
+
 @pytest.mark.planner_scenario
 def test_installation_charges_cheap_and_discharges_expensive_without_aggregating_state():
     """Buying 1 kWh at 1 and using it against price 3 costs exactly 1, with whole -1000/+1000 W commands."""
