@@ -5,6 +5,7 @@ from datetime import UTC, date, datetime, timedelta
 from threading import Event
 from types import SimpleNamespace
 
+import pytest
 from aiohttp import web
 
 from open_energy_planner.demand.api import register
@@ -14,6 +15,7 @@ from open_energy_planner.demand.storage import DemandStore
 from open_energy_planner.demand.training import daily_models
 from open_energy_planner.forecast_selection.device_history import (
     replay_days,
+    replay_family,
     replay_scores,
     replay_season,
     replay_weather_history_floor,
@@ -290,3 +292,43 @@ def test_replay_replaces_incomplete_measured_day_with_complete_weekend(tmp_path)
     archive = make_store(tmp_path, DemandStore).documents
     (result,) = replay_scores(archive, configuration, samples, (), windows, models, ())
     assert result["day"] == complete.isoformat() and result["hours"] == 24
+
+
+def test_replay_persists_completed_day_before_stopping_and_checks_archive_on_resume(tmp_path):
+    """Keep a finished score across cancellation and reject corrupted retained predictions."""
+    now = datetime(2026, 8, 24, 12, tzinfo=UTC)
+    first = now.date() - timedelta(days=9)
+    second = now.date() - timedelta(days=8)
+    configuration = DemandConfiguration("UTC", 0, (EnergyTerm("sensor.device", 1),))
+    windows = tuple(
+        (day, datetime.combine(day, datetime.min.time(), UTC) - timedelta(hours=12), None)
+        for day in (first, second)
+    )
+    samples = tuple(
+        DemandHour(now - timedelta(hours=hour), 0.4, 0.4) for hour in range(60 * 24, 0, -1)
+    )
+    models = daily_models(None, configuration, samples, now, weather_sensitive=False)
+    archive = make_store(tmp_path, DemandStore).documents
+    path = f"device-replay-{replay_family(configuration, models)}.json"
+
+    def after_first_commit():
+        """Stop only after the archive stores the completed selection."""
+        try:
+            return len(archive.read(path)["replays"]) == 1
+        except FileNotFoundError:
+            return False
+
+    (completed,) = replay_scores(
+        archive, configuration, samples, (), windows, models, (), stopping=after_first_commit
+    )
+    assert archive.read(path)["replays"][completed["day"]]["score"] == completed
+
+    resumed = replay_scores(archive, configuration, samples, (), windows, models, ())
+    assert [result["day"] for result in resumed] == [first.isoformat(), second.isoformat()]
+    assert completed in resumed
+
+    envelope = archive.read(path)
+    envelope["replays"][completed["day"]]["origin"] = "changed without a new checksum"
+    archive.write(path, envelope)
+    with pytest.raises(ValueError, match="^Invalid archived device replay checksum or coverage$"):
+        replay_scores(archive, configuration, samples, (), windows, models, ())
