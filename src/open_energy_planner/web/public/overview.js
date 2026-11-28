@@ -77,6 +77,12 @@ const INTERVAL_POINTER_EVENTS = new Set(["mousemove", "touchstart", "touchmove"]
 const LINKED_LEFT_AXIS_PX = 64;
 const LINKED_RIGHT_AXIS_PX = 58;
 const DAILY_HIGHLIGHT_QUARTERS = 12;
+const PRICE_SERIES = {
+    spot: {name: "Spot market rate", color: "#d9a300"},
+    buy: {name: "Import rate", color: "#d56788"},
+    sell: {name: "Export rate", color: "#399bc1"},
+    bonus: {name: "Export rate incl. bonus", color: "#9255b7"},
+};
 let linkedInterval = null;
 const isLinkedChart = id => LINKED_CHART_IDS.includes(id);
 const DEVICE_PATTERN_SIZE_PX = 8;
@@ -205,9 +211,8 @@ function renderTooltip({chart: instance, tooltip}, node, balance = false, balanc
     }) : tooltip.balanceItems || [];
     const groupedBalance = balance && !batteryPlan;
     node.classList.toggle("chart-tooltip-balance", groupedBalance);
-    const sections = tooltipSections(items, totalItems, groupedBalance, tooltip.balanceItems);
     if (instance.canvas.id === "price-chart" && linkedInterval) node.append(linkedCostTable(linkedInterval));
-    node.append(sections);
+    else node.append(tooltipSections(items, totalItems, groupedBalance, tooltip.balanceItems));
     const notes = [...(interval ? balanceNotes(interval, instance.canvas.id, when) : tooltip.afterBody)];
     if (totalItems.length) notes.push("Totals include all flows, including hidden series. Supply is positive. Use is negative.");
     if (notes.length) {
@@ -229,9 +234,10 @@ function balanceTooltipData(chart, {dataPoints, interval: pinnedInterval}, time)
     return interval ? {items: bars, interval} : pointReadout;
 }
 /** Show interval cash estimates using the original plan rates. */
-function linkedCostTable({gridImport, gridExport, buyRate, sellRate, exportWithBonus, currency}) {
+function linkedCostTable({gridImport, gridExport, spotRate, buyRate, sellRate, exportWithBonus, currency}) {
     const exportRate = exportWithBonus ?? sellRate;
-    const revenueLabel = exportRate !== sellRate ? "Revenue incl. bonus" : "Revenue before bonus";
+    const includesBonus = exportRate !== sellRate;
+    const revenueLabel = includesBonus ? "Revenue incl. bonus" : "Revenue";
     const table = document.createElement("table");
     table.className = "chart-linked-cost";
     for (const [label, energy, rate, amountLabel] of [
@@ -249,15 +255,29 @@ function linkedCostTable({gridImport, gridExport, buyRate, sellRate, exportWithB
         appendCostRow(group, "Rate", rate, money, `${currency}/kWh`);
         appendCostRow(group, amountLabel, amount, money, currency);
     }
+    const rates = table.createTBody();
+    rates.className = "chart-linked-rates";
+    const unit = `${currency}/kWh`;
+    appendCostRow(rates, PRICE_SERIES.spot.name, spotRate, money, unit, PRICE_SERIES.spot.color);
+    appendCostRow(rates, PRICE_SERIES.buy.name, buyRate, money, unit, PRICE_SERIES.buy.color);
+    appendCostRow(rates, PRICE_SERIES.sell.name, sellRate, money, unit, PRICE_SERIES.sell.color);
+    if (includesBonus) appendCostRow(rates, PRICE_SERIES.bonus.name, exportWithBonus, money, unit, PRICE_SERIES.bonus.color);
     return table;
 }
 
 /** Use the same numeric and unit columns as the energy table. */
-function appendCostRow(group, name, amount, format, symbol) {
+function appendCostRow(group, name, amount, format, symbol, color = null) {
     const row = group.insertRow();
     const label = document.createElement("th");
     label.scope = "row";
-    label.textContent = name;
+    if (color) {
+        const swatch = document.createElement("span");
+        swatch.className = "series-swatch";
+        swatch.style.backgroundColor = color;
+        swatch.setAttribute("aria-hidden", "true");
+        label.append(swatch);
+    }
+    label.append(name);
     row.append(label);
     const value = row.insertCell(), unit = row.insertCell();
     value.className = "chart-tooltip-value";
@@ -307,10 +327,10 @@ function renderLinkedTooltip(chart, tooltip, interval, y) {
         title.className = "chart-tooltip-title";
         title.textContent = `From ${when(start)} to ${when(end)}`;
         tooltip.replaceChildren(title, linkedCostTable(interval));
-        for (const ranking of planRankNotes(time)) {
+        for (const text of [interval.priceStatus, ...planRankNotes(time)].filter(Boolean)) {
             const note = document.createElement("p");
             note.className = "chart-tooltip-explanation";
-            note.textContent = ranking;
+            note.textContent = text;
             tooltip.append(note);
         }
         tooltip.hidden = false;
@@ -1348,7 +1368,7 @@ function intervalContractRates({plan, bonusRules, index, start, end, prices, tar
     }
     const buyRate = tariff ? tariff.buy_price : prices.buy_price;
     const sellRate = tariff ? tariff.sell_price : prices.sell_price;
-    return {buyRate, sellRate, exportWithBonus, rankedExportRate: bonusRules.length ? exportWithBonus : sellRate};
+    return {spotRate: tariff?.market_price, buyRate, sellRate, exportWithBonus, rankedExportRate: bonusRules.length ? exportWithBonus : sellRate};
 }
 
 /** Clear display state before reading a different plan or the live price preview. */
@@ -1585,8 +1605,8 @@ function renderOriginalPlanCharts(plan, balance, batteryLabels, points, {id, cur
     chart("energy-chart", gridExchangeSeries(plan, periodCostPlan?.projection.comparison || periodCostPlan?.scenarios?.self_consumption?.comparison, periodCostPlan?.scenarios?.without_battery?.comparison), {unit: "W", preserveVisibility: samePlan, deferRange: true});
     chart("forecast-chart", [{name: "Household demand forecast: AC", points: demandForecast, color: "#23965e"}, {name: "Available solar forecast: DC", points: solarForecast, color: "#b58900"}], {unit: "kW", minimum: 0, preserveVisibility: samePlan, deferRange: true});
     applyIntervalTariffEvidence(plan, {spot, buy, sell});
-    const priceSeries = [{name: "Spot market rate", points: spot, color: "#d9a300"}, {name: "Import rate", points: buy, color: "#d56788"}, {name: "Export rate", points: sell, color: "#399bc1"}];
-    if (bonusRules.length) priceSeries.push({name: "Export rate incl. bonus", points: bonusSell, color: "#9255b7"});
+    const priceSeries = [{...PRICE_SERIES.spot, points: spot}, {...PRICE_SERIES.buy, points: buy}, {...PRICE_SERIES.sell, points: sell}];
+    if (bonusRules.length) priceSeries.push({...PRICE_SERIES.bonus, points: bonusSell});
     priceInputPlanId = id;
     currentPriceWindow = null;
     $("price-chart").closest(".chart-wrap").hidden = false;
@@ -1745,8 +1765,8 @@ async function currentPrices(signal) {
             for (const [points, value] of [[buy, interval.buy_price], [sell, interval.sell_price], [market, interval.market_price], [total, interval.total_export_price]]) points.push([start, value, interval.price_kind], [end, value, interval.price_kind]);
         }
         currentPriceWindow = intervals.length ? {start: Math.floor(Date.parse(data.as_of) / QUARTER_MILLISECONDS) * QUARTER_MILLISECONDS, end: Date.parse(intervals.at(-1).end)} : null;
-        const series = [{name: "Spot market rate", points: market, color: "#d9a300"}, {name: "Import rate", points: buy, color: "#d56788"}, {name: "Export rate", points: sell, color: "#399bc1"}];
-        if (data.has_bonus) series.push({name: "Export rate incl. bonus", points: total, color: "#9255b7"});
+        const series = [{...PRICE_SERIES.spot, points: market}, {...PRICE_SERIES.buy, points: buy}, {...PRICE_SERIES.sell, points: sell}];
+        if (data.has_bonus) series.push({...PRICE_SERIES.bonus, points: total});
         $("price-chart").closest(".chart-wrap").hidden = !intervals.length;
         chart("price-chart", series, {unit: `${data.currency || "EUR"}/kWh`});
         $("current-price-status").textContent = data.issue ? `Current price preview unavailable: ${optionLabel(data.issue)}` : !intervals.length ? "Current price preview unavailable: No price intervals available." : `No plan available: Current tariff preview: Saved contract rates as of: ${when(data.as_of)}: ${intervals.some(interval => interval.bonus_issue) ? "Bonus eligibility unavailable: Missing values remain gaps." : data.has_bonus ? "Bonus volume is not applied in this preview." : "No bonus applies in this period."}${data.coverage === "shortened_horizon" ? " Market-price coverage ends early." : ""}`;

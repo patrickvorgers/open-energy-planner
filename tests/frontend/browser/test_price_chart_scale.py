@@ -179,8 +179,8 @@ def test_price_tooltip_uses_the_visible_bonus_rate_for_export_revenue(app_page):
     for offset, (rate, revenue_label, amount) in enumerate(
         [
             ("0.25", "Revenue incl. bonus", "0.17"),
-            ("0.08", "Revenue before bonus", "0.06"),
-            ("0.08", "Revenue before bonus", "0.06"),
+            ("0.08", "Revenue", "0.06"),
+            ("0.08", "Revenue", "0.06"),
         ]
     ):
         midpoint = first_quarter + timedelta(minutes=15 * offset + 7)
@@ -191,16 +191,46 @@ def test_price_tooltip_uses_the_visible_bonus_rate_for_export_revenue(app_page):
             }""",
             midpoint.timestamp() * 1000,
         )
+        if offset == 0 and page.viewport_size["width"] >= 640:
+            price_chart.hover(position=point)
+            expect(export.get_by_text(revenue_label, exact=True)).to_be_visible()
+            expect(tooltip.locator(".chart-linked-rates tr")).to_have_count(4)
         price_chart.click(position=point)
         expect(tooltip).to_be_visible()
         expect(export.get_by_role("row").filter(has_text="Rate").locator("td").first).to_have_text(
             rate
         )
         expect(
-            export.get_by_role("row").filter(has_text=revenue_label).locator("td").first
+            export.get_by_role("row")
+            .filter(has=page.get_by_text(revenue_label, exact=True))
+            .locator("td")
+            .first
         ).to_have_text(amount)
         expect(page.locator("#linked-chart-reading")).to_contain_text(revenue_label)
+        rates = tooltip.locator(".chart-linked-rates")
+        names = ["Spot market rate", "Import rate", "Export rate"]
         if offset == 0:
-            directory = Path("results/ci/price-tooltip-bonus")
+            names.append("Export rate incl. bonus")
+        expect(rates.get_by_role("rowheader")).to_have_text(names)
+        expect(rates.locator(".chart-tooltip-value")).to_have_text(
+            ["0.08", "0.18", "0.08", "0.25"] if offset == 0 else ["0.08", "0.18", "0.08"]
+        )
+        assert (
+            rates.get_by_role("rowheader").first.evaluate(
+                "th => getComputedStyle(th).borderTopWidth"
+            )
+            == "1px"
+        )
+        if offset <= 1:
+            directory = Path("results/ci/price-tooltip-proposal")
             directory.mkdir(parents=True, exist_ok=True)
-            page.screenshot(path=str(directory / f"export-bonus-{page.viewport_size['width']}.png"))
+            name = "with-bonus" if offset == 0 else "without-bonus"
+            tooltip.screenshot(
+                path=str(directory / f"detail-{name}-{page.viewport_size['width']}.png")
+            )
+            page.screenshot(
+                path=str(
+                    directory
+                    / f"{'with-bonus' if offset == 0 else 'without-bonus'}-{page.viewport_size['width']}.png"
+                )
+            )

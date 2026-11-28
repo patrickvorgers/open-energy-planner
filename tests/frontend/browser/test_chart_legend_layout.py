@@ -157,10 +157,13 @@ def _assert_linked_plot_layout_and_inspection(page, optimizer):
     price.focus()
     page.keyboard.press("ArrowRight")
     assert all(before != after for before, after in zip(idle, page.evaluate(images), strict=True))
-    expect(page.locator("#linked-chart-reading")).to_contain_text("Revenue before bonus")
+    expect(page.locator("#linked-chart-reading")).to_contain_text("Revenue")
     price_tooltip = page.locator("#price-chart-tooltip")
     expect(price_tooltip).to_be_visible()
-    expect(price_tooltip.locator(".chart-linked-cost tbody")).to_have_count(2)
+    expect(price_tooltip.locator(".chart-linked-cost th[scope=rowgroup]")).to_have_text(
+        ["Grid import", "Grid export"]
+    )
+    expect(price_tooltip.locator(".chart-linked-rates tr")).to_have_count(3)
     page.screenshot(path=str(directory / f"price-tooltip-{page.viewport_size['width']}.png"))
     page.keyboard.press("Escape")
     expect(page.locator("#price-chart-tooltip")).to_be_hidden()
