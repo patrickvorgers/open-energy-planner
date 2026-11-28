@@ -126,6 +126,11 @@ def test_missing_deterministic_run_is_not_replaced_by_a_more_favorable_available
     report = runtime.learning["pv0"].summary.historical_assessment
     assert report.status == "insufficient_history"
     assert report.run_initializations == scheduled_runs(NOW)
+    first_run = report.run_initializations[0]
+    assert [(window.initialized_at, window.origin_delay_hours) for window in report.windows] == [
+        (first_run, 0),
+        (first_run, 24),
+    ]
     assert runtime.source_selection["pv0"]["active"] == "pvwatts"
 
 

@@ -5,17 +5,29 @@ only. Native model creation and provider receipt clocks remain actual clocks.
 Raw model error and the proposed ML service with physical fallback are separate.
 """
 
+from __future__ import annotations
+
+from collections.abc import Mapping
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 from functools import lru_cache
 from itertools import pairwise
 from math import fsum, isfinite
+from typing import TYPE_CHECKING
 
+from open_energy_planner.history.model import EnergyHistory, EnergyHour
+from open_energy_planner.installation.location import SiteLocation
 from open_energy_planner.planning_policy import PLANNING_HORIZON_HOURS
 from open_energy_planner.prices.model import aware
-from open_energy_planner.solar.calculation.model import version
-from open_energy_planner.solar.curtailment import archive_feedback
+from open_energy_planner.solar.calculation.model import (
+    SolarConfiguration,
+    SolarForecast,
+    SolarInverter,
+    SolarSource,
+    version,
+)
+from open_energy_planner.solar.curtailment import CurtailmentHistory, archive_feedback
 from open_energy_planner.solar.learning import (
     ac_comparison_issue,
     learning_interval,
@@ -26,7 +38,12 @@ from open_energy_planner.solar.model_policy import MIN_ABSOLUTE_GAIN_KWH, MIN_RE
 from open_energy_planner.weather.run import (
     FORECAST_WEATHER_MODEL,
     FORECAST_WEATHER_POLICY,
+    ForecastWeatherRun,
 )
+
+if TYPE_CHECKING:
+    from open_energy_planner.solar.boosting import TrainingResult
+    from open_energy_planner.solar.storage import SolarStore
 
 BACKTEST_POLICY = "four-weekly-frozen-ifs-dual-origin-48h-ac-clipping-v2"
 BACKTEST_RUN_COUNT = 4
@@ -288,25 +305,71 @@ class HistoricalForecastAssessment:
             raise ValueError("Invalid historical solar forecast evidence") from None
 
 
+@dataclass(frozen=True)
+class _ReplaySite:
+    """Keep a source and its shared-inverter evidence together for a historical replay."""
+
+    configuration: SolarConfiguration
+    source: SolarSource
+    inverter: SolarInverter
+    siblings: tuple[SolarSource, ...]
+    location: SiteLocation
+    histories: Mapping[str, EnergyHistory]
+    feedback: Mapping[str, CurtailmentHistory | None]
+
+
+@dataclass(frozen=True)
+class _ReplayEvidence:
+    """Retain original fit data and the bounded evidence used for cache identity."""
+
+    history: EnergyHistory
+    bounded_history: tuple[EnergyHour, ...]
+    runs: tuple[ForecastWeatherRun, ...]
+    initializations: tuple[datetime, ...]
+    identity: str
+
+
+def _bounded_feedback(site: _ReplaySite, last_end: datetime) -> dict:
+    """Hash feedback only for the shared inverter and strictly before the final test boundary."""
+    feedback_entities = {source.curtailment_entity_id for source in site.siblings}
+    return {
+        entity: None
+        if value is None
+        else {
+            "checked_until": min(value.checked_until, last_end).isoformat(),
+            "readings": [[at.isoformat(), state] for at, state in value.readings if at < last_end],
+        }
+        for entity, value in site.feedback.items()
+        if entity in feedback_entities
+    }
+
+
+def _bounded_hours(history: EnergyHistory, last_end: datetime) -> tuple[EnergyHour, ...]:
+    """Retain the final meter boundary needed to calculate the last hourly delta."""
+    return tuple(hour for hour in history.hours if hour.start <= last_end)
+
+
 def _assessment_inputs(
-    configuration, source, family, initializations, history, runs, histories, feedback
-):
+    site: _ReplaySite,
+    family: str,
+    initializations: tuple[datetime, ...],
+    history: EnergyHistory,
+    runs: tuple[ForecastWeatherRun, ...],
+) -> _ReplayEvidence:
     """Bound original field evidence to the last replay window and derive its archive identity."""
     # Outcomes after the final test horizon and newer runs cannot change these fits.
     last_end = initializations[-1] + timedelta(
         hours=max(SIMULATION_DELAYS_HOURS) + PLANNING_HORIZON_HOURS
     )
-    bounded_history = tuple(hour for hour in history.hours if hour.start <= last_end)
+    bounded_history = _bounded_hours(history, last_end)
     relevant_runs = tuple(run for run in runs if run.initialized_at <= initializations[-1])
-    shared_histories = {
-        other.entity_id: tuple(
-            hour for hour in histories[other.entity_id].hours if hour.start <= last_end
+    shared_histories = {}
+    for other in site.siblings:
+        if other.source_id == site.source.source_id or other.entity_id not in site.histories:
+            continue
+        shared_histories[other.entity_id] = _bounded_hours(
+            site.histories[other.entity_id], last_end
         )
-        for other in configuration.sources
-        if other.source_id != source.source_id
-        and other.inverter_id == source.inverter_id
-        and other.entity_id in (histories or {})
-    }
     identity = version(
         {
             "family": family,
@@ -315,25 +378,10 @@ def _assessment_inputs(
             "runs": [run.version for run in relevant_runs],
             "shared_histories": shared_histories,
             "curtailment_policy": "observed-feedback-v1",
-            "feedback": {
-                entity: None
-                if value is None
-                else {
-                    "checked_until": min(value.checked_until, last_end).isoformat(),
-                    "readings": [
-                        [at.isoformat(), state] for at, state in value.readings if at < last_end
-                    ],
-                }
-                for entity, value in (feedback or {}).items()
-                if any(
-                    other.curtailment_entity_id == entity
-                    and other.inverter_id == source.inverter_id
-                    for other in configuration.sources
-                )
-            },
+            "feedback": _bounded_feedback(site, last_end),
         }
     )
-    return bounded_history, relevant_runs, identity
+    return _ReplayEvidence(history, bounded_history, relevant_runs, initializations, identity)
 
 
 def _measured_production(source, inverter, bounded_history, now):
@@ -357,7 +405,7 @@ def _measured_production(source, inverter, bounded_history, now):
     return actual
 
 
-def _archive_historical_fit(store, result, origin, relevant_runs, feedback, siblings):
+def _archive_historical_fit(store, result, origin, runs, site):
     """Archive a fit and the original inputs needed to explain its evaluation."""
     from open_energy_planner.solar.wire import document
 
@@ -366,12 +414,12 @@ def _archive_historical_fit(store, result, origin, relevant_runs, feedback, sibl
         "model": metadata,
         "summary": document(result.summary),
         "cutoff": origin.isoformat(),
-        "run_references": [row.version for row in relevant_runs],
+        "run_references": [row.version for row in runs],
         "curtailment_feedback_references": {
             entity: archive_feedback(store, value)
-            for entity, value in (feedback or {}).items()
+            for entity, value in site.feedback.items()
             if value is not None
-            and any(other.curtailment_entity_id == entity for other in siblings)
+            and any(other.curtailment_entity_id == entity for other in site.siblings)
         },
     }
     reference = version(training_record)
@@ -379,190 +427,251 @@ def _archive_historical_fit(store, result, origin, relevant_runs, feedback, sibl
     return reference
 
 
+def _restore_assessment(store, pointer, family, model_policy, initializations):
+    """Admit only an immutable report with the exact replay context requested."""
+    if not store.documents.exists(pointer):
+        return None
+    reference = store.documents.read(pointer)
+    record = store.documents.read("historical-assessment-" + reference + ".json")
+    if version(record) != reference:
+        raise ValueError("Historical solar forecast checksum changed")
+    report = HistoricalForecastAssessment.restore(record)
+    if (report.source_family, report.model_policy, report.run_initializations) != (
+        family,
+        model_policy,
+        initializations,
+    ):
+        raise ValueError("Historical solar forecast context changed")
+    return report
+
+
+def _hourly_values(
+    forecast: SolarForecast, instants: tuple[datetime, ...], source_id: str, field_name: str
+) -> dict[datetime, float]:
+    """Integrate forecasts into matched hours and keep explicit zero-production hours."""
+    values = dict.fromkeys(instants, 0.0)
+    for energy in forecast.energies:
+        instant = energy.start.replace(minute=0, second=0, microsecond=0)
+        if instant in values and energy.source_id == source_id:
+            values[instant] += getattr(energy, field_name)
+    return values
+
+
+@dataclass(frozen=True)
+class _WindowReplay:
+    """Replay clock, metered evidence and original fit inputs shared by all planning origins."""
+
+    site: _ReplaySite
+    evidence: _ReplayEvidence
+    now: datetime
+    actual: Mapping[datetime, float]
+    meter_hours: Mapping[str, Mapping[datetime, float]]
+
+    def usable_hour(self, instant: datetime) -> bool:
+        """Require a valid source measurement, shared AC evidence and unrestricted learning."""
+        if instant not in self.actual:
+            return False
+        site = self.site
+        ac_measurements = tuple(
+            self.meter_hours.get(other.entity_id, {}).get(instant)
+            if other.measurement_boundary == "ac"
+            else None
+            for other in site.siblings
+        )
+        if ac_comparison_issue(
+            site.source.measurement_boundary, site.inverter.ac_limit_w, ac_measurements
+        ):
+            return False
+        end = instant + HOUR
+        if not learning_interval(site.source, instant, end):
+            return False
+        return unrestricted_interval(
+            site.source, instant, end, site.feedback.get(site.source.curtailment_entity_id)
+        )
+
+    def fit(self, source, history, origin, physical) -> TrainingResult:
+        """Use the simulated origin as the fit cutoff and the real replay time as known-at."""
+        from open_energy_planner.solar.boosting import fit_boosted_model
+
+        return fit_boosted_model(
+            source,
+            self.site.inverter,
+            self.site.location,
+            history,
+            (),
+            (),
+            origin,
+            forecast_runs=self.evidence.runs,
+            forecast_physical=physical,
+            known_at=self.now,
+            feedback=self.site.feedback.get(source.curtailment_entity_id),
+        )
+
+    def fitted_siblings(self, origin, physical):
+        """Use a sibling's accepted model in both comparisons only when its history is present."""
+        models = {}
+        for other in self.site.siblings:
+            if (
+                other.source_id == self.site.source.source_id
+                or other.entity_id not in self.site.histories
+            ):
+                continue
+            result = self.fit(other, self.site.histories[other.entity_id], origin, physical)
+            if result.model:
+                models[other.source_id] = result.model
+        return models
+
+    def errors(self, run, origin, instants, result, physical) -> tuple[float, ...]:
+        """Score physics, the raw challenger and the served forecast on the same metered hours."""
+        from open_energy_planner.solar.calculation.projection import learned_forecast
+
+        site = self.site
+        source_id = site.source.source_id
+        sibling_models = self.fitted_siblings(origin, physical)
+        raw_models = {source_id: result.challenger, **sibling_models}
+        raw = learned_forecast(
+            site.configuration,
+            site.location,
+            run.hours,
+            self.now,
+            raw_models,
+            planning_origin=origin,
+        )
+        served = None
+        if result.model:
+            served_models = {source_id: result.model, **sibling_models}
+            served = learned_forecast(
+                site.configuration,
+                site.location,
+                run.hours,
+                self.now,
+                served_models,
+                planning_origin=origin,
+            )
+        field_name = "ac_kwh" if site.source.measurement_boundary == "ac" else "dc_kwh"
+        baseline = {
+            row.start: getattr(row, field_name)
+            for row in physical_run(site.configuration, site.location, run)
+            if row.source_id == source_id
+        }
+        raw_values = _hourly_values(raw, instants, source_id, field_name)
+        service_values = (
+            _hourly_values(served, instants, source_id, field_name) if served else baseline
+        )
+        return tuple(
+            fsum(abs(values[instant] - self.actual[instant]) for instant in instants)
+            / len(instants)
+            for values in (baseline, raw_values, service_values)
+        )
+
+    def assess_window(
+        self, run, delay, model_policy, store
+    ) -> tuple[BacktestWindow | None, str | None]:
+        """Require a complete window before fitting, scoring, and archiving its causal inputs."""
+        initialized = run.initialized_at
+        origin = initialized + timedelta(hours=delay)
+        instants = tuple(origin + index * HOUR for index in range(PLANNING_HORIZON_HOURS))
+        if not all(self.usable_hour(instant) for instant in instants):
+            return (
+                None,
+                "The predetermined historical forecast windows need complete usable production measurements within the selected learning period.",
+            )
+        site = self.site
+        physical = validation_baselines(
+            site.configuration, site.location, self.evidence.runs, origin
+        )
+        result = self.fit(site.source, self.evidence.history, origin, physical)
+        if result.challenger is None:
+            return (
+                None,
+                "Earlier original forecasts and measurements are insufficient to train the historical models.",
+            )
+        if result.challenger.policy_version != model_policy:
+            raise ValueError("Historical solar learning policy changed")
+        errors = self.errors(run, origin, instants, result, physical)
+        reference = _archive_historical_fit(store, result, origin, self.evidence.runs, site)
+        return BacktestWindow(
+            initialized,
+            origin,
+            origin + PLANNING_HORIZON_HOURS * HOUR,
+            delay,
+            len(instants),
+            *errors,
+            result.challenger.trained_until,
+            result.challenger.created_at,
+            reference,
+            run.version,
+        ), None
+
+    def assess_windows(self, model_policy, store) -> tuple[tuple[BacktestWindow, ...], str | None]:
+        """Visit fixed runs and origins chronologically and retain successes before a gap."""
+        run_by_init = {run.initialized_at: run for run in self.evidence.runs}
+        windows = []
+        for initialized in self.evidence.initializations:
+            run = run_by_init.get(initialized)
+            if run is None:
+                return (
+                    tuple(windows),
+                    "Original forecast runs are still being imported. Historical assessment continues when the required forecasts are available.",
+                )
+            for delay in SIMULATION_DELAYS_HOURS:
+                window, issue = self.assess_window(run, delay, model_policy, store)
+                if window is None:
+                    return tuple(windows), issue
+                windows.append(window)
+        return tuple(windows), None
+
+
+def _window_replay(site, evidence, now) -> _WindowReplay:
+    """Capture comparable meter hours once, before scoring each fixed replay window."""
+    actual = _measured_production(site.source, site.inverter, evidence.bounded_history, now)
+    meter_hours = {
+        other.entity_id: production_hours(
+            evidence.history
+            if other.source_id == site.source.source_id
+            else site.histories.get(other.entity_id),
+            now,
+        )
+        for other in site.siblings
+    }
+    return _WindowReplay(site, evidence, now, actual, meter_hours)
+
+
 def assess_forecasts(
-    configuration,
-    source,
-    location,
-    history,
-    runs,
-    now,
-    model_policy,
-    store,
+    configuration: SolarConfiguration,
+    source: SolarSource,
+    location: SiteLocation,
+    history: EnergyHistory,
+    runs: tuple[ForecastWeatherRun, ...],
+    now: datetime,
+    model_policy: str,
+    store: SolarStore,
     *,
-    histories=None,
-    feedback=None,
-):
+    histories: Mapping[str, EnergyHistory] | None = None,
+    feedback: Mapping[str, CurtailmentHistory | None] | None = None,
+) -> HistoricalForecastAssessment:
     """Compare four predetermined runs at both origins, retaining original fits and actual clocks."""
-    from open_energy_planner.solar.boosting import fit_boosted_model
-    from open_energy_planner.solar.calculation.projection import learned_forecast
     from open_energy_planner.solar.wire import document
 
     initializations = scheduled_runs(now)
     family = evidence_family(configuration, source, location, model_policy)
-    bounded_history, relevant_runs, identity = _assessment_inputs(
-        configuration, source, family, initializations, history, runs, histories, feedback
+    site = _ReplaySite(
+        configuration,
+        source,
+        next(row for row in configuration.inverters if row.inverter_id == source.inverter_id),
+        tuple(other for other in configuration.sources if other.inverter_id == source.inverter_id),
+        location,
+        histories or {},
+        feedback or {},
     )
-    pointer = "historical-assessment-current-" + identity + ".json"
-    if store.documents.exists(pointer):
-        reference = store.documents.read(pointer)
-        record = store.documents.read("historical-assessment-" + reference + ".json")
-        if version(record) != reference:
-            raise ValueError("Historical solar forecast checksum changed")
-        report = HistoricalForecastAssessment.restore(record)
-        if (
-            report.source_family != family
-            or report.model_policy != model_policy
-            or report.run_initializations != initializations
-        ):
-            raise ValueError("Historical solar forecast context changed")
+    evidence = _assessment_inputs(site, family, initializations, history, runs)
+    pointer = "historical-assessment-current-" + evidence.identity + ".json"
+    report = _restore_assessment(store, pointer, family, model_policy, initializations)
+    if report is not None:
         return report
-    inverter = next(row for row in configuration.inverters if row.inverter_id == source.inverter_id)
-    siblings = tuple(
-        other for other in configuration.sources if other.inverter_id == source.inverter_id
-    )
-    actual = _measured_production(source, inverter, bounded_history, now)
-    meter_hours = {
-        other.entity_id: production_hours(
-            history
-            if other.source_id == source.source_id
-            else (histories or {}).get(other.entity_id),
-            now,
-        )
-        for other in siblings
-    }
-    run_by_init = {run.initialized_at: run for run in relevant_runs}
-    windows, issue = [], None
-    for initialized in initializations:
-        run = run_by_init.get(initialized)
-        if run is None:
-            issue = "Original forecast runs are still being imported. Historical assessment continues when the required forecasts are available."
-            break
-        for delay in SIMULATION_DELAYS_HOURS:
-            origin = initialized + timedelta(hours=delay)
-            instants = tuple(origin + index * HOUR for index in range(PLANNING_HORIZON_HOURS))
-            if any(
-                instant not in actual
-                or ac_comparison_issue(
-                    source.measurement_boundary,
-                    inverter.ac_limit_w,
-                    tuple(
-                        meter_hours.get(other.entity_id, {}).get(instant)
-                        if other.measurement_boundary == "ac"
-                        else None
-                        for other in siblings
-                    ),
-                )
-                or not learning_interval(source, instant, instant + HOUR)
-                or not unrestricted_interval(
-                    source,
-                    instant,
-                    instant + HOUR,
-                    (feedback or {}).get(source.curtailment_entity_id),
-                )
-                for instant in instants
-            ):
-                issue = "The predetermined historical forecast windows need complete usable production measurements within the selected learning period."
-                break
-            physical = validation_baselines(configuration, location, relevant_runs, origin)
-            result = fit_boosted_model(
-                source,
-                inverter,
-                location,
-                history,
-                (),
-                (),
-                origin,
-                forecast_runs=relevant_runs,
-                forecast_physical=physical,
-                known_at=now,
-                feedback=(feedback or {}).get(source.curtailment_entity_id),
-            )
-            if result.challenger is None:
-                issue = "Earlier original forecasts and measurements are insufficient to train the historical models."
-                break
-            if result.challenger.policy_version != model_policy:
-                raise ValueError("Historical solar learning policy changed")
-            raw_models = {source.source_id: result.challenger}
-            served_models = {source.source_id: result.model} if result.model else {}
-            for other in configuration.sources:
-                if (
-                    other.source_id == source.source_id
-                    or other.inverter_id != source.inverter_id
-                    or other.entity_id not in (histories or {})
-                ):
-                    continue
-                other_inverter = next(
-                    row for row in configuration.inverters if row.inverter_id == other.inverter_id
-                )
-                other_result = fit_boosted_model(
-                    other,
-                    other_inverter,
-                    location,
-                    histories[other.entity_id],
-                    (),
-                    (),
-                    origin,
-                    forecast_runs=relevant_runs,
-                    forecast_physical=physical,
-                    known_at=now,
-                    feedback=(feedback or {}).get(other.curtailment_entity_id),
-                )
-                if other_result.model:
-                    raw_models[other.source_id] = other_result.model
-                    served_models[other.source_id] = other_result.model
-            raw = learned_forecast(
-                configuration, location, run.hours, now, raw_models, planning_origin=origin
-            )
-            served = (
-                learned_forecast(
-                    configuration, location, run.hours, now, served_models, planning_origin=origin
-                )
-                if source.source_id in served_models
-                else None
-            )
-            field_name = "ac_kwh" if source.measurement_boundary == "ac" else "dc_kwh"
-            baseline = {
-                row.start: getattr(row, field_name)
-                for row in physical_run(configuration, location, run)
-                if row.source_id == source.source_id
-            }
-
-            def hourly_values(forecast, instants=instants, field_name=field_name):
-                """Integrate the service forecast into matched measured hours."""
-                values = {instant: 0.0 for instant in instants}
-                for energy in forecast.energies:
-                    instant = energy.start.replace(minute=0, second=0, microsecond=0)
-                    if instant in values and energy.source_id == source.source_id:
-                        values[instant] += getattr(energy, field_name)
-                return values
-
-            raw_values = hourly_values(raw)
-            service_values = hourly_values(served) if served else baseline
-            errors = [
-                fsum(abs(values[instant] - actual[instant]) for instant in instants) / len(instants)
-                for values in (baseline, raw_values, service_values)
-            ]
-            reference = _archive_historical_fit(
-                store, result, origin, relevant_runs, feedback, siblings
-            )
-            windows.append(
-                BacktestWindow(
-                    initialized,
-                    origin,
-                    origin + PLANNING_HORIZON_HOURS * HOUR,
-                    delay,
-                    len(instants),
-                    *errors,
-                    result.challenger.trained_until,
-                    result.challenger.created_at,
-                    reference,
-                    run.version,
-                )
-            )
-        if issue:
-            break
+    windows, issue = _window_replay(site, evidence, now).assess_windows(model_policy, store)
     report = HistoricalForecastAssessment(
-        family, model_policy, initializations, tuple(windows), now, issue
+        family, model_policy, initializations, windows, now, issue
     )
     body = document(report)
     reference = version(body)
