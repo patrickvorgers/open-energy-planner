@@ -144,20 +144,21 @@ def test_daily_storage_chart_periods_keyboard_gaps_and_recovery(daily_storage_hi
             assert len(rows["samples"]) == 364
     delayed = []
     page.route("**/v1/storage/history?start=2026-08-21*", lambda route: delayed.append(route))
-    with page.expect_request("**/v1/storage/history?start=2026-08-21*"):
-        choose_period(page, "2026-08-21", "2026-11-18")
-    choose_period(page, "2026-11-12", "2026-11-18")
-    expect(page.locator("#storage-history-summary")).to_contain_text("Measurements: 7")
-    delayed[0].fulfill(json=quarter_rows)
-    wait_for_product_reads(page)
-    expect(page.locator("#storage-history-summary")).to_contain_text("Measurements: 7")
-    expect(canvas).to_be_visible()
-    assert (
-        page.evaluate(
-            "Chart.getChart(document.getElementById('storage-history-chart')).data.datasets[0].data.length"
+    for status in (200, 503):
+        with page.expect_request("**/v1/storage/history?start=2026-08-21*"):
+            choose_period(page, "2026-08-21", "2026-11-18")
+        choose_period(page, "2026-11-12", "2026-11-18")
+        expect(page.locator("#storage-history-summary")).to_contain_text("Measurements: 7")
+        delayed.pop().fulfill(status=status, json=quarter_rows)
+        wait_for_product_reads(page)
+        expect(page.locator("#storage-history-summary")).to_contain_text("Measurements: 7")
+        expect(canvas).to_be_visible()
+        assert (
+            page.evaluate(
+                "Chart.getChart(document.getElementById('storage-history-chart')).data.datasets[0].data.length"
+            )
+            == 7
         )
-        == 7
-    )
     page.unroute("**/v1/storage/history?start=2026-08-21*")
     page.route(
         "**/v1/storage/history?*", lambda route: route.fulfill(status=503, body="private-password")
