@@ -113,9 +113,12 @@ def test_partial_catalogue_keeps_previous_snapshot_until_complete_validation():
     assert catalogue.value == newer
 
 
-@pytest.mark.parametrize("failure", ["order", "identity", "digest", "path", "expired", "stale"])
+@pytest.mark.parametrize(
+    "failure",
+    ["order", "identity", "digest", "path", "expired", "stale", "index_type", "complete_type"],
+)
 def test_invalid_transfer_never_replaces_last_complete_catalogue(failure):
-    """Out-of-order, mixed, corrupt, unexpected, expired and stale pages retain prior discovery."""
+    """Unexpected, invalid or stale pages retain the previous complete discovery."""
     now = datetime(2026, 11, 7, tzinfo=UTC)
     catalogue = HACatalogue()
     previous = setup_metadata()
@@ -128,6 +131,10 @@ def test_invalid_transfer_never_replaces_last_complete_catalogue(failure):
         bad["transfer"]["index"] = 2
     elif failure == "identity":
         bad["transfer"]["id"] = "different-snapshot"
+    elif failure == "index_type":
+        bad["transfer"]["index"] = True
+    elif failure == "complete_type":
+        bad["transfer"]["complete"] = 0
     elif failure == "path":
         bad["path"] = ["arbitrary", "configuration"]
     elif failure == "expired":
