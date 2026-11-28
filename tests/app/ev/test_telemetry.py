@@ -5,6 +5,7 @@ from datetime import timedelta
 import pytest
 
 from open_energy_planner.appliances.ev.telemetry import (
+    configure_telemetry,
     empty_telemetry,
     update_telemetry,
     vehicle_estimates,
@@ -18,6 +19,46 @@ def example():
     report = observations(type("Service", (), {"configuration_version": "fixture"})())
     report["points"][0]["energy_kwh"] = 100
     return state, report, update_telemetry(empty_telemetry(), state, report)
+
+
+@pytest.mark.parametrize(
+    "field", ["soc_entity", "energy_entity", "power_entity", "connected_entity"]
+)
+def test_setting_changes_invalidate_only_evidence_owned_by_the_changed_source(field):
+    """Only a changed connection source discards the nonce's request history."""
+    state, report, telemetry = example()
+    report["at"] = (NOW + timedelta(hours=1)).isoformat()
+    report["points"][0]["energy_kwh"] = 102.3
+    telemetry = update_telemetry(telemetry, state, report)
+    telemetry["sessions"][POINT]["request_ids"][CAR] = "previous-request"
+    after = settings()
+    configured = after["vehicles"][0] if field == "soc_entity" else after["points"][0]
+    configured[field] = f"sensor.replacement_{field}"
+
+    updated = configure_telemetry(telemetry, state, after)
+
+    assert telemetry["sessions"][POINT]["vehicle_id"] == CAR
+    assert telemetry["sessions"][POINT]["energy_kwh"] == 102.3
+    if field == "soc_entity":
+        assert CAR not in updated["vehicles"]
+        assert updated["sessions"][POINT]["credited_vehicle_id"] is None
+        assert updated["sessions"][POINT]["credited_kwh"] == 0
+        assert updated["sessions"][POINT]["energy_kwh"] == 102.3
+    else:
+        assert updated["vehicles"][CAR]["stored_kwh"] == pytest.approx(1.84)
+    if field == "connected_entity":
+        assert updated["sessions"] == {}
+        return
+    session = updated["sessions"][POINT]
+    assert session["session_id"] == SESSION
+    assert session["request_ids"] == {CAR: "previous-request"}
+    assert session["vehicle_id"] is None
+    assert session["attributed_at"] is None
+    if field != "soc_entity":
+        assert session["energy_kwh"] is None
+        assert session["energy_entity"] == after["points"][0]["energy_entity"]
+        assert session["credited_vehicle_id"] == CAR
+        assert session["credited_kwh"] == pytest.approx(1.84)
 
 
 def test_republication_does_not_reset_charging_estimate():
@@ -79,6 +120,45 @@ def test_real_new_sample_corrects_estimate_and_old_anchor_never_expires():
     assert estimate["basis"] == "last_known"
 
 
+def test_delayed_older_soc_does_not_replace_newer_anchor():
+    """An out-of-order device sample keeps the current anchor and its measured energy."""
+    state, report, telemetry = example()
+    report["at"] = (NOW + timedelta(hours=1)).isoformat()
+    report["vehicles"][0].update(
+        soc=30, observed_at=(NOW - timedelta(minutes=1)).isoformat(), timestamp_kind="device_sample"
+    )
+    report["points"][0]["energy_kwh"] = 102.3
+
+    telemetry = update_telemetry(telemetry, state, report)
+
+    evidence = telemetry["vehicles"][CAR]
+    assert evidence["observed_at"] == NOW.isoformat()
+    assert evidence["measured_soc"] == 50
+    assert evidence["stored_kwh"] == pytest.approx(1.84)
+
+
+def test_meter_does_not_backfill_energy_before_first_soc_anchor():
+    """A continuous meter can advance before the first SoC but cannot credit that interval."""
+    state, report, _telemetry = example()
+    report["vehicles"][0].update(soc=None, observed_at=None, reported_at=None)
+    telemetry = update_telemetry(empty_telemetry(), state, report)
+    report["at"] = (NOW + timedelta(hours=1)).isoformat()
+    report["points"][0]["energy_kwh"] = 102.3
+    telemetry = update_telemetry(telemetry, state, report)
+    assert CAR not in telemetry["vehicles"]
+    assert telemetry["sessions"][POINT]["energy_kwh"] == 102.3
+
+    report["at"] = (NOW + timedelta(hours=2)).isoformat()
+    report["vehicles"][0].update(
+        soc=50, observed_at=report["at"], reported_at=report["at"], timestamp_kind="device_sample"
+    )
+    report["points"][0]["energy_kwh"] = 104.6
+    telemetry = update_telemetry(telemetry, state, report)
+
+    assert telemetry["vehicles"][CAR]["stored_kwh"] == 0
+    assert telemetry["sessions"][POINT]["energy_kwh"] == 104.6
+
+
 @pytest.mark.parametrize("connected", [False, None, True])
 def test_unknown_identity_preserves_previously_attributable_energy(connected):
     """An outage cannot undo real charge. Recovery never attributes the ambiguous gap."""
@@ -137,17 +217,19 @@ def test_energy_sample_timestamp_does_not_become_capture_time():
     assert telemetry["sessions"][POINT]["energy_at"] == (NOW + timedelta(seconds=60)).isoformat()
 
 
-def test_regressed_meter_timestamp_does_not_replace_known_baseline():
+@pytest.mark.parametrize("counter", [100, 102.3])
+def test_regressed_meter_timestamp_does_not_replace_known_baseline(counter):
     """An older out-of-order meter value cannot create credit or move the known baseline backwards."""
     state, report, telemetry = example()
     report["at"] = (NOW + timedelta(hours=1)).isoformat()
     report["points"][0].update(
-        energy_kwh=102.3, energy_observed_at=(NOW - timedelta(minutes=1)).isoformat()
+        energy_kwh=counter, energy_observed_at=(NOW - timedelta(minutes=1)).isoformat()
     )
     telemetry = update_telemetry(telemetry, state, report)
     assert telemetry["vehicles"][CAR]["stored_kwh"] == 0
     assert telemetry["sessions"][POINT]["energy_kwh"] == 100
     assert telemetry["sessions"][POINT]["energy_at"] == NOW.isoformat()
+    assert telemetry["sessions"][POINT]["energy_issue"] == "meter_discontinuity"
 
 
 @pytest.mark.parametrize("sample_minutes, credited", [(30, 1.84), (60, 1.84), (90, 0)])
